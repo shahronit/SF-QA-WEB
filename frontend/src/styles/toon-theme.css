@@ -1,0 +1,124 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply font-toon text-toon-dark;
+    background: #FFF8F0;
+  }
+}
+
+@layer components {
+  .toon-card {
+    @apply bg-white rounded-toon p-6 shadow-toon border-2 border-white/50;
+    backdrop-filter: blur(8px);
+    transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+  .toon-card:hover {
+    @apply shadow-lg;
+    transform: translateY(-2px);
+  }
+  .toon-btn {
+    @apply px-6 py-3 rounded-2xl font-bold text-white transition-all duration-200;
+    box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+  }
+  .toon-btn:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 6px 20px rgba(0,0,0,0.15);
+  }
+  .toon-btn:active {
+    transform: scale(0.97);
+  }
+  .toon-btn-blue { @apply bg-toon-blue hover:bg-sky-500; }
+  .toon-btn-coral { @apply bg-toon-coral hover:bg-red-400; }
+  .toon-btn-mint { @apply bg-toon-mint hover:bg-emerald-400; }
+  .toon-btn-purple { @apply bg-toon-purple hover:bg-violet-400; }
+  .toon-input {
+    @apply w-full px-4 py-3 rounded-2xl border-2 border-gray-200 bg-white font-toon text-toon-dark;
+    transition: all 0.25s ease;
+  }
+  .toon-input:focus {
+    @apply outline-none border-toon-blue ring-4 ring-toon-blue/20;
+  }
+  .toon-textarea {
+    @apply w-full px-4 py-3 rounded-2xl border-2 border-gray-200 bg-white font-toon text-toon-dark resize-none;
+    transition: all 0.25s ease;
+  }
+  .toon-textarea:focus {
+    @apply outline-none border-toon-blue ring-4 ring-toon-blue/20;
+  }
+  .toon-badge {
+    @apply inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-sm font-bold;
+  }
+  .toon-blob {
+    position: absolute;
+    border-radius: 40% 60% 55% 45% / 55% 45% 60% 40%;
+    opacity: 0.08;
+    pointer-events: none;
+    z-index: 0;
+  }
+  .toon-sidebar {
+    @apply bg-white border-r-2 border-gray-100;
+    min-height: 100vh;
+  }
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 8px; }
+::-webkit-scrollbar-track { background: #FFF8F0; }
+::-webkit-scrollbar-thumb {
+  background: linear-gradient(135deg, #38BDF8, #A78BFA);
+  border-radius: 10px;
+}
+
+/* Markdown content styling */
+.markdown-body h1 { @apply text-2xl font-extrabold text-toon-navy mb-4; }
+.markdown-body h2 { @apply text-xl font-bold text-toon-navy mb-3; }
+.markdown-body h3 { @apply text-lg font-bold text-toon-navy mb-2; }
+.markdown-body p { @apply mb-3 leading-relaxed; }
+.markdown-body ul { @apply list-disc pl-6 mb-3; }
+.markdown-body ol { @apply list-decimal pl-6 mb-3; }
+.markdown-body li { @apply mb-1; }
+.markdown-body code { @apply bg-gray-100 px-1.5 py-0.5 rounded text-sm font-mono; }
+.markdown-body blockquote { @apply border-l-4 border-toon-blue pl-4 italic text-gray-600 mb-3; }
+.markdown-body strong { @apply font-bold text-toon-navy; }
+.markdown-body hr { @apply my-4 border-gray-200; }
+
+/* Table styling — professional QA report tables */
+.markdown-body table {
+  @apply w-full border-collapse mb-5 text-sm;
+  border: 2px solid #e2e8f0;
+  border-radius: 12px;
+  overflow: hidden;
+}
+.markdown-body thead {
+  background: linear-gradient(135deg, #1E3A5F 0%, #2563EB 100%);
+}
+.markdown-body th {
+  @apply text-white font-bold px-4 py-3 text-left text-xs uppercase tracking-wider;
+  border: 1px solid rgba(255,255,255,0.15);
+  white-space: nowrap;
+}
+.markdown-body td {
+  @apply px-4 py-3 text-gray-700;
+  border: 1px solid #e2e8f0;
+  vertical-align: top;
+  line-height: 1.5;
+}
+.markdown-body tbody tr:nth-child(even) {
+  background: #f8fafc;
+}
+.markdown-body tbody tr:hover {
+  background: #eff6ff;
+}
+.markdown-body tbody tr td:first-child {
+  @apply font-semibold text-toon-navy;
+  white-space: nowrap;
+}
+
+/* Wrap tables in a scrollable container */
+.table-wrap {
+  @apply overflow-x-auto mb-4;
+  -webkit-overflow-scrolling: touch;
+}
