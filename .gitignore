@@ -16,6 +16,9 @@ rag/project_stores/
 .DS_Store
 Thumbs.db
 backend/static/
+Secrets/
+*firebase-adminsdk*.json
+*-firebase-adminsdk-*.json
 knowledge_base/salesforce_docs/*.pdf
 knowledge_base/salesforce_docs/*.docx
 knowledge_base/org_knowledge/*
