@@ -1,0 +1,100 @@
+# =============================================================================
+# QA Studio (sf-qa-web) — Render Blueprint
+# =============================================================================
+# Deploys the FastAPI backend + bundled React SPA as a single Docker web service.
+#
+# 1.  In the Render dashboard, click "New" -> "Blueprint" and point it at this
+#     repo (https://github.com/shahronit/SF-QA-WEB). Render reads this file and
+#     provisions everything below.
+# 2.  Open the new service -> "Environment" and fill in the secret values that
+#     are intentionally left as `sync: false` here (API keys, JWT secret).
+# 3.  Optional: enable Firestore by setting STORAGE_BACKEND=firestore and
+#     uploading the service-account JSON via Render "Secret Files", then point
+#     FIREBASE_CREDENTIALS_PATH at the mounted file (e.g. /etc/secrets/fb.json).
+#
+# Notes:
+#  - The app gracefully degrades when RAG is empty, so you can deploy without
+#    Ollama. To enable RAG, run an external Ollama (with the nomic-embed-text
+#    model) and set OLLAMA_HOST in this service.
+#  - The "starter" plan (512 MB) is enough for the API + SPA with cloud LLMs.
+#    Bump to "standard" if you ingest large knowledge bases locally.
+# =============================================================================
+
+services:
+  - type: web
+    name: qa-studio-web
+    runtime: docker
+    plan: starter
+    region: oregon
+    branch: master
+    rootDir: .
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /api/health
+    autoDeploy: true
+
+    envVars:
+      # ---- Server ---------------------------------------------------------
+      - key: PORT
+        value: "10000"
+
+      # ---- Auth -----------------------------------------------------------
+      - key: JWT_SECRET
+        generateValue: true            # Render generates a random secret once
+      - key: JWT_ALGORITHM
+        value: HS256
+      - key: JWT_EXPIRE_MINUTES
+        value: "480"
+
+      # ---- LLM provider (OpenAI is default; Gemini is optional) -----------
+      - key: LLM_PROVIDER
+        value: openai
+      - key: OPENAI_API_KEY
+        sync: false                    # set in dashboard, never committed
+      - key: OPENAI_MODEL
+        value: gpt-4o
+      - key: OPENAI_FALLBACK_MODELS
+        value: gpt-4o-mini,gpt-3.5-turbo
+      - key: OPENAI_MAX_RETRIES
+        value: "3"
+
+      - key: GEMINI_API_KEY
+        sync: false                    # leave blank if you only use OpenAI
+      - key: GEMINI_MODEL
+        value: gemini-2.5-pro
+      - key: GEMINI_FALLBACK_MODELS
+        value: gemini-2.5-flash,gemini-2.0-flash
+      - key: GEMINI_MAX_RETRIES
+        value: "3"
+
+      # ---- RAG ------------------------------------------------------------
+      - key: RAG_TOP_K
+        value: "3"
+      - key: MAX_OUTPUT_TOKENS
+        value: "8192"
+      - key: TEMPERATURE
+        value: "0.25"
+
+      # Optional: external Ollama for RAG embeddings (nomic-embed-text).
+      # - key: OLLAMA_HOST
+      #   value: https://ollama.your-domain.com
+
+      # ---- Storage backend ------------------------------------------------
+      # Default = local files on the attached disk below.
+      # To switch to Firestore: set STORAGE_BACKEND=firestore, upload your
+      # service-account JSON as a Render Secret File and reference it via
+      # FIREBASE_CREDENTIALS_PATH (e.g. /etc/secrets/firebase.json).
+      - key: STORAGE_BACKEND
+        value: local
+      - key: FIREBASE_CREDENTIALS_PATH
+        sync: false
+      - key: FIREBASE_PROJECT_ID
+        sync: false
+
+    # Persistent disk for users.json, projects, knowledge base and the Chroma
+    # vector store. Render mounts this at the listed path; the app already
+    # creates these subdirectories on startup (see backend/main.py lifespan).
+    disk:
+      name: qa-studio-data
+      mountPath: /app/data
+      sizeGB: 1
