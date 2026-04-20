@@ -8,9 +8,18 @@
 #     provisions everything below.
 # 2.  Open the new service -> "Environment" and fill in the secret values that
 #     are intentionally left as `sync: false` here (API keys, JWT secret).
-# 3.  Optional: enable Firestore by setting STORAGE_BACKEND=firestore and
-#     uploading the service-account JSON via Render "Secret Files", then point
-#     FIREBASE_CREDENTIALS_PATH at the mounted file (e.g. /etc/secrets/fb.json).
+# 3.  Optional: enable Firestore (recommended for multi-user / production):
+#       a. Set STORAGE_BACKEND=firestore  in the dashboard.
+#       b. Set FIREBASE_PROJECT_ID         to your Firebase project id.
+#       c. Provide credentials ONE of two ways:
+#          - EASY:  Paste the entire service-account JSON into the
+#                   FIREBASE_CREDENTIALS_JSON env var (recommended).
+#          - FILE:  Render dashboard -> Environment -> "Secret Files" ->
+#                   add file at e.g. /etc/secrets/firebase.json, then set
+#                   FIREBASE_CREDENTIALS_PATH=/etc/secrets/firebase.json
+#       The app accepts whichever you provide; if both are set, the JSON env
+#       var wins. With Firestore enabled the persistent disk below is no
+#       longer required (you can remove the `disk:` block to save cost).
 #
 # Notes:
 #  - The app gracefully degrades when RAG is empty, so you can deploy without
@@ -81,15 +90,18 @@ services:
 
       # ---- Storage backend ------------------------------------------------
       # Default = local files on the attached disk below.
-      # To switch to Firestore: set STORAGE_BACKEND=firestore, upload your
-      # service-account JSON as a Render Secret File and reference it via
-      # FIREBASE_CREDENTIALS_PATH (e.g. /etc/secrets/firebase.json).
+      # To switch to Firestore set STORAGE_BACKEND=firestore in the dashboard
+      # and supply credentials via EITHER FIREBASE_CREDENTIALS_JSON (raw JSON
+      # env var, recommended) OR FIREBASE_CREDENTIALS_PATH (path to a Secret
+      # File you upload in the Render UI).
       - key: STORAGE_BACKEND
         value: local
-      - key: FIREBASE_CREDENTIALS_PATH
-        sync: false
       - key: FIREBASE_PROJECT_ID
-        sync: false
+        sync: false                    # e.g. qa-studio-prod
+      - key: FIREBASE_CREDENTIALS_JSON
+        sync: false                    # paste the full service-account JSON
+      - key: FIREBASE_CREDENTIALS_PATH
+        sync: false                    # only if you use Render Secret Files
 
     # Persistent disk for users.json, projects, knowledge base and the Chroma
     # vector store. Render mounts this at the listed path; the app already

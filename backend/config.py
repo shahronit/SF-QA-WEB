@@ -33,6 +33,7 @@ class Settings(BaseSettings):
 
     STORAGE_BACKEND: str = "local"
     FIREBASE_CREDENTIALS_PATH: str = ""
+    FIREBASE_CREDENTIALS_JSON: str = ""
     FIREBASE_PROJECT_ID: str = ""
 
     class Config:

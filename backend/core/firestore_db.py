@@ -8,6 +8,7 @@ of connections.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +20,46 @@ _db: Any = None
 def is_enabled() -> bool:
     """Return True when Firestore storage is enabled in config."""
     return settings.STORAGE_BACKEND.lower() == "firestore"
+
+
+def _load_credentials():
+    """Resolve a Firebase ``credentials.Certificate`` from one of two sources.
+
+    Priority:
+      1. ``FIREBASE_CREDENTIALS_JSON`` — raw JSON string in env var.
+         Best fit for cloud platforms (Render, Heroku, Cloud Run) where
+         mounting a file is awkward. Paste the entire service-account JSON
+         (including newlines in the private_key) as a single env var.
+      2. ``FIREBASE_CREDENTIALS_PATH`` — filesystem path to the JSON file.
+         Best fit for local development and Docker bind-mounts.
+    """
+    from firebase_admin import credentials
+
+    raw_json = settings.FIREBASE_CREDENTIALS_JSON.strip()
+    if raw_json:
+        try:
+            cred_dict = json.loads(raw_json)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(
+                "FIREBASE_CREDENTIALS_JSON is not valid JSON. Paste the full "
+                "service-account file contents (including the curly braces)."
+            ) from exc
+        return credentials.Certificate(cred_dict)
+
+    cred_path = settings.FIREBASE_CREDENTIALS_PATH.strip()
+    if cred_path:
+        if not Path(cred_path).is_file():
+            raise RuntimeError(
+                f"Firebase credentials file not found at: {cred_path}"
+            )
+        return credentials.Certificate(cred_path)
+
+    raise RuntimeError(
+        "No Firebase credentials provided. Set either FIREBASE_CREDENTIALS_JSON "
+        "(raw JSON, recommended for cloud deployments) or "
+        "FIREBASE_CREDENTIALS_PATH (file path, recommended for local) in your "
+        ".env / Render environment."
+    )
 
 
 def get_db() -> Any:
@@ -33,24 +74,14 @@ def get_db() -> Any:
 
     try:
         import firebase_admin
-        from firebase_admin import credentials, firestore
+        from firebase_admin import firestore
     except ImportError as exc:
         raise RuntimeError(
             "firebase-admin is not installed. Run `pip install firebase-admin`."
         ) from exc
 
     if not firebase_admin._apps:
-        cred_path = settings.FIREBASE_CREDENTIALS_PATH.strip()
-        if not cred_path:
-            raise RuntimeError(
-                "FIREBASE_CREDENTIALS_PATH is empty. Download a service-account "
-                "JSON from Firebase Console and set its path in backend/.env."
-            )
-        if not Path(cred_path).is_file():
-            raise RuntimeError(
-                f"Firebase credentials file not found at: {cred_path}"
-            )
-        cred = credentials.Certificate(cred_path)
+        cred = _load_credentials()
         opts = {"projectId": settings.FIREBASE_PROJECT_ID} if settings.FIREBASE_PROJECT_ID else None
         firebase_admin.initialize_app(cred, opts)
 
