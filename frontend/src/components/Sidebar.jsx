@@ -1,34 +1,105 @@
-import { useState, useEffect } from 'react'
-import { NavLink } from 'react-router-dom'
-import { motion } from 'framer-motion'
+import { useState, useEffect, useMemo } from 'react'
+import { NavLink, useLocation } from 'react-router-dom'
+import { motion, AnimatePresence } from 'framer-motion'
 import { useAuth } from '../context/AuthContext'
 import api from '../api/client'
 import toast from 'react-hot-toast'
 import logo from '../assets/logo.png'
 
-const navItems = [
-  { path: '/', label: 'Dashboard', icon: '🏠', color: 'bg-toon-blue' },
-  { path: '/projects', label: 'Projects', icon: '📂', color: 'bg-toon-blue' },
-  { path: '/requirements', label: 'Requirements', icon: '📝', color: 'bg-blue-600' },
-  { path: '/testcases', label: 'Test Cases', icon: '🧪', color: 'bg-toon-mint' },
-  { path: '/bugs', label: 'Bug Reports', icon: '🐛', color: 'bg-toon-coral' },
-  { path: '/smoke', label: 'Smoke Tests', icon: '💨', color: 'bg-orange-400' },
-  { path: '/regression', label: 'Regression', icon: '🔄', color: 'bg-toon-navy' },
-  { path: '/estimation', label: 'Estimation', icon: '📊', color: 'bg-toon-purple' },
-  { path: '/history', label: 'History', icon: '📜', color: 'bg-violet-500' },
+const utilityItems = [
+  { path: '/', label: 'Dashboard', icon: '🏠' },
+  { path: '/projects', label: 'Projects', icon: '📂' },
+  { path: '/history', label: 'History', icon: '📜' },
+]
+
+const navGroups = [
+  {
+    id: 'phase1',
+    phase: '1. Requirement Analysis',
+    icon: '📐',
+    accent: 'from-blue-500 to-indigo-500',
+    items: [
+      { path: '/requirements', label: 'Requirements Analysis', icon: '📝' },
+    ],
+  },
+  {
+    id: 'phase2',
+    phase: '2. Test Planning',
+    icon: '🗺️',
+    accent: 'from-indigo-500 to-cyan-500',
+    items: [
+      { path: '/test-strategy', label: 'Test Strategy', icon: '🎯' },
+      { path: '/test-plan', label: 'Test Plan Doc', icon: '📋' },
+      { path: '/estimation', label: 'Effort Estimation', icon: '📊' },
+      { path: '/automation-plan', label: 'Automation Plan', icon: '🤖' },
+    ],
+  },
+  {
+    id: 'phase3',
+    phase: '3. Test Case Development',
+    icon: '🧱',
+    accent: 'from-emerald-500 to-teal-500',
+    items: [
+      { path: '/testcases', label: 'Test Case Dev', icon: '🧪' },
+      { path: '/test-data', label: 'Test Data Prep', icon: '🧬' },
+      { path: '/rtm', label: 'RTM', icon: '🧭' },
+      { path: '/copado-scripts', label: 'Automation Scripts', icon: '⚡' },
+    ],
+  },
+  {
+    id: 'phase4',
+    phase: '4. Test Execution',
+    icon: '🚀',
+    accent: 'from-orange-500 to-red-500',
+    items: [
+      { path: '/smoke', label: 'Smoke Execution', icon: '💨' },
+      { path: '/regression', label: 'Regression Testing', icon: '🔄' },
+      { path: '/uat-plan', label: 'UAT & Sign-off', icon: '🤝' },
+      { path: '/bugs', label: 'Defect Reports', icon: '🐛' },
+      { path: '/execution-report', label: 'Execution Report', icon: '📈' },
+    ],
+  },
+  {
+    id: 'phase5',
+    phase: '5. Test Cycle Closure',
+    icon: '🏆',
+    accent: 'from-violet-500 to-purple-600',
+    items: [
+      { path: '/rca', label: 'Root Cause Analysis', icon: '🔍' },
+      { path: '/closure-report', label: 'Closure Report', icon: '🏁' },
+    ],
+  },
 ]
 
 const PROVIDER_ORDER = ['openai', 'gemini']
 const PROVIDER_META = {
   openai: { icon: '🤖', label: 'ChatGPT', color: 'from-emerald-500 to-teal-400' },
-  gemini: { icon: '💎', label: 'Gemini', color: 'from-blue-500 to-cyan-400' },
+  gemini: { icon: '💎', label: 'Gemini Pro', color: 'from-blue-500 to-cyan-400' },
 }
 
 export default function Sidebar() {
   const { user, logout } = useAuth()
+  const location = useLocation()
   const initials = user?.display_name?.split(' ').map(w => w[0]).join('').toUpperCase() || '?'
   const [providers, setProviders] = useState([])
   const [switching, setSwitching] = useState(false)
+
+  const activeGroupId = useMemo(() => {
+    const match = navGroups.find(g => g.items.some(it => location.pathname === it.path || location.pathname.startsWith(it.path + '/')))
+    return match?.id || null
+  }, [location.pathname])
+
+  const [openGroups, setOpenGroups] = useState(() => (activeGroupId ? { [activeGroupId]: true } : {}))
+
+  useEffect(() => {
+    if (activeGroupId) {
+      setOpenGroups(prev => (prev[activeGroupId] ? prev : { ...prev, [activeGroupId]: true }))
+    }
+  }, [activeGroupId])
+
+  const toggleGroup = (id) => {
+    setOpenGroups(prev => ({ ...prev, [id]: !prev[id] }))
+  }
 
   useEffect(() => {
     api.get('/llm/providers').then(({ data }) => {
@@ -62,8 +133,8 @@ export default function Sidebar() {
       <div className="flex items-center gap-3 mb-6 px-2">
         <img src={logo} alt="Logo" className="w-10 h-10 rounded-xl shadow-toon" />
         <div>
-          <h1 className="font-extrabold text-toon-navy text-sm leading-tight">Salesforce QA</h1>
-          <p className="text-xs text-gray-500">Studio</p>
+          <h1 className="font-extrabold text-toon-navy text-sm leading-tight">QA Studio</h1>
+          <p className="text-xs text-gray-500">AI Test Artifacts</p>
         </div>
       </div>
 
@@ -71,7 +142,7 @@ export default function Sidebar() {
       {providers.length > 0 && (
         <div className="mb-4 px-1">
           <p className="text-[10px] uppercase tracking-wider text-gray-400 font-bold mb-2 px-2">AI Engine</p>
-          <div className="flex gap-1.5 bg-gray-100 rounded-2xl p-1">
+          <div className="flex gap-1.5 bg-gray-100 rounded-2xl p-1 relative">
             {PROVIDER_ORDER.filter(name => providers.some(p => p.provider === name)).map(name => {
               const p = providers.find(pr => pr.provider === name)
               const meta = PROVIDER_META[name] || { icon: '🔮', label: name, color: 'from-gray-400 to-gray-500' }
@@ -80,15 +151,20 @@ export default function Sidebar() {
                   key={p.provider}
                   onClick={() => handleSwitch(p.provider)}
                   disabled={switching}
-                  className={`flex-1 flex items-center justify-center gap-1.5 py-2 px-2 rounded-xl text-xs font-bold transition-all ${
-                    p.active
-                      ? `bg-gradient-to-r ${meta.color} text-white shadow-sm`
-                      : 'text-gray-500 hover:bg-white hover:shadow-sm'
+                  className={`relative flex-1 flex items-center justify-center gap-1.5 py-2 px-2 rounded-xl text-xs font-bold transition-colors ${
+                    p.active ? 'text-white' : 'text-gray-500 hover:text-toon-navy'
                   }`}
                   title={`${meta.label} (${p.model})`}
                 >
-                  <span>{meta.icon}</span>
-                  <span>{meta.label}</span>
+                  {p.active && (
+                    <motion.span
+                      layoutId="providerPill"
+                      className={`absolute inset-0 bg-gradient-to-r ${meta.color} rounded-xl shadow-sm`}
+                      transition={{ type: 'spring', stiffness: 380, damping: 30 }}
+                    />
+                  )}
+                  <span className="relative">{meta.icon}</span>
+                  <span className="relative">{meta.label}</span>
                 </button>
               )
             })}
@@ -101,24 +177,112 @@ export default function Sidebar() {
         </div>
       )}
 
-      <nav className="flex-1 space-y-1">
-        {navItems.map((item) => (
-          <NavLink
-            key={item.path}
-            to={item.path}
-            end={item.path === '/'}
-            className={({ isActive }) =>
-              `flex items-center gap-3 px-3 py-2.5 rounded-2xl text-sm font-semibold transition-all duration-200 ${
-                isActive
-                  ? 'bg-toon-blue/10 text-toon-blue shadow-sm'
-                  : 'text-gray-600 hover:bg-gray-50 hover:text-toon-navy'
-              }`
-            }
-          >
-            <span className="text-lg">{item.icon}</span>
-            <span>{item.label}</span>
-          </NavLink>
-        ))}
+      <nav className="flex-1 space-y-1 overflow-y-auto min-h-0 pr-1">
+        <div className="space-y-0.5">
+          {utilityItems.map((item) => (
+            <NavLink
+              key={item.path}
+              to={item.path}
+              end={item.path === '/'}
+              className={({ isActive }) =>
+                `relative flex items-center gap-3 px-3 py-2 rounded-2xl text-sm font-semibold transition-colors ${
+                  isActive ? 'text-toon-blue' : 'text-gray-600 hover:text-toon-navy hover:bg-gray-50'
+                }`
+              }
+            >
+              {({ isActive }) => (
+                <>
+                  {isActive && (
+                    <motion.span
+                      layoutId="navHighlightUtility"
+                      className="absolute inset-0 bg-toon-blue/10 rounded-2xl shadow-sm"
+                      transition={{ type: 'spring', stiffness: 380, damping: 32 }}
+                    />
+                  )}
+                  <span className="relative text-base">{item.icon}</span>
+                  <span className="relative">{item.label}</span>
+                </>
+              )}
+            </NavLink>
+          ))}
+        </div>
+
+        {navGroups.map((group) => {
+          const isOpen = !!openGroups[group.id]
+          const isActiveGroup = group.id === activeGroupId
+          return (
+            <div key={group.id} className="pt-2">
+              <button
+                type="button"
+                onClick={() => toggleGroup(group.id)}
+                aria-expanded={isOpen}
+                className={`group w-full flex items-center gap-2 px-3 py-2 rounded-2xl transition-all duration-200 ${
+                  isActiveGroup
+                    ? 'bg-gradient-to-r from-gray-50 to-white shadow-sm'
+                    : 'hover:bg-gray-50'
+                }`}
+              >
+                <motion.span
+                  className={`w-7 h-7 rounded-xl bg-gradient-to-br ${group.accent} flex items-center justify-center text-white text-xs shadow-sm`}
+                  animate={isActiveGroup ? { scale: [1, 1.08, 1] } : { scale: 1 }}
+                  transition={isActiveGroup ? { duration: 2.4, repeat: Infinity, ease: 'easeInOut' } : { duration: 0.2 }}
+                >
+                  {group.icon}
+                </motion.span>
+                <span className={`flex-1 text-left text-[11px] uppercase tracking-wider font-extrabold ${isActiveGroup ? 'text-toon-navy' : 'text-gray-500 group-hover:text-toon-navy'}`}>
+                  {group.phase}
+                </span>
+                <motion.span
+                  animate={{ rotate: isOpen ? 90 : 0 }}
+                  transition={{ duration: 0.2 }}
+                  className="text-gray-400 text-xs"
+                >
+                  ▶
+                </motion.span>
+              </button>
+              <AnimatePresence initial={false}>
+                {isOpen && (
+                  <motion.div
+                    key="content"
+                    initial={{ height: 0, opacity: 0 }}
+                    animate={{ height: 'auto', opacity: 1 }}
+                    exit={{ height: 0, opacity: 0 }}
+                    transition={{ duration: 0.22, ease: 'easeOut' }}
+                    className="overflow-hidden"
+                  >
+                    <div className="space-y-0.5 pl-3 mt-1 ml-3 border-l border-gray-100">
+                      {group.items.map((item) => (
+                        <NavLink
+                          key={item.path}
+                          to={item.path}
+                          className={({ isActive }) =>
+                            `relative flex items-center gap-3 px-3 py-2 rounded-2xl text-sm font-semibold transition-colors ${
+                              isActive ? 'text-toon-blue' : 'text-gray-600 hover:text-toon-navy hover:bg-gray-50'
+                            }`
+                          }
+                        >
+                          {({ isActive }) => (
+                            <>
+                              {isActive && (
+                                <motion.span
+                                  layoutId={`navHighlight-${group.id}`}
+                                  className="absolute inset-0 bg-toon-blue/10 rounded-2xl shadow-sm"
+                                  transition={{ type: 'spring', stiffness: 380, damping: 32 }}
+                                />
+                              )}
+                              <span className="relative text-base">{item.icon}</span>
+                              <span className="relative">{item.label}</span>
+                            </>
+                          )}
+                        </NavLink>
+                      ))}
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+          )
+        })}
       </nav>
 
       <div className="border-t border-gray-100 pt-4 mt-4">

@@ -4,7 +4,7 @@ import AgentForm from '../components/AgentForm'
 export default function TestCases() {
   return (
     <div>
-      <PageHeader icon="🧪" title="Test Cases" subtitle="Generate coverage tables" gradient="from-toon-mint to-emerald-400" />
+      <PageHeader agentName="testcase" />
       <AgentForm
         agentName="testcase"
         sheetTitle="TestCases"

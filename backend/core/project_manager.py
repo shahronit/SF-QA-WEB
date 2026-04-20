@@ -11,12 +11,59 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from core import firestore_db
 from rag.embedder import SalesforceVectorStore
 from rag.ingestor import SalesforceKnowledgeIngestor
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PROJECTS_DIR = PROJECT_ROOT / "projects"
 PROJECT_STORES_DIR = PROJECT_ROOT / "rag" / "project_stores"
+
+
+# ---------------------------------------------------------------------------
+# Firestore metadata helpers
+# ---------------------------------------------------------------------------
+
+def _fs_get(slug: str) -> dict[str, Any] | None:
+    """Fetch a project metadata document from Firestore."""
+    db = firestore_db.get_db()
+    doc = db.collection(firestore_db.PROJECTS).document(slug).get()
+    return doc.to_dict() if doc.exists else None
+
+
+def _fs_set(slug: str, meta: dict[str, Any]) -> None:
+    """Persist metadata to Firestore."""
+    db = firestore_db.get_db()
+    db.collection(firestore_db.PROJECTS).document(slug).set(meta)
+
+
+def _fs_delete(slug: str) -> None:
+    """Delete a project metadata document."""
+    db = firestore_db.get_db()
+    db.collection(firestore_db.PROJECTS).document(slug).delete()
+
+
+def _fs_list() -> list[dict[str, Any]]:
+    """Return all project metadata documents."""
+    db = firestore_db.get_db()
+    return [d.to_dict() for d in db.collection(firestore_db.PROJECTS).stream()]
+
+
+def _read_local_meta(slug: str) -> dict[str, Any] | None:
+    """Read local metadata.json or return None."""
+    mp = _meta_path(slug)
+    if not mp.is_file():
+        return None
+    try:
+        return json.loads(mp.read_text("utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def _write_local_meta(slug: str, meta: dict[str, Any]) -> None:
+    """Write metadata.json to the local project folder."""
+    _meta_path(slug).parent.mkdir(parents=True, exist_ok=True)
+    _meta_path(slug).write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
 
 def _slugify(name: str) -> str:
@@ -44,6 +91,14 @@ def _store_dir(slug: str) -> Path:
 # CRUD
 # ---------------------------------------------------------------------------
 
+def _save_meta(slug: str, meta: dict[str, Any]) -> None:
+    """Persist metadata to the active backend (Firestore or local JSON)."""
+    if firestore_db.is_enabled():
+        _fs_set(slug, meta)
+    else:
+        _write_local_meta(slug, meta)
+
+
 def list_projects(username: str | None = None) -> list[dict[str, Any]]:
     """Return metadata dicts visible to *username*.
 
@@ -53,27 +108,28 @@ def list_projects(username: str | None = None) -> list[dict[str, Any]]:
     - ``owner == username``
     - ``username in shared_with``
     """
-    results: list[dict[str, Any]] = []
-    if not PROJECTS_DIR.is_dir():
-        return results
-    for child in sorted(PROJECTS_DIR.iterdir()):
-        mp = child / "metadata.json"
-        if mp.is_file():
-            try:
-                meta = json.loads(mp.read_text("utf-8"))
-            except (json.JSONDecodeError, OSError):
-                continue
-            if username is None:
-                results.append(meta)
-            elif "owner" not in meta:
-                results.append(meta)
-            elif meta["owner"] == username or username in meta.get("shared_with", []):
-                results.append(meta)
-    return results
+    if firestore_db.is_enabled():
+        all_meta = _fs_list()
+    else:
+        all_meta = []
+        if PROJECTS_DIR.is_dir():
+            for child in sorted(PROJECTS_DIR.iterdir()):
+                meta = _read_local_meta(child.name)
+                if meta is not None:
+                    all_meta.append(meta)
+
+    if username is None:
+        return all_meta
+    return [
+        m for m in all_meta
+        if "owner" not in m
+        or m.get("owner") == username
+        or username in m.get("shared_with", [])
+    ]
 
 
 def create_project(name: str, description: str = "", owner: str = "") -> str:
-    """Create folder structure + metadata.json; return the slug."""
+    """Create folder structure + metadata; return the slug."""
     slug = _slugify(name)
     docs = _docs_dir(slug)
     docs.mkdir(parents=True, exist_ok=True)
@@ -85,12 +141,12 @@ def create_project(name: str, description: str = "", owner: str = "") -> str:
         "owner": owner,
         "shared_with": [],
     }
-    _meta_path(slug).write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    _save_meta(slug, meta)
     return slug
 
 
 def delete_project(slug: str) -> None:
-    """Remove the project folder and its vector store entirely.
+    """Remove the project folder, its vector store, and its metadata.
 
     Retries up to 3 times with a short delay to handle lingering
     ChromaDB file locks on Windows.
@@ -108,17 +164,18 @@ def delete_project(slug: str) -> None:
                 time.sleep(0.5 * (attempt + 1))
         else:
             shutil.rmtree(target, ignore_errors=True)
+    if firestore_db.is_enabled():
+        try:
+            _fs_delete(slug)
+        except Exception:
+            pass
 
 
 def get_metadata(slug: str) -> dict[str, Any] | None:
     """Read project metadata or return None if missing."""
-    mp = _meta_path(slug)
-    if not mp.is_file():
-        return None
-    try:
-        return json.loads(mp.read_text("utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return None
+    if firestore_db.is_enabled():
+        return _fs_get(slug)
+    return _read_local_meta(slug)
 
 
 def is_owner(slug: str, username: str) -> bool:
@@ -134,12 +191,12 @@ def share_project(slug: str, target_username: str) -> bool:
     meta = get_metadata(slug)
     if meta is None:
         return False
-    shared: list[str] = meta.get("shared_with", [])
+    shared: list[str] = list(meta.get("shared_with", []))
     if target_username in shared:
         return False
     shared.append(target_username)
     meta["shared_with"] = shared
-    _meta_path(slug).write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    _save_meta(slug, meta)
     return True
 
 
@@ -148,12 +205,12 @@ def unshare_project(slug: str, target_username: str) -> bool:
     meta = get_metadata(slug)
     if meta is None:
         return False
-    shared: list[str] = meta.get("shared_with", [])
+    shared: list[str] = list(meta.get("shared_with", []))
     if target_username not in shared:
         return False
     shared.remove(target_username)
     meta["shared_with"] = shared
-    _meta_path(slug).write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    _save_meta(slug, meta)
     return True
 
 
@@ -166,7 +223,7 @@ def claim_ownership(slug: str, username: str) -> bool:
         return False
     meta["owner"] = username
     meta.setdefault("shared_with", [])
-    _meta_path(slug).write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    _save_meta(slug, meta)
     return True
 
 

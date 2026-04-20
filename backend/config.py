@@ -23,13 +23,17 @@ class Settings(BaseSettings):
     OPENAI_MAX_RETRIES: int = 3
 
     GEMINI_API_KEY: str = ""
-    GEMINI_MODEL: str = "gemini-2.5-flash"
-    GEMINI_FALLBACK_MODELS: str = "gemini-2.0-flash,gemini-2.0-flash-lite"
+    GEMINI_MODEL: str = "gemini-2.5-pro"
+    GEMINI_FALLBACK_MODELS: str = "gemini-2.5-flash,gemini-2.0-flash"
     GEMINI_MAX_RETRIES: int = 3
 
     RAG_TOP_K: int = 3
     MAX_OUTPUT_TOKENS: int = 8192
     TEMPERATURE: float = 0.25
+
+    STORAGE_BACKEND: str = "local"
+    FIREBASE_CREDENTIALS_PATH: str = ""
+    FIREBASE_PROJECT_ID: str = ""
 
     class Config:
         env_file = ".env"

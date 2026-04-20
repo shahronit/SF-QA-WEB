@@ -1,12 +1,87 @@
-import { useState } from 'react'
-import { motion } from 'framer-motion'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { motion, AnimatePresence, useReducedMotion } from 'framer-motion'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import api from '../api/client'
 import toast from 'react-hot-toast'
+import { getAgent } from '../config/agentMeta'
+import Sparkline from './motion/Sparkline'
+import ExecutionBars from './insights/ExecutionBars'
+import CoverageDonut from './insights/CoverageDonut'
+import TechniqueCompare from './insights/TechniqueCompare'
+import ClosureKpiGrid from './insights/ClosureKpiGrid'
+import DataPreview from './insights/DataPreview'
+import {
+  parseExecutionMetrics,
+  parseCoverage,
+  parseTechniques,
+  parseClosureKpi,
+  parseDataPreview,
+  buildSparklineFromText,
+} from './insights/parsers'
 
-export default function ReportPanel({ content, agentName, sheetTitle }) {
+function useInsightAvailable(agentName, content) {
+  return useMemo(() => {
+    const meta = getAgent(agentName)
+    const visual = meta?.visual || 'sparkline'
+    if (!content) return { available: false, visual }
+    switch (visual) {
+      case 'execution_bars':
+        return { available: !!parseExecutionMetrics(content), visual }
+      case 'coverage_donut':
+        return { available: !!parseCoverage(content), visual }
+      case 'technique_compare':
+        return { available: !!parseTechniques(content), visual }
+      case 'closure_kpi':
+        return { available: !!parseClosureKpi(content), visual }
+      case 'data_preview':
+        return { available: !!parseDataPreview(content), visual }
+      case 'sparkline':
+      default:
+        return { available: content.length > 200, visual: 'sparkline' }
+    }
+  }, [agentName, content])
+}
+
+function Typewriter({ text, enabled = true, max = 600, duration = 600 }) {
+  const reduce = useReducedMotion()
+  const [shown, setShown] = useState(reduce || !enabled ? text : '')
+  const rafRef = useRef(null)
+
+  useEffect(() => {
+    if (reduce || !enabled || !text) {
+      setShown(text)
+      return
+    }
+    const startAt = performance.now()
+    const cap = Math.min(max, text.length)
+    const restAt = cap < text.length ? cap : text.length
+    const tick = (now) => {
+      const t = Math.min(1, (now - startAt) / duration)
+      const i = Math.floor(t * restAt)
+      setShown(text.slice(0, i))
+      if (t < 1) {
+        rafRef.current = requestAnimationFrame(tick)
+      } else {
+        setShown(text)
+      }
+    }
+    rafRef.current = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(rafRef.current)
+  }, [text, enabled, max, duration, reduce])
+
+  return <ReactMarkdown remarkPlugins={[remarkGfm]}>{shown || text}</ReactMarkdown>
+}
+
+export default function ReportPanel({ content, agentName, sheetTitle, stamp }) {
   const [tab, setTab] = useState('formatted')
+  const meta = getAgent(agentName)
+  const { available: insightsAvailable, visual } = useInsightAvailable(agentName, content)
+  const sparklineValues = useMemo(() => buildSparklineFromText(content), [content])
+
+  useEffect(() => {
+    if (tab === 'insights' && !insightsAvailable) setTab('formatted')
+  }, [insightsAvailable, tab])
 
   const download = async (format) => {
     try {
@@ -29,34 +104,111 @@ export default function ReportPanel({ content, agentName, sheetTitle }) {
     toast.success('Copied to clipboard!')
   }
 
+  const tabs = [
+    { id: 'formatted', label: '📖 Formatted' },
+    ...(insightsAvailable ? [{ id: 'insights', label: '✨ Insights' }] : []),
+    { id: 'raw', label: '📋 Raw Text' },
+  ]
+
   return (
     <motion.div
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       className="toon-card mt-6"
     >
-      <div className="flex items-center gap-2 mb-4">
-        <span className="w-8 h-8 rounded-xl bg-toon-mint text-white flex items-center justify-center text-sm">✅</span>
-        <h3 className="font-extrabold text-toon-navy text-lg">Your Report</h3>
+      <div className="flex items-center justify-between gap-2 mb-4">
+        <div className="flex items-center gap-2">
+          <motion.span
+            className="w-8 h-8 rounded-xl bg-toon-mint text-white flex items-center justify-center text-sm shadow-toon-mint"
+            initial={{ scale: 0 }}
+            animate={{ scale: 1 }}
+            transition={{ type: 'spring', stiffness: 320, damping: 18 }}
+          >
+            ✅
+          </motion.span>
+          <h3 className="font-extrabold text-toon-navy text-lg">Your Report</h3>
+          {meta && (
+            <span className="hidden sm:inline-block ml-2 text-[10px] uppercase tracking-wider font-bold text-gray-400">
+              {meta.label}
+            </span>
+          )}
+        </div>
+        {sparklineValues.length > 0 && (
+          <div className="hidden sm:block opacity-80">
+            <Sparkline values={sparklineValues} width={140} height={36} color="#3b82f6" fill="rgba(59,130,246,0.15)" />
+          </div>
+        )}
       </div>
 
-      <div className="flex gap-2 mb-4">
-        <button onClick={() => setTab('formatted')} className={`px-4 py-2 rounded-xl text-sm font-bold transition-all ${tab === 'formatted' ? 'bg-toon-blue text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
-          📖 Formatted
-        </button>
-        <button onClick={() => setTab('raw')} className={`px-4 py-2 rounded-xl text-sm font-bold transition-all ${tab === 'raw' ? 'bg-toon-blue text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
-          📋 Raw Text
-        </button>
+      <div className="flex gap-2 mb-4 relative bg-gray-100 rounded-2xl p-1">
+        {tabs.map(t => (
+          <button
+            key={t.id}
+            onClick={() => setTab(t.id)}
+            className={`relative flex-1 sm:flex-none px-4 py-2 rounded-xl text-sm font-bold transition-colors ${
+              tab === t.id ? 'text-white' : 'text-gray-600 hover:text-toon-navy'
+            }`}
+          >
+            {tab === t.id && (
+              <motion.span
+                layoutId={`reportTab-${stamp || 'panel'}`}
+                className="absolute inset-0 bg-toon-blue rounded-xl shadow-sm"
+                transition={{ type: 'spring', stiffness: 380, damping: 30 }}
+              />
+            )}
+            <span className="relative">{t.label}</span>
+          </button>
+        ))}
       </div>
 
       <div className="bg-gray-50 rounded-2xl p-5 mb-4 overflow-auto" style={{ maxHeight: '70vh' }}>
-        {tab === 'formatted' ? (
-          <div className="markdown-body table-wrap">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
-          </div>
-        ) : (
-          <pre className="whitespace-pre-wrap text-sm font-mono text-gray-700">{content}</pre>
-        )}
+        <AnimatePresence mode="wait">
+          {tab === 'formatted' && (
+            <motion.div
+              key="formatted"
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -8 }}
+              transition={{ duration: 0.2 }}
+              className="markdown-body table-wrap"
+            >
+              <Typewriter text={content} />
+            </motion.div>
+          )}
+          {tab === 'insights' && insightsAvailable && (
+            <motion.div
+              key="insights"
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -8 }}
+              transition={{ duration: 0.2 }}
+            >
+              {visual === 'execution_bars' && <ExecutionBars content={content} />}
+              {visual === 'coverage_donut' && <CoverageDonut content={content} />}
+              {visual === 'technique_compare' && <TechniqueCompare content={content} />}
+              {visual === 'closure_kpi' && <ClosureKpiGrid content={content} />}
+              {visual === 'data_preview' && <DataPreview content={content} />}
+              {visual === 'sparkline' && (
+                <div className="flex flex-col items-center gap-3 py-6">
+                  <div className="text-xs uppercase tracking-wider font-bold text-gray-500">Content density</div>
+                  <Sparkline values={sparklineValues} width={420} height={120} />
+                </div>
+              )}
+            </motion.div>
+          )}
+          {tab === 'raw' && (
+            <motion.pre
+              key="raw"
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -8 }}
+              transition={{ duration: 0.2 }}
+              className="whitespace-pre-wrap text-sm font-mono text-gray-700"
+            >
+              {content}
+            </motion.pre>
+          )}
+        </AnimatePresence>
       </div>
 
       <div className="flex flex-wrap gap-2">

@@ -19,7 +19,7 @@ export default function BugReports() {
 
   return (
     <div>
-      <PageHeader icon="🐛" title="Bug Reports" subtitle="AI-assisted defect reports" gradient="from-toon-coral to-red-400" />
+      <PageHeader agentName="bug_report" />
       <div className="flex gap-2 mb-6">
         {['title', 'full'].map(m => (
           <button key={m} onClick={() => setMode(m)} className={`px-4 py-2 rounded-xl text-sm font-bold transition-all ${mode === m ? 'bg-toon-coral text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>

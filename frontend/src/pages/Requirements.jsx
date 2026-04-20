@@ -4,7 +4,7 @@ import AgentForm from '../components/AgentForm'
 export default function Requirements() {
   return (
     <div>
-      <PageHeader icon="📝" title="Requirements" subtitle="User story analysis" gradient="from-blue-600 to-blue-500" />
+      <PageHeader agentName="requirement" />
       <AgentForm
         agentName="requirement"
         sheetTitle="Requirements"

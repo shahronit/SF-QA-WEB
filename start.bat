@@ -1,7 +1,7 @@
 @echo off
-title Salesforce QA Studio
+title QA Studio
 echo ==========================================
-echo   Salesforce QA Studio - Starting...
+echo   QA Studio - Starting...
 echo ==========================================
 echo.
 

@@ -122,3 +122,34 @@
   @apply overflow-x-auto mb-4;
   -webkit-overflow-scrolling: touch;
 }
+
+/* Shimmer for skeleton loaders */
+.toon-shimmer {
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0) 0%,
+    rgba(148, 163, 184, 0.18) 25%,
+    rgba(148, 163, 184, 0.32) 50%,
+    rgba(148, 163, 184, 0.18) 75%,
+    rgba(255, 255, 255, 0) 100%
+  );
+  background-size: 200% 100%;
+  animation: toon-shimmer 1.4s infinite linear;
+}
+@keyframes toon-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* Respect prefers-reduced-motion */
+@media (prefers-reduced-motion: reduce) {
+  .toon-shimmer { animation: none; }
+  .toon-card { transition: none; }
+  .toon-btn { transition: none; }
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}

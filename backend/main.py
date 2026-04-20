@@ -1,4 +1,4 @@
-"""Salesforce QA Studio — single-server FastAPI + React SPA."""
+"""QA Studio — single-server FastAPI + React SPA."""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="Salesforce QA Studio API", lifespan=lifespan)
+app = FastAPI(title="QA Studio API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -37,7 +37,7 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 # API routes
 # ---------------------------------------------------------------------------
-from routers import auth, agents, projects, history, jira, salesforce, knowledge, exports, llm  # noqa: E402
+from routers import auth, agents, projects, history, jira, salesforce, knowledge, exports, llm, stlc_pack  # noqa: E402
 
 app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 app.include_router(agents.router, prefix="/api/agents", tags=["agents"])
@@ -48,6 +48,7 @@ app.include_router(salesforce.router, prefix="/api/sf", tags=["salesforce"])
 app.include_router(knowledge.router, prefix="/api/kb", tags=["knowledge"])
 app.include_router(exports.router, prefix="/api/exports", tags=["exports"])
 app.include_router(llm.router, prefix="/api/llm", tags=["llm"])
+app.include_router(stlc_pack.router, prefix="/api/stlc", tags=["stlc"])
 
 
 @app.get("/api/health")

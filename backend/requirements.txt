@@ -18,3 +18,4 @@ pydantic-settings>=2.6.0
 sse-starlette>=2.1.0
 aiofiles>=24.1.0
 unstructured[docx]>=0.16.0
+firebase-admin>=6.5.0

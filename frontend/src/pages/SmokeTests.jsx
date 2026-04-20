@@ -22,7 +22,7 @@ export default function SmokeTests() {
 
   return (
     <div>
-      <PageHeader icon="💨" title="Smoke Tests" subtitle="Post-release validation" gradient="from-orange-400 to-toon-yellow" />
+      <PageHeader agentName="smoke" />
       <SFOrgLogin onMetadata={setOrgMetadata} />
       <AgentForm
         agentName="smoke"

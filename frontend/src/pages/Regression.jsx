@@ -13,7 +13,7 @@ export default function Regression() {
 
   return (
     <div>
-      <PageHeader icon="🔄" title="Regression" subtitle="Change impact analysis" gradient="from-toon-navy to-blue-700" />
+      <PageHeader agentName="regression" />
       <SFOrgLogin onMetadata={setOrgMetadata} />
       <AgentForm
         agentName="regression"

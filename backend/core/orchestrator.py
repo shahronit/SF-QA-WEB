@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from core import firestore_db
 from core.prompts.prompts import PROMPTS, _PROJECT_SCOPE, _SCOPE_ONLY
 from rag.retriever import RAGRetriever
 
@@ -42,7 +43,14 @@ def _should_skip_model(exc: Exception) -> bool:
 
 
 def _append_log(record: dict[str, Any]) -> None:
-    """Append a JSON-lines record to the agent log file."""
+    """Persist an agent run record to Firestore (when enabled) or to disk."""
+    if firestore_db.is_enabled():
+        try:
+            db = firestore_db.get_db()
+            db.collection(firestore_db.AGENT_RUNS).add(record)
+            return
+        except Exception:
+            pass
     LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
     line = json.dumps(record, ensure_ascii=False) + "\n"
     with LOG_PATH.open("a", encoding="utf-8") as fh:
@@ -54,7 +62,11 @@ def _append_log(record: dict[str, Any]) -> None:
 # ---------------------------------------------------------------------------
 
 class _GeminiProvider:
-    """Adapter for Google Gemini (google-genai SDK)."""
+    """Adapter for Google Gemini (google-genai SDK).
+
+    Handles 2.5-series "thinking" models whose responses may include
+    internal reasoning parts where ``resp.text`` returns None.
+    """
 
     name = "gemini"
 
@@ -62,33 +74,53 @@ class _GeminiProvider:
         from google import genai
         self._client = genai.Client(api_key=api_key)
 
+    @staticmethod
+    def _extract_text(resp: Any) -> str:
+        """Extract text from a Gemini response, handling thinking models."""
+        if resp.text:
+            return resp.text.strip()
+        # Fallback: iterate candidate parts for actual text content
+        try:
+            parts = resp.candidates[0].content.parts
+            texts = [p.text for p in parts if hasattr(p, "text") and p.text and not getattr(p, "thought", False)]
+            if texts:
+                return "\n".join(texts).strip()
+        except (IndexError, AttributeError):
+            pass
+        return ""
+
+    @staticmethod
+    def _build_config(
+        system_prompt: str, temperature: float, max_tokens: int, model: str,
+    ) -> Any:
+        """Build GenerateContentConfig, adding thinking budget for 2.5 models."""
+        from google.genai import types
+        kwargs: dict[str, Any] = {
+            "system_instruction": system_prompt,
+            "temperature": temperature,
+            "max_output_tokens": max_tokens,
+        }
+        if "2.5" in model:
+            kwargs["thinking_config"] = types.ThinkingConfig(thinking_budget=2048)
+        return types.GenerateContentConfig(**kwargs)
+
     def generate(
         self, model: str, system_prompt: str, user_content: str,
         temperature: float, max_tokens: int,
     ) -> str:
         """Synchronous generation — returns full text."""
-        from google.genai import types
-        config = types.GenerateContentConfig(
-            system_instruction=system_prompt,
-            temperature=temperature,
-            max_output_tokens=max_tokens,
-        )
+        config = self._build_config(system_prompt, temperature, max_tokens, model)
         resp = self._client.models.generate_content(
             model=model, contents=user_content, config=config,
         )
-        return (resp.text or "").strip()
+        return self._extract_text(resp)
 
     def stream(
         self, model: str, system_prompt: str, user_content: str,
         temperature: float, max_tokens: int,
     ) -> Iterator[str]:
         """Streaming generation — yields text chunks."""
-        from google.genai import types
-        config = types.GenerateContentConfig(
-            system_instruction=system_prompt,
-            temperature=temperature,
-            max_output_tokens=max_tokens,
-        )
+        config = self._build_config(system_prompt, temperature, max_tokens, model)
         for chunk in self._client.models.generate_content_stream(
             model=model, contents=user_content, config=config,
         ):
@@ -159,7 +191,7 @@ class SFQAOrchestrator:
         openai_fallbacks: list[str] | None = None,
         openai_max_retries: int = 3,
         gemini_api_key: str = "",
-        gemini_model: str = "gemini-2.5-flash",
+        gemini_model: str = "gemini-2.5-pro",
         gemini_fallbacks: list[str] | None = None,
         gemini_max_retries: int = 3,
         rag_top_k: int = 3,
