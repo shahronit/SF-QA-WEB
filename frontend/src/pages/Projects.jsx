@@ -19,6 +19,7 @@ export default function Projects() {
     try {
       const { data } = await api.get('/projects/')
       setProjects(data.projects || [])
+      window.dispatchEvent(new CustomEvent('qa:projects-updated'))
     } catch { /* ignore */ }
   }
 

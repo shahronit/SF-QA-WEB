@@ -60,11 +60,23 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
   const importedKeysRef = useRef({})
   const [autoFetchedNotice, setAutoFetchedNotice] = useState({})
 
-  useEffect(() => {
+  const fetchProjects = useCallback(() => {
     api.get('/projects/').then(({ data }) => {
       setProjects(data.projects || [])
     }).catch(() => {})
   }, [])
+
+  useEffect(() => {
+    fetchProjects()
+    const onFocus = () => fetchProjects()
+    const onProjectsUpdated = () => fetchProjects()
+    window.addEventListener('focus', onFocus)
+    window.addEventListener('qa:projects-updated', onProjectsUpdated)
+    return () => {
+      window.removeEventListener('focus', onFocus)
+      window.removeEventListener('qa:projects-updated', onProjectsUpdated)
+    }
+  }, [fetchProjects])
 
   const handleChange = (key, val) => setValues(prev => ({ ...prev, [key]: val }))
 
@@ -88,26 +100,86 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
     }
     setLoading(true)
     setResult('')
+    setResultStamp(Date.now())
+
+    const mergedInput = { ...values, ...extraInput }
+    if (selectedLinked) mergedInput.linked_output = selectedLinked.content
+
+    let accumulated = ''
+    let errored = false
+
     try {
-      const mergedInput = { ...values, ...extraInput }
-      if (selectedLinked) {
-        mergedInput.linked_output = selectedLinked.content
-      }
-      const resp = await api.post(`/agents/${agentName}/run`, {
-        user_input: mergedInput,
-        project_slug: selectedProject || null,
+      const token = localStorage.getItem('token')
+      const resp = await fetch(`/api/agents/${agentName}/stream`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({
+          user_input: mergedInput,
+          project_slug: selectedProject || null,
+        }),
       })
-      const output = resp.data.result || ''
-      setResult(output)
-      setResultStamp(Date.now())
-      if (output && !output.startsWith('**Error')) {
-        saveResult(agentName, output)
-        setConfettiTrigger(t => t + 1)
+      if (!resp.ok) {
+        const detail = await resp.text().catch(() => '')
+        throw new Error(`${resp.status} ${resp.statusText}${detail ? ` — ${detail}` : ''}`)
+      }
+      if (!resp.body) throw new Error('No response body for stream')
+
+      const reader = resp.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+
+      while (true) {
+        const { value, done } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        // SSE frames are separated by a blank line. Parse complete frames.
+        let idx
+        while ((idx = buffer.indexOf('\n\n')) !== -1) {
+          const frame = buffer.slice(0, idx)
+          buffer = buffer.slice(idx + 2)
+          let event = 'message'
+          const dataLines = []
+          for (const line of frame.split('\n')) {
+            if (line.startsWith('event:')) event = line.slice(6).trim()
+            else if (line.startsWith('data:')) dataLines.push(line.slice(5).trim())
+          }
+          if (!dataLines.length) continue
+          let payload = null
+          try { payload = JSON.parse(dataLines.join('\n')) } catch { payload = null }
+          if (!payload) continue
+          if (event === 'token' && typeof payload.text === 'string') {
+            accumulated += payload.text
+            setResult(accumulated)
+          } else if (event === 'error') {
+            errored = true
+            const msg = payload.error || 'Unknown error'
+            accumulated += `\n\n**Error:** ${msg}`
+            setResult(accumulated)
+          } else if (event === 'done') {
+            // loop will end when reader completes
+          }
+        }
       }
     } catch (err) {
-      setResult(`**Error:** ${err.response?.data?.detail || err.message}`)
+      errored = true
+      accumulated = accumulated
+        ? `${accumulated}\n\n**Error:** ${err.message}`
+        : `**Error:** ${err.message}`
+      setResult(accumulated)
     } finally {
       setLoading(false)
+      setResultStamp(Date.now())
+      if (accumulated && !errored && !accumulated.startsWith('**Error')) {
+        saveResult(agentName, accumulated)
+        setConfettiTrigger(t => t + 1)
+      }
+      // Notify History + any other listeners to refresh without manual reload.
+      window.dispatchEvent(new CustomEvent('qa:agent-run-complete', {
+        detail: { agent: agentName, ok: !errored, chars: accumulated.length },
+      }))
     }
   }
 

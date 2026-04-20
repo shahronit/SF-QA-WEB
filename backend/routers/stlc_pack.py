@@ -8,6 +8,7 @@ render a live phase-by-phase pipeline.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import uuid
@@ -17,6 +18,7 @@ from typing import Any, Iterable
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
+from starlette.concurrency import run_in_threadpool
 
 from core import firestore_db
 from core.jira_client import JiraClient
@@ -26,6 +28,13 @@ from routers.jira import _load_session
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+# SSE headers that prevent buffering so phase progress arrives live.
+_SSE_HEADERS = {
+    "Cache-Control": "no-cache, no-transform",
+    "X-Accel-Buffering": "no",
+    "Connection": "keep-alive",
+}
 
 
 # Five core STLC agents in execution order — keep in sync with the frontend
@@ -254,14 +263,34 @@ async def run_stlc_pack(body: StlcRunRequest, user=Depends(get_current_user)):
             })
             user_input = _agent_input(agent, seed_text, prior_output)
             collected: list[str] = []
-            try:
-                for chunk in orch.stream_agent(agent, user_input):
-                    collected.append(chunk)
-                    yield _sse("token", {"agent": agent, "text": chunk})
-            except Exception as exc:  # noqa: BLE001
-                err = f"**Error running {agent}:** {exc}"
-                collected.append(err)
-                yield _sse("agent_error", {"agent": agent, "error": str(exc)})
+            err_msg: str | None = None
+            q: asyncio.Queue[tuple[str, Any]] = asyncio.Queue()
+            loop = asyncio.get_running_loop()
+
+            def _producer(_agent=agent, _input=user_input, _q=q, _loop=loop) -> None:
+                try:
+                    for chunk in orch.stream_agent(_agent, _input):
+                        _loop.call_soon_threadsafe(_q.put_nowait, ("chunk", chunk))
+                except Exception as exc:  # noqa: BLE001
+                    _loop.call_soon_threadsafe(_q.put_nowait, ("error", str(exc)))
+                finally:
+                    _loop.call_soon_threadsafe(_q.put_nowait, ("done", None))
+
+            asyncio.create_task(run_in_threadpool(_producer))
+            while True:
+                kind, payload = await q.get()
+                if kind == "chunk":
+                    collected.append(payload)
+                    yield _sse("token", {"agent": agent, "text": payload})
+                elif kind == "error":
+                    err_msg = payload
+                    break
+                else:
+                    break
+            if err_msg is not None:
+                err_text = f"**Error running {agent}:** {err_msg}"
+                collected.append(err_text)
+                yield _sse("agent_error", {"agent": agent, "error": err_msg})
             full = "".join(collected)
             outputs[agent] = full
             prior_output = full
@@ -292,4 +321,4 @@ async def run_stlc_pack(body: StlcRunRequest, user=Depends(get_current_user)):
             "combined_markdown": combined,
         })
 
-    return EventSourceResponse(event_generator())
+    return EventSourceResponse(event_generator(), headers=_SSE_HEADERS)

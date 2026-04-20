@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { motion } from 'framer-motion'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -21,13 +21,25 @@ export default function History() {
   const [agentFilter, setAgentFilter] = useState('')
   const [expanded, setExpanded] = useState(null)
 
-  const load = async () => {
+  const load = useCallback(async () => {
     try {
       const { data } = await api.get('/history/', { params: { agent: agentFilter } })
       setRecords(data.records || [])
     } catch { /* ignore */ }
-  }
-  useEffect(() => { load() }, [agentFilter])
+  }, [agentFilter])
+
+  useEffect(() => { load() }, [load])
+
+  useEffect(() => {
+    const onRunComplete = () => load()
+    const onFocus = () => load()
+    window.addEventListener('qa:agent-run-complete', onRunComplete)
+    window.addEventListener('focus', onFocus)
+    return () => {
+      window.removeEventListener('qa:agent-run-complete', onRunComplete)
+      window.removeEventListener('focus', onFocus)
+    }
+  }, [load])
 
   const clearAll = async () => {
     await api.delete('/history/')
