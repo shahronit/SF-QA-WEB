@@ -131,14 +131,14 @@ async def connect(body: JiraConnectRequest, user=Depends(get_current_user)):
         "connected_at": datetime.now(timezone.utc).isoformat(),
         "projects": projects,
     }
-    _save_session(user["sub"], session)
+    _save_session(user["username"], session)
     return {"connected": True, "jira_url": session["jira_url"], "projects": projects}
 
 
 @router.get("/status")
 async def status(user=Depends(get_current_user)):
     """Return whether the user is currently connected to Jira."""
-    session = _load_session(user["sub"])
+    session = _load_session(user["username"])
     if not session:
         return {"connected": False}
     return {
@@ -153,7 +153,7 @@ async def status(user=Depends(get_current_user)):
 @router.post("/disconnect")
 async def disconnect(user=Depends(get_current_user)):
     """Forget the user's stored Jira credentials."""
-    _drop_session(user["sub"])
+    _drop_session(user["username"])
     return {"connected": False}
 
 
@@ -164,14 +164,14 @@ async def disconnect(user=Depends(get_current_user)):
 @router.get("/projects")
 async def list_jira_projects(user=Depends(get_current_user)):
     """Refresh and return the list of projects from Jira."""
-    client = _get_client(user["sub"])
+    client = _get_client(user["username"])
     try:
         projects = client.list_projects()
     except ConnectionError as e:
         raise HTTPException(400, str(e))
-    session = _load_session(user["sub"]) or {}
+    session = _load_session(user["username"]) or {}
     session["projects"] = projects
-    _save_session(user["sub"], session)
+    _save_session(user["username"], session)
     return {"projects": projects}
 
 
@@ -183,7 +183,7 @@ async def list_jira_issues(
     user=Depends(get_current_user),
 ):
     """Browse issues for a project, optionally filtered by issue type."""
-    client = _get_client(user["sub"])
+    client = _get_client(user["username"])
     try:
         issues = client.list_issues(
             project_key=project_key,
@@ -198,7 +198,7 @@ async def list_jira_issues(
 @router.get("/issue/{issue_key}")
 async def get_jira_issue(issue_key: str, user=Depends(get_current_user)):
     """Return the full detail for a single issue."""
-    client = _get_client(user["sub"])
+    client = _get_client(user["username"])
     try:
         return client.get_issue(issue_key)
     except ConnectionError as e:
@@ -216,7 +216,7 @@ async def resolve_jira_text(body: JiraResolveRequest, user=Depends(get_current_u
     key = extract_jira_key(body.text)
     if not key:
         return {"key": None}
-    session = _load_session(user["sub"])
+    session = _load_session(user["username"])
     if not session:
         return {"key": key, "issue": None, "connected": False}
     client = JiraClient(session["jira_url"], session["email"], session["api_token"])
@@ -230,7 +230,7 @@ async def resolve_jira_text(body: JiraResolveRequest, user=Depends(get_current_u
 @router.post("/search")
 async def search_jira(body: JiraSearchRequest, user=Depends(get_current_user)):
     """Run a custom JQL search."""
-    client = _get_client(user["sub"])
+    client = _get_client(user["username"])
     try:
         issues = client.search_issues(body.jql, max_results=body.max_results)
     except ConnectionError as e:
@@ -245,7 +245,7 @@ async def search_jira(body: JiraSearchRequest, user=Depends(get_current_user)):
 @router.post("/create-bug")
 async def create_bug(body: JiraCreateBugRequest, user=Depends(get_current_user)):
     """Create a Bug issue in Jira and return its key and URL."""
-    session = _load_session(user["sub"])
+    session = _load_session(user["username"])
     if session:
         client = JiraClient(session["jira_url"], session["email"], session["api_token"])
     elif body.jira_url and body.email and body.api_token:

@@ -224,7 +224,7 @@ def _sse(event: str, payload: dict[str, Any]) -> dict[str, str]:
 @router.post("/run")
 async def run_stlc_pack(body: StlcRunRequest, user=Depends(get_current_user)):
     """Run the five-agent STLC pack and stream phase-by-phase progress over SSE."""
-    seed_text, jira_key = _build_seed(user["sub"], body)
+    seed_text, jira_key = _build_seed(user["username"], body)
     pack_id = uuid.uuid4().hex
     orch = get_orchestrator()
     orch.set_project(body.project_slug)
@@ -281,7 +281,7 @@ async def run_stlc_pack(body: StlcRunRequest, user=Depends(get_current_user)):
         )
         _log_pack_run(
             pack_id=pack_id,
-            username=user["sub"],
+            username=user["username"],
             project_slug=body.project_slug,
             jira_key=jira_key,
             seed_text=seed_text,
