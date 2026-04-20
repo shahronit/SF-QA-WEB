@@ -84,13 +84,15 @@ function PhaseStep({ agent, index, total, status, content, expanded, onToggle })
 }
 
 function parseSseStream(text) {
-  // Split a buffer into complete SSE frames; returns [events, leftover]
+  // Split a buffer into complete SSE frames; returns [events, leftover].
+  // Normalise CRLF (sse_starlette emits \r\n) so we can split on '\n\n'.
+  const norm = text.replace(/\r\n/g, '\n')
   const frames = []
   let cursor = 0
   while (true) {
-    const sep = text.indexOf('\n\n', cursor)
+    const sep = norm.indexOf('\n\n', cursor)
     if (sep === -1) break
-    const raw = text.slice(cursor, sep)
+    const raw = norm.slice(cursor, sep)
     cursor = sep + 2
     let event = 'message'
     const dataLines = []
@@ -106,7 +108,7 @@ function parseSseStream(text) {
       }
     }
   }
-  return [frames, text.slice(cursor)]
+  return [frames, norm.slice(cursor)]
 }
 
 export default function StlcPack() {

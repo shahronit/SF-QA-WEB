@@ -134,7 +134,8 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
       while (true) {
         const { value, done } = await reader.read()
         if (done) break
-        buffer += decoder.decode(value, { stream: true })
+        // Normalise CRLF so we can split on '\n\n' regardless of server line-ending style.
+        buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n')
         // SSE frames are separated by a blank line. Parse complete frames.
         let idx
         while ((idx = buffer.indexOf('\n\n')) !== -1) {
