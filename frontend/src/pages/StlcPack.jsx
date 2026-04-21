@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import toast from 'react-hot-toast'
 import api from '../api/client'
 import PageHeader from '../components/PageHeader'
@@ -62,16 +64,20 @@ function PhaseStep({ agent, index, total, status, content, expanded, onToggle })
 
       <AnimatePresence>
         {expanded && content && (
-          <motion.pre
+          <motion.div
             key="preview"
             initial={{ opacity: 0, height: 0 }}
             animate={{ opacity: 1, height: 'auto' }}
             exit={{ opacity: 0, height: 0 }}
             transition={{ duration: 0.25 }}
-            className="mt-3 max-h-72 overflow-auto bg-gray-50 rounded-xl p-3 text-xs whitespace-pre-wrap font-mono text-gray-700 border border-gray-200"
+            className="mt-3 max-h-72 overflow-auto bg-gray-50 rounded-xl p-3 border border-gray-200 markdown-body table-wrap text-sm"
           >
-            {content.length > 4000 ? content.slice(0, 4000) + '\n…(truncated, full report below)' : content}
-          </motion.pre>
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+              {content.length > 4000
+                ? content.slice(0, 4000) + '\n\n_…(truncated, full report below)_'
+                : content}
+            </ReactMarkdown>
+          </motion.div>
         )}
       </AnimatePresence>
 

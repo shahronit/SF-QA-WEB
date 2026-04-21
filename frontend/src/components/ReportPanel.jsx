@@ -86,7 +86,10 @@ export default function ReportPanel({ content, agentName, sheetTitle, stamp }) {
   const download = async (format) => {
     try {
       const resp = await api.post(`/exports/${format}`, { content, agent_name: agentName }, { responseType: 'blob' })
-      const ext = format === 'excel' ? 'xlsx' : format === 'markdown' ? 'md' : 'csv'
+      const ext = format === 'excel' ? 'xlsx'
+        : format === 'markdown' ? 'md'
+        : format === 'pdf' ? 'pdf'
+        : 'csv'
       const url = URL.createObjectURL(resp.data)
       const a = document.createElement('a')
       a.href = url
@@ -214,8 +217,9 @@ export default function ReportPanel({ content, agentName, sheetTitle, stamp }) {
       <div className="flex flex-wrap gap-2">
         <button onClick={() => download('excel')} className="toon-btn toon-btn-mint text-sm py-2 px-4">📊 Excel</button>
         <button onClick={() => download('csv')} className="toon-btn toon-btn-blue text-sm py-2 px-4">📋 CSV</button>
+        <button onClick={() => download('pdf')} className="toon-btn toon-btn-coral text-sm py-2 px-4">📄 PDF</button>
         <button onClick={() => download('markdown')} className="toon-btn toon-btn-purple text-sm py-2 px-4">📝 Markdown</button>
-        <button onClick={copyText} className="toon-btn bg-gray-400 hover:bg-gray-500 text-sm py-2 px-4">📄 Copy</button>
+        <button onClick={copyText} className="toon-btn bg-gray-400 hover:bg-gray-500 text-sm py-2 px-4">📑 Copy</button>
       </div>
     </motion.div>
   )

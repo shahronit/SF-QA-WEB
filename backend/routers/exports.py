@@ -1,4 +1,4 @@
-"""Export routes: convert agent output to Excel, CSV, or Markdown."""
+"""Export routes: convert agent output to Excel, CSV, Markdown, or PDF."""
 
 from __future__ import annotations
 
@@ -54,5 +54,18 @@ async def export_md(body: ExportRequest, user=Depends(get_current_user)):
         media_type="text/markdown",
         headers={
             "Content-Disposition": f"attachment; filename=QA_{body.agent_name}.md"
+        },
+    )
+
+
+@router.post("/pdf")
+async def export_pdf(body: ExportRequest, user=Depends(get_current_user)):
+    """Export content as a styled PDF rendered from markdown."""
+    data = exporter.export_to_pdf(body.content, body.agent_name)
+    return Response(
+        content=data,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f"attachment; filename=QA_{body.agent_name}.pdf"
         },
     )
