@@ -140,7 +140,7 @@ The INPUT JSON provides **`requirements`**, optional **`objects`**, and optional
 **Step Formatting Rules:**
 
 - **Step 1** of every test case MUST be:
-  - `qa_mode = "salesforce"` → "Navigate to the relevant Experience Cloud or Commerce Cloud application."
+  - `qa_mode = "salesforce"` → "Navigate to the relevant Salesforce Cloud application."
   - `qa_mode = "general"`    → "Navigate to the application under test."
 - Always use **"Navigate"** (never "Go to")
 - Each step must be **atomic** (one action per step), clear, executable, and UI-action driven
@@ -185,12 +185,12 @@ Experience Cloud to Salesforce data sync, Commerce Cloud to Orders/Accounts/Cont
 
 ---
 
-**Zephyr field requirements (Astound):**
+**Field requirements (Astound):**
 
-Every test case must populate the following Zephyr-required fields:
+Every test case must populate the following required fields:
 
-- **Summary (Zephyr)** — start with `[Feature Name]` (e.g. `[Cart] Verify that ...`). **Unique**, max **255 characters**, no leading/trailing spaces.
-- **Priority (Zephyr ladder)** — pick **exactly one** of: **Blocker / Critical / Major / Minor**. (Use this Zephyr ladder, not Critical/High/Medium/Low.) Definitions:
+- **Summary** — start with `[Feature Name]` (e.g. `[Cart] Verify that ...`). **Unique**, max **255 characters**, no leading/trailing spaces.
+- **Priority** — pick **exactly one** of: **Blocker / Critical / Major / Minor**. (Use this ladder, not Critical/High/Medium/Low.) Definitions:
   - *Blocker* — blocks main business flow, no workaround.
   - *Critical* — main flow broken, workaround painful.
   - *Major* — secondary flow broken or main flow with easy workaround.
@@ -201,31 +201,29 @@ Every test case must populate the following Zephyr-required fields:
 - **Labels** — comma-separated; **no spaces inside a label** (`smoke,mobile,checkout`).
 - **Required project fields (mention in Pre-conditions when known):** `Based on`, `Browsers`, `Devices`, `Environment`, `SOW`, `Assignee`. Use placeholders if INPUT does not provide them.
 
-**Test Type axis (Zephyr):**
+**Test Type axis:**
 
 Every test case carries **two** test-type tags combined into one column:
 - **Behaviour:** Functional / Negative / Boundary / Integration / Smoke
-- **Zephyr level:** **High-Level** (one-liner, exploratory) / **High-Level Detailed** (key steps + main checks) / **Low-Level** (granular, automatable)
-
-Render in the table as `Functional · Low-Level`, `Negative · High-Level Detailed`, etc.
+- **Level:** High-Level / Low-Level
 
 ---
 
 **Output format — Markdown table with these columns (exact order):**
 
-| Test Case ID | Summary (Zephyr) | Pre-conditions | Test Steps | Expected Results | Priority | Components | Labels | Test Type |
+| Test Case ID | Summary | Pre-conditions | Test Steps | Expected Results | Priority | Components | Labels | Test Type |
 
 **Row rules:**
 - **One row per test case.** All steps and expected results for a single test case go in the **same row**.
 - **Test Case ID:** TC_001, TC_002, … — one ID per logical test case.
-- **Summary (Zephyr):** `[Feature] Verify that …` — unique, ≤ 255 chars.
+- **Summary:** `[Feature] Verify that …` — unique, ≤ 255 chars.
 - **Pre-conditions:** numbered list inside the cell (1. … 2. …). Include the Zephyr required project fields when known (Based on / Browsers / Devices / Environment / SOW / Assignee).
-- **Test Steps:** numbered list inside the cell. Step 1 is always "1. Navigate to the relevant Experience Cloud or Commerce Cloud application." in Salesforce mode (or **"1. Navigate to the application under test."** in general mode), followed by 2. … 3. … etc. Each step is atomic, imperative, concrete, grounded in user requirements, **never contains the `#` character**, and is never empty (use `-` if truly empty).
-- **Expected Results:** numbered list inside the cell. Most numbers map 1:1 to a Test Step; group multiple steps under one Expected Result when they share an outcome (per Astound Zephyr guidance) and label the grouping (e.g. `1–2.`).
-- **Priority:** **Blocker / Critical / Major / Minor** (Zephyr ladder).
+- **Test Steps:** numbered list inside the cell. Each number should start with new line inside the cell. Step 1 is always "1. Navigate to the relevant Salesforce Cloud application." in Salesforce mode (or **"1. Navigate to the application under test."** in general mode), followed by 2. … 3. … etc. Each step is atomic, imperative, concrete, grounded in user requirements, **never contains the `#` character**, and is never empty (use `-` if truly empty).
+- **Expected Results:** numbered list inside the cell. Each number should start with new line inside the cellMost numbers map 1:1 to a Test Step; group multiple steps under one Expected Result when they share an outcome (per Astound Zephyr guidance) and label the grouping (e.g. `1–2.`).
+- **Priority:** **Blocker / Critical / Major / Minor**.
 - **Components:** comma-separated existing components, no spaces inside names.
 - **Labels:** comma-separated, no spaces inside a label.
-- **Test Type:** `<Behaviour> · <Zephyr level>` (e.g. `Functional · Low-Level`).
+- **Test Type:** `<Behaviour>` (e.g. `Functional`).
 
 Always generate **multiple** test cases for each acceptance criterion. Do NOT merge unrelated scenarios.
 

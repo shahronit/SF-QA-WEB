@@ -148,35 +148,191 @@ def split_markdown_sections(content: str) -> list[dict[str, str]]:
     return cleaned
 
 
-def export_to_excel(content: str, agent_name: str) -> bytes:
-    """Build an .xlsx with one row per markdown section.
+_SEP_RE = re.compile(r"^[\s|:\-]+$")
 
-    Columns are ``Section Title`` and ``Markdown Content``; each cell carries
-    the raw markdown text for that section so the file is editable as plain
-    markdown but viewable as a structured grid.
+
+def parse_all_markdown_tables(content: str) -> list[dict]:
+    """Extract every GFM pipe table from *content*, tagged with its nearest ATX heading.
+
+    Returns a list of dicts::
+
+        [
+            {
+                "heading": "Test Cases",          # nearest ## heading before the table
+                "headers": ["TC ID", "Summary"],  # column names from the header row
+                "rows": [["TC_001", "…"], …],     # list of cell lists (strings)
+            },
+            …
+        ]
+
+    Tables inside fenced code blocks are skipped. Escaped pipes (``\\|``) inside
+    cells are temporarily substituted so splitting on ``|`` still works.
     """
-    rows = split_markdown_sections(content)
-    sheet = (agent_name or "export")[:31] or "Export"
-    if not rows:
-        rows = [{"Section Title": "(Empty)", "Markdown Content": ""}]
-    return export_workbook_bytes({sheet: rows})
+    _PIPE_ESC = "\x00PIPE\x00"
+    tables: list[dict] = []
+    current_heading = "(Untitled)"
+    in_fence = False
+    lines = (content or "").splitlines()
+    i = 0
+
+    def _parse_row(raw: str) -> list[str]:
+        escaped = raw.replace("\\|", _PIPE_ESC)
+        cells = [c.replace(_PIPE_ESC, "|").strip() for c in escaped.strip("|").split("|")]
+        return cells
+
+    def _is_separator(raw: str) -> bool:
+        stripped = raw.strip()
+        if not stripped or "|" not in stripped:
+            return False
+        inner = stripped.strip("|")
+        return bool(_SEP_RE.match(inner))
+
+    def _is_pipe_row(raw: str) -> bool:
+        stripped = raw.strip()
+        return "|" in stripped and stripped.count("|") >= 1
+
+    while i < len(lines):
+        raw = lines[i]
+
+        # Track fenced code blocks
+        if _FENCE_RE.match(raw):
+            in_fence = not in_fence
+            i += 1
+            continue
+
+        if in_fence:
+            i += 1
+            continue
+
+        # Track headings
+        m = _HEADING_RE.match(raw)
+        if m:
+            current_heading = m.group(2).strip() or "(Untitled)"
+            i += 1
+            continue
+
+        # Look for the start of a pipe table: pipe row followed by separator row
+        if _is_pipe_row(raw) and i + 1 < len(lines) and _is_separator(lines[i + 1]):
+            headers = _parse_row(raw)
+            i += 2  # skip header row + separator row
+            data_rows: list[list[str]] = []
+            while i < len(lines):
+                data_line = lines[i]
+                if not _is_pipe_row(data_line) or _is_separator(data_line):
+                    break
+                data_rows.append(_parse_row(data_line))
+                i += 1
+            if headers:
+                tables.append({
+                    "heading": current_heading,
+                    "headers": headers,
+                    "rows": data_rows,
+                })
+            continue
+
+        i += 1
+
+    return tables
 
 
 def export_to_csv(content: str) -> bytes:
-    """Return CSV bytes with one row per markdown section.
+    """Return CSV bytes built from every GFM pipe table in *content*.
 
-    Header row is ``Section Title,Markdown Content``; each subsequent row holds
-    the raw markdown text for one section.
+    - **One table**: flat CSV — header row = table column names, one data row per record.
+    - **Multiple tables**: all tables in one file, each preceded by a ``# Section:``
+      comment row and separated by a blank row.
+    - **No tables** (prose-only output): falls back to section-dump (``Section Title``,
+      ``Markdown Content``) so the file is never empty.
     """
-    rows = split_markdown_sections(content)
-    if not rows:
-        rows = [{"Section Title": "(Empty)", "Markdown Content": ""}]
+    tables = parse_all_markdown_tables(content)
     buf = io.StringIO()
     writer = csv.writer(buf)
-    writer.writerow(["Section Title", "Markdown Content"])
-    for row in rows:
-        writer.writerow([row.get("Section Title", ""), row.get("Markdown Content", "")])
+
+    if not tables:
+        # Fallback: section-based dump
+        rows = split_markdown_sections(content)
+        if not rows:
+            rows = [{"Section Title": "(Empty)", "Markdown Content": ""}]
+        writer.writerow(["Section Title", "Markdown Content"])
+        for row in rows:
+            writer.writerow([row.get("Section Title", ""), row.get("Markdown Content", "")])
+        return buf.getvalue().encode("utf-8")
+
+    for idx, tbl in enumerate(tables):
+        if idx > 0:
+            writer.writerow([])  # blank separator row
+        if len(tables) > 1:
+            writer.writerow([f"# Section: {tbl['heading']}"])
+        writer.writerow(tbl["headers"])
+        for row in tbl["rows"]:
+            # Pad/trim row to match header count
+            ncols = len(tbl["headers"])
+            padded = (row + [""] * ncols)[:ncols]
+            writer.writerow(padded)
+
     return buf.getvalue().encode("utf-8")
+
+
+def export_to_excel(content: str, agent_name: str) -> bytes:
+    """Build an .xlsx from the GFM pipe tables in *content*.
+
+    - **Tables found**: one worksheet per table, named after the section heading.
+      Row 1 = real column headers (Salesforce-blue); subsequent rows = data rows.
+    - **No tables**: falls back to section-dump on a single sheet.
+    """
+    tables = parse_all_markdown_tables(content)
+
+    if not tables:
+        rows = split_markdown_sections(content)
+        sheet = (agent_name or "export")[:31] or "Export"
+        if not rows:
+            rows = [{"Section Title": "(Empty)", "Markdown Content": ""}]
+        return export_workbook_bytes({sheet: rows})
+
+    wb = Workbook()
+    first = True
+    seen_names: dict[str, int] = {}
+
+    for tbl in tables:
+        # Build a unique, valid sheet name (max 31 chars)
+        raw_name = (tbl["heading"] or "Sheet")[:28].strip()
+        if not raw_name:
+            raw_name = "Sheet"
+        count = seen_names.get(raw_name, 0)
+        seen_names[raw_name] = count + 1
+        sheet_name = raw_name if count == 0 else f"{raw_name[:25]} ({count})"
+
+        if first:
+            ws = wb.active
+            ws.title = sheet_name
+            first = False
+        else:
+            ws = wb.create_sheet(title=sheet_name)
+
+        headers = tbl["headers"]
+        ncols = len(headers)
+
+        # Write + style header row
+        for col, h in enumerate(headers, start=1):
+            ws.cell(row=1, column=col, value=h)
+        _style_header_row(ws, ncols)
+
+        # Write data rows
+        for r, row_cells in enumerate(tbl["rows"], start=2):
+            padded = (row_cells + [""] * ncols)[:ncols]
+            for c, val in enumerate(padded, start=1):
+                cell = ws.cell(row=r, column=c, value=val)
+                cell.alignment = Alignment(wrap_text=True, vertical="top")
+
+        # Auto-size columns (capped at 60)
+        for c, h in enumerate(headers, start=1):
+            col_vals = [h] + [(tbl["rows"][r][c - 1] if c - 1 < len(tbl["rows"][r]) else "") for r in range(len(tbl["rows"]))]
+            max_len = max((len(str(v)) for v in col_vals), default=8)
+            ws.column_dimensions[get_column_letter(c)].width = min(60, max(12, max_len + 2))
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
 
 
 _PDF_CSS = f"""
@@ -218,7 +374,7 @@ def export_to_pdf(content: str, agent_name: str) -> bytes:
 
     html_body = md.markdown(
         content or "",
-        extensions=["tables", "fenced_code", "sane_lists", "toc", "nl2br"],
+        extensions=["tables", "fenced_code", "sane_lists", "toc"],
         output_format="html5",
     )
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
