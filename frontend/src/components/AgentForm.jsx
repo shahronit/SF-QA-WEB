@@ -9,6 +9,7 @@ import { useJira } from '../context/JiraContext'
 import JiraIssuePicker from './JiraIssuePicker'
 import { Stagger, StaggerItem } from './motion/Stagger'
 import Confetti from './motion/Confetti'
+import GeneratingScene from './motion/GeneratingScene'
 import { extractJiraKey } from '../utils/jiraDetect'
 import { useQaMode, QA_MODE_OPTIONS } from '../hooks/useQaMode'
 
@@ -282,7 +283,10 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
       setResult(accumulated)
     } finally {
       setLoading(false)
-      setResultStamp(Date.now())
+      // Note: do NOT bump resultStamp here. Keeping the key stable across
+      // streaming -> done prevents Framer Motion from unmounting and
+      // re-mounting the ReportPanel when the run completes (the visible
+      // "blink"). The stamp set at run start is enough for the entrance.
       if (accumulated && !errored && !accumulated.startsWith('**Error')) {
         saveResult(agentName, accumulated)
         setConfettiTrigger(t => t + 1)
@@ -625,18 +629,43 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
 
       <Confetti trigger={confettiTrigger} />
 
+      {/* "Boy on a laptop" 3D-styled waiting scene.
+          - When the user just clicked Generate and no tokens have arrived
+            yet (loading && !result), the big hero version takes the
+            place where the ReportPanel will eventually appear so the
+            user has something engaging to look at instead of a blank
+            wait.
+          - Once content starts streaming (loading && result), the big
+            scene fades out and a compact banner sits above the live
+            ReportPanel so the user still sees the "AI is still working"
+            cue while watching the streamed text. */}
       <AnimatePresence mode="wait">
-        {result && (
-          <motion.div
-            key={resultStamp || 'result'}
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
-          >
-            <ReportPanel content={result} agentName={agentName} sheetTitle={sheetTitle} stamp={resultStamp} />
-          </motion.div>
+        {loading && !result && (
+          <GeneratingScene key="hero-scene" size="lg" />
         )}
       </AnimatePresence>
+
+      {loading && result && (
+        <GeneratingScene
+          size="sm"
+          caption="Still streaming…"
+          subCaption="The AI is still writing your report."
+        />
+      )}
+
+      {/* No keyed AnimatePresence wrapper here: ReportPanel has its own
+          entrance animation. A keyed wrapper would re-mount the panel
+          on every state transition and cause a visible flicker while
+          tokens stream in. */}
+      {result && (
+        <ReportPanel
+          content={result}
+          agentName={agentName}
+          sheetTitle={sheetTitle}
+          stamp={resultStamp}
+          loading={loading}
+        />
+      )}
     </div>
   )
 }

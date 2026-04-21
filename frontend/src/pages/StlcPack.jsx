@@ -10,6 +10,7 @@ import { useJira } from '../context/JiraContext'
 import { useAgentResults } from '../context/AgentResultsContext'
 import { STLC_PACK_AGENTS, getAgent } from '../config/agentMeta'
 import { Stagger, StaggerItem } from '../components/motion/Stagger'
+import GeneratingScene from '../components/motion/GeneratingScene'
 import { extractJiraKey } from '../utils/jiraDetect'
 import { useQaMode, QA_MODE_OPTIONS } from '../hooks/useQaMode'
 
@@ -378,6 +379,29 @@ export default function StlcPack() {
           </button>
         </div>
       </motion.div>
+
+      {/* "Boy on a laptop" 3D-styled waiting scene — shown for the
+          whole STLC pack run. Big version appears as soon as the user
+          clicks Generate and stays until the first phase produces
+          output; after that it shrinks to a compact "still working"
+          banner so the per-phase progress remains the focus. */}
+      <AnimatePresence mode="wait">
+        {running && Object.keys(outputs).length === 0 && (
+          <div key="stlc-hero-scene" className="mb-6">
+            <GeneratingScene size="lg" caption="Running your STLC pack…" />
+          </div>
+        )}
+      </AnimatePresence>
+
+      {running && Object.keys(outputs).length > 0 && (
+        <div className="mb-4">
+          <GeneratingScene
+            size="sm"
+            caption="Still running…"
+            subCaption="The next phase will start as soon as the current one finishes."
+          />
+        </div>
+      )}
 
       <Stagger className="space-y-4 mb-6" staggerChildren={0.05}>
         {STLC_PACK_AGENTS.map((agent, i) => (

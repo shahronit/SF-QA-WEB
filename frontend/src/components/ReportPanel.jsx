@@ -73,7 +73,7 @@ function Typewriter({ text, enabled = true, max = 600, duration = 600 }) {
   return <ReactMarkdown remarkPlugins={[remarkGfm]}>{shown || text}</ReactMarkdown>
 }
 
-export default function ReportPanel({ content, agentName, sheetTitle, stamp }) {
+export default function ReportPanel({ content, agentName, sheetTitle, stamp, loading = false }) {
   const [tab, setTab] = useState('formatted')
   const meta = getAgent(agentName)
   const { available: insightsAvailable, visual } = useInsightAvailable(agentName, content)
@@ -154,7 +154,7 @@ export default function ReportPanel({ content, agentName, sheetTitle, stamp }) {
           >
             {tab === t.id && (
               <motion.span
-                layoutId={`reportTab-${stamp || 'panel'}`}
+                layoutId="reportTab"
                 className="absolute inset-0 bg-toon-blue rounded-xl shadow-sm"
                 transition={{ type: 'spring', stiffness: 380, damping: 30 }}
               />
@@ -165,53 +165,79 @@ export default function ReportPanel({ content, agentName, sheetTitle, stamp }) {
       </div>
 
       <div className="bg-gray-50 rounded-2xl p-5 mb-4 overflow-auto" style={{ maxHeight: '70vh' }}>
-        <AnimatePresence mode="wait">
-          {tab === 'formatted' && (
-            <motion.div
-              key="formatted"
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -8 }}
-              transition={{ duration: 0.2 }}
-              className="markdown-body table-wrap"
-            >
-              <Typewriter text={content} />
-            </motion.div>
-          )}
-          {tab === 'insights' && insightsAvailable && (
-            <motion.div
-              key="insights"
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -8 }}
-              transition={{ duration: 0.2 }}
-            >
-              {visual === 'execution_bars' && <ExecutionBars content={content} />}
-              {visual === 'coverage_donut' && <CoverageDonut content={content} />}
-              {visual === 'technique_compare' && <TechniqueCompare content={content} />}
-              {visual === 'closure_kpi' && <ClosureKpiGrid content={content} />}
-              {visual === 'data_preview' && <DataPreview content={content} />}
-              {visual === 'sparkline' && (
-                <div className="flex flex-col items-center gap-3 py-6">
-                  <div className="text-xs uppercase tracking-wider font-bold text-gray-500">Content density</div>
-                  <Sparkline values={sparklineValues} width={420} height={120} />
-                </div>
-              )}
-            </motion.div>
-          )}
-          {tab === 'raw' && (
-            <motion.pre
-              key="raw"
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -8 }}
-              transition={{ duration: 0.2 }}
-              className="whitespace-pre-wrap text-sm font-mono text-gray-700"
-            >
-              {content}
-            </motion.pre>
-          )}
-        </AnimatePresence>
+        {/* While streaming we render plain (no AnimatePresence / no
+            Typewriter) so each new token only appends — there is no
+            unmount, no re-typing animation, and therefore no flicker.
+            Once the stream finishes, we keep the same plain renderer
+            for the formatted view to avoid a final remount-blink; the
+            user just sees the content settle. Tab switches still
+            animate via the outer state change. */}
+        {loading ? (
+          <div className="markdown-body table-wrap">
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+            <div className="mt-3 inline-flex items-center gap-2 text-xs text-gray-500">
+              <span className="inline-flex items-center gap-1">
+                {[0, 1, 2].map(i => (
+                  <motion.span
+                    key={i}
+                    className="inline-block w-1.5 h-1.5 rounded-full bg-toon-blue"
+                    animate={{ y: [0, -4, 0], opacity: [0.6, 1, 0.6] }}
+                    transition={{ duration: 0.7, repeat: Infinity, delay: i * 0.12, ease: 'easeInOut' }}
+                  />
+                ))}
+              </span>
+              <span>Streaming…</span>
+            </div>
+          </div>
+        ) : (
+          <AnimatePresence mode="wait">
+            {tab === 'formatted' && (
+              <motion.div
+                key="formatted"
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -8 }}
+                transition={{ duration: 0.2 }}
+                className="markdown-body table-wrap"
+              >
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+              </motion.div>
+            )}
+            {tab === 'insights' && insightsAvailable && (
+              <motion.div
+                key="insights"
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -8 }}
+                transition={{ duration: 0.2 }}
+              >
+                {visual === 'execution_bars' && <ExecutionBars content={content} />}
+                {visual === 'coverage_donut' && <CoverageDonut content={content} />}
+                {visual === 'technique_compare' && <TechniqueCompare content={content} />}
+                {visual === 'closure_kpi' && <ClosureKpiGrid content={content} />}
+                {visual === 'data_preview' && <DataPreview content={content} />}
+                {visual === 'sparkline' && (
+                  <div className="flex flex-col items-center gap-3 py-6">
+                    <div className="text-xs uppercase tracking-wider font-bold text-gray-500">Content density</div>
+                    <Sparkline values={sparklineValues} width={420} height={120} />
+                  </div>
+                )}
+              </motion.div>
+            )}
+            {tab === 'raw' && (
+              <motion.pre
+                key="raw"
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -8 }}
+                transition={{ duration: 0.2 }}
+                className="whitespace-pre-wrap text-sm font-mono text-gray-700"
+              >
+                {content}
+              </motion.pre>
+            )}
+          </AnimatePresence>
+        )}
       </div>
 
       <div className="flex flex-wrap gap-2">

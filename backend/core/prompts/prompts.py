@@ -33,6 +33,8 @@ When a field is blank:
 3. **Never** refuse to produce the artefact because a non-essential input is blank.
 4. Tag any inferred / defaulted value once with `(inferred)` so reviewers can spot it. Do not pepper every cell with the tag — one mention per inferred field is enough.
 5. Per-agent defaults are listed inside each prompt under **"Defaults when blank"** when applicable; honour those exactly when the corresponding INPUT field is empty.
+
+**Tabular-data rule (mandatory, global):** Whenever a section's content is tabular (rows of structured records, comparisons, RACI, risk lists, defect lists, traceability, coverage matrices, environment / field-value pairs, etc.), render it as **exactly one Markdown table**. Never duplicate the same data in two representations — no table followed by a bulleted list of the same rows, no table followed by a fenced raw CSV / JSON / SQL dump of the same rows, and no inline CSV / SQL / JSON as plain prose under a table. If a section is genuinely a code artefact (Apex class, SOQL/SQL statements, shell script), render it as a single fenced code block instead — but again, do not also dump a table of the same data above it.
 """
 
 # Shared rules (referenced in prompts): scope + output shape
@@ -291,25 +293,28 @@ On the **first generated bug** of the response, tag each atom in parentheses, e.
 
 ## Output sections (Markdown — clean human-readable view)
 
-```
-1. Bug ID — placeholder (e.g. `<PROJECT>-XXXX`) if unknown
-2. Summary — exactly one line per template above
-3. Environment — sandbox vs production, org URL, browser/device, build/version
-4. Priority — pick from the Astound Priority ladder; cite the row
-5. Severity — pick from the Astound Severity ladder; cite the row
-6. Workaround — Yes/No + one-line description (per ladder)
-7. Affects main business flow — Yes (directly) / Yes (indirectly) / No (per ladder)
-8. Steps to Reproduce — numbered, atomic, one user action per line; no HTML
-9. Actual Results — numbered, mapped 1:1 to the steps where the failure was observed
-10. Expected Results — numbered, sourced from RQ/UX/UI/FSD when available; cite the source line
-11. Additional Information — optional (network errors, console output, retries, repro rate)
-12. Screenshot Placeholders — `[ATTACH actual]`, `[ATTACH expected/design]` as needed
-13. Salesforce Debug Log hint — generic unless INPUT specifies a class/trigger
-14. Root Cause Hypothesis — labeled hypothesis; never invent causes not hinted in INPUT
-15. Suggested Fix — optional, only if INPUT/linked output supports it
-16. Possibly related — list keys/titles, or `None known`
-17. QA Team notification — `Inform QA Team: <placeholder channel/owner>`
-```
+Render the bug report in two parts: a **Bug Metadata table** for the single-value fields, then numbered lists for the multi-step sections. Do **not** also emit the same metadata as a bulleted list.
+
+**(a) Bug Metadata** — a single Markdown table:
+
+| Field | Value |
+|-------|-------|
+| Bug ID | placeholder (e.g. `<PROJECT>-XXXX`) if unknown |
+| Summary | exactly one line per template above |
+| Environment | sandbox vs production, org URL, browser/device, build/version |
+| Priority | pick from the Astound Priority ladder; cite the row |
+| Severity | pick from the Astound Severity ladder; cite the row |
+| Workaround | Yes/No + one-line description (per ladder) |
+| Affects main business flow | Yes (directly) / Yes (indirectly) / No (per ladder) |
+| Additional Information | optional (network errors, console output, retries, repro rate) |
+| Screenshot Placeholders | `[ATTACH actual]`, `[ATTACH expected/design]` as needed |
+| Salesforce Debug Log hint | generic unless INPUT specifies a class/trigger (drop in general mode) |
+| Root Cause Hypothesis | labeled hypothesis; never invent causes not hinted in INPUT |
+| Suggested Fix | optional, only if INPUT/linked output supports it |
+| Possibly related | list keys/titles, or `None known` |
+| QA Team notification | `Inform QA Team: <placeholder channel/owner>` |
+
+**(b) Steps to Reproduce / Actual Results / Expected Results** — three separate numbered lists (these are sequential events, not tabular). Each item is atomic, one user action / observation / expectation per line, no HTML. Actual and Expected map 1:1 to the steps where applicable.
 
 ---
 
@@ -620,15 +625,17 @@ Provide the final recommended values:
 
 ## STEP 7 — Risks & Assumptions (Astound)
 
-**Risks** (flag every risk that applies; reuse the buffers in STEP 2):
-- Browsers / devices installation or upgrade required.
-- Additional configurations needed before testing (data, feature flags, sandbox refresh).
-- DEV / FE team availability for clarifications and defect triage.
-- RQs (UX / UI / FSD) incomplete or in flux.
+Render risks and assumptions as **two single Markdown tables** (no bulleted recap underneath).
 
-**Assumptions** (every assumption must be explicitly labeled `Assumption (not in input):`):
-- List one assumption per line, labeled.
-- If the user did not provide an answer for any clarification question in STEP 1, restate the assumed default here.
+**Risks table** — flag every risk that applies; reuse the buffers in STEP 2. Cover at least: browsers / devices installation or upgrade required; additional configurations needed before testing (data, feature flags, sandbox refresh); DEV / FE team availability for clarifications and defect triage; RQs (UX / UI / FSD) incomplete or in flux. Add scope-specific risks where evident.
+
+| # | Risk | Likelihood (L/M/H) | Impact (L/M/H) | Mitigation | Owner |
+|---|------|-------------------|----------------|-----------|-------|
+
+**Assumptions table** — every assumption must be explicitly labeled `Assumption (not in input)` in the Assumption column. If the user did not provide an answer for any clarification question in STEP 1, restate the assumed default here.
+
+| # | Assumption | Source / STEP 1 question | Validated by |
+|---|-----------|--------------------------|--------------|
 
 ---
 
@@ -721,18 +728,25 @@ Generate a **complete Test Strategy Document** in Markdown with these sections:
 - Executive summary of what this strategy covers and why
 
 ## 3. Scope
-- **In Scope:** features, modules, objects from INPUT
-- **Out of Scope:** explicitly state what is excluded
+Render as a single Markdown table; do not also output a bulleted list of the same items.
+
+| Item | In Scope (Yes/No) | Notes |
+|------|-------------------|-------|
+
+Populate one row per feature, module, or object derived from INPUT.
 
 ## 4. Test Objectives
-- Numbered list tied to INPUT objectives
+- Numbered list tied to INPUT objectives (narrative — keep as a list, not a table).
 
 ## 5. Test Levels
-For each applicable level, describe what will be tested:
-- **Unit Testing** — Apex classes, triggers, LWC components
-- **Integration Testing** — API integrations, data flows, middleware
-- **System Testing** — end-to-end business processes
-- **UAT** — business user validation scenarios
+Render as a single Markdown table:
+
+| Level | What will be tested | In scope? (Yes/No/N-A) |
+|-------|---------------------|------------------------|
+| Unit Testing | Apex classes, triggers, LWC components (Salesforce mode) / unit tests of services & components (general mode) |  |
+| Integration Testing | API integrations, data flows, middleware |  |
+| System Testing | End-to-end business processes |  |
+| UAT | Business user validation scenarios |  |
 
 ## 6. Test Types
 Table with columns: Test Type | Description | Applicable Areas | Priority
@@ -810,11 +824,16 @@ Table of features/modules to be tested with version info:
 | Item ID | Feature / Module | Version | Description |
 |---------|-----------------|---------|-------------|
 
-## 5. Features to be Tested
-- Detailed numbered list derived from INPUT scope
+## 5. Features to be Tested / NOT to be Tested
+Render as a single Markdown table; do not also emit two bulleted lists of the same items.
+
+| # | Feature / Module | In Scope? (Yes/No) | Reason (required when "No") |
+|---|------------------|--------------------|------------------------------|
+
+Populate one row per feature derived from INPUT scope. Keep this section authoritative — sections 6 below references it.
 
 ## 6. Features NOT to be Tested
-- Explicitly state exclusions with reasons
+Reference the "No" rows in section 5 — do not duplicate them as a separate list.
 
 ## 7. Approach & Methodology
 - Testing methodology (Agile/Waterfall/Hybrid)
@@ -883,15 +902,12 @@ Generate a **complete Automation Plan Document** in Markdown with these sections
 - Purpose, goals, expected ROI of automation
 
 ## 2. Automation Scope
+Render as a single Markdown table covering both in-scope and out-of-scope items; do not also emit a bulleted list of out-of-scope items.
 
-### 2.1 In-Scope for Automation
-Table of test cases/areas selected for automation with justification:
+| Priority | Test Area | Automate? (Yes/No) | Reason / Justification | Complexity |
+|----------|-----------|--------------------|------------------------|------------|
 
-| Priority | Test Area | Reason for Automation | Complexity |
-|----------|-----------|----------------------|------------|
-
-### 2.2 Out-of-Scope for Automation
-- Items remaining manual with justification (exploratory, one-time, UI-heavy with frequent changes)
+For "No" rows, justify why the item stays manual (exploratory, one-time, UI-heavy with frequent changes, etc.).
 
 ## 3. Tool Selection & Justification
 
@@ -1132,30 +1148,35 @@ For each entity / object listed, show:
 ## 2. Generated Data
 Generate exactly `record_count` records per object in the requested **`format`**. Apply `field_constraints` strictly.
 
-### Format = CSV
-Output one fenced code block per object with `csv` language tag:
-```csv
-Name,Industry,AnnualRevenue,...
-Acme Corp,Banking,2500000,...
-```
+**Output is format-aware — emit EXACTLY ONE representation per object. Never emit the same record set twice (no table + raw dump duplication).**
 
-### Format = SOQL_INSERT *(Salesforce mode only)*
-Use Salesforce Bulk API friendly SOQL `INSERT` statements OR `Database.insert` Apex inserts in a fenced `apex` block.
+Pick the representation per `format`:
 
-### Format = SQL_INSERT *(General mode only)*
-Output portable SQL `INSERT INTO <table> (col1, col2, ...) VALUES (...);` statements in a fenced `sql` block, one block per table. Use a plain ANSI dialect unless the user specifies otherwise.
+- **CSV** → **Markdown table only**. Do **not** also output a fenced ```csv block. The table IS the data.
+  ```
+  ### <ObjectName>
 
-### Format = JSON
-Output a fenced `json` block with `{{ "Account": [ {{...}} ], "Contact": [ {{...}} ] }}` (Salesforce mode) or `{{ "users": [ {{...}} ], "orders": [ {{...}} ] }}` (general mode, using the user-supplied entity names).
+  | Col1 | Col2 | Col3 | … |
+  |------|------|------|---|
+  | val  | val  | val  | … |
+  ```
+  Rules: one row per generated record (exactly `record_count` data rows); header uses the same field / column names; escape any pipe characters inside cell values (`\\|`).
 
-### Format = APEX_TESTDATA *(Salesforce mode only)*
-Generate a complete `@isTest` Apex test data factory class:
-```apex
-@isTest
-public class TestDataFactory {{
-    public static List<Account> createAccounts(Integer n) {{ ... }}
-}}
-```
+- **JSON** → **Markdown table only**. Do **not** also output a fenced ```json block. Use the same table layout as CSV; cell values are the JSON-style values (strings unquoted in cells, but kept as their JSON-typed representation).
+
+- **SOQL_INSERT** *(Salesforce mode only)* → **fenced ```apex block only** (no preview table — the value of this format is the runnable Apex). Bulk API-friendly `Database.insert(...)` or `INSERT` Apex statements covering exactly `record_count` records per object. Precede the block with one short header line: `### <ObjectName>`.
+
+- **SQL_INSERT** *(General mode only)* → **fenced ```sql block only** (no preview table). Portable ANSI `INSERT INTO <table> (col1, col2, …) VALUES (…);` statements, one block per table, exactly `record_count` rows. Precede the block with one short header line: `### <table>`.
+
+- **APEX_TESTDATA** *(Salesforce mode only)* → **fenced ```apex block only** (no preview table — this is a class definition, not a row set). Complete `@isTest` factory class:
+  ```apex
+  @isTest
+  public class TestDataFactory {{
+      public static List<Account> createAccounts(Integer n) {{ ... }}
+  }}
+  ```
+
+**Anti-duplication rule (must follow):** Never emit the same record set in two different representations. Pick the table (CSV / JSON) **or** the code block (SOQL_INSERT / SQL_INSERT / APEX_TESTDATA), never both. Never inline CSV / SQL / JSON as plain prose underneath a table.
 
 ## 3. Relationship Wiring
 If multiple related objects are requested (Account + Contact + Opportunity etc.), wire them via deterministic external IDs or sequence numbers and explain the mapping in a small table.
@@ -1252,8 +1273,10 @@ Generate the document in Markdown:
 - Purpose, business goals, dates (placeholders if unspecified)
 
 ## 2. Scope
-- **In Scope** (numbered, business-language only — no technical jargon)
-- **Out of Scope**
+Render as a single Markdown table; do not also emit two bulleted lists.
+
+| # | Item (business language only — no technical jargon) | In Scope? (Yes/No) | Reason (required when "No") |
+|---|------------------------------------------------------|--------------------|------------------------------|
 
 ## 3. User Personas & Test Owners
 
@@ -1276,9 +1299,25 @@ Checklist `[ ]` of conditions to declare UAT successful (e.g. 100% Critical scen
 - One row per scenario.
 
 ## 7. Defect Triage Process
-- Severity definitions (Critical / High / Medium / Low) for UAT
-- SLA per severity
-- Escalation path
+Render as two single Markdown tables; do not duplicate the same rows as bullet lists.
+
+**(a) Severity definitions & SLA** (single table covering severity, definition, and SLA per severity):
+
+| Severity | Definition (UAT impact) | Response SLA | Resolution SLA |
+|----------|-------------------------|--------------|----------------|
+| Critical | | | |
+| High     | | | |
+| Medium   | | | |
+| Low      | | | |
+
+**(b) Escalation / RACI path:**
+
+| Activity | Responsible | Accountable | Consulted | Informed |
+|----------|-------------|-------------|-----------|----------|
+| Defect intake | | | | |
+| Triage decision | | | | |
+| Fix & verify | | | | |
+| Sign-off | | | | |
 
 ## 8. UAT Schedule
 
@@ -1429,24 +1468,28 @@ Single paragraph that restates the issue, the user impact, and when/where it occ
 Reconstruct from `recent_changes` and `symptoms`. Mark anything not provided as "Not specified in input".
 
 ## 4. 5-Whys Analysis
-Walk down five levels of "Why?". Each level must build on the previous answer; do **not** invent root causes the input does not support — instead end early and explain the missing data.
+Render as a single Markdown table; do not duplicate as a numbered list. Each "Why" must build on the previous answer. Do **not** invent root causes the input does not support — end early (mark remaining rows `Stopped — insufficient evidence`) and explain the missing data in the Notes column.
 
-1. **Why did the issue occur?** ...
-2. **Why did that happen?** ...
-3. **Why ...?** ...
-4. **Why ...?** ...
-5. **Why ...? (Root Cause)** ...
+| # | Why? (question) | Answer (built from prior row) | Evidence / Source |
+|---|-----------------|-------------------------------|-------------------|
+| 1 | Why did the issue occur? | | |
+| 2 | Why did that happen? | | |
+| 3 | Why ...? | | |
+| 4 | Why ...? | | |
+| 5 | Why ...? (Root Cause) | | |
 
 ## 5. Fishbone (Ishikawa) Categorization
-| Category | Contributing Factors |
-|----------|---------------------|
-| People (training, ownership) | |
-| Process (release, review, test gates) | |
-| Tools (CI/CD, deployment, monitoring) | |
-| Data (test data, prod data, migrations) | |
-| Configuration (profiles, sharing, validation rules) | |
-| Code (Apex, LWC, Flow logic) | |
-| Environment (sandbox refresh, integration health) | |
+Single Markdown table — one row per category; do not also emit a bulleted recap.
+
+| Category | Contributing Factors | Evidence | Suggested Corrective Action |
+|----------|----------------------|----------|------------------------------|
+| People (training, ownership) | | | |
+| Process (release, review, test gates) | | | |
+| Tools (CI/CD, deployment, monitoring) | | | |
+| Data (test data, prod data, migrations) | | | |
+| Configuration (profiles, sharing, validation rules) | | | |
+| Code (Apex, LWC, Flow logic) | | | |
+| Environment (sandbox refresh, integration health) | | | |
 
 ## 6. Root Cause(s)
 Bullet list of the **confirmed** root cause(s). If only a hypothesis is supported by the data, label it **(Hypothesis — needs verification)** and list how to verify.
@@ -1507,13 +1550,23 @@ Generate the Test Closure Report in Markdown:
 3–5 lines describing the project, scope of testing, overall outcome and a final go-live recommendation (Go / Conditional Go / No-Go) with rationale.
 
 ## 3. Scope of Testing
-- **In Scope** (modules, objects, integrations actually tested)
-- **Out of Scope** (and reason)
+Render as a single Markdown table; do not also emit two bulleted lists.
+
+| # | Item (module / object / integration) | In Scope? (Yes/No) | Reason (required when "No") |
+|---|---------------------------------------|--------------------|------------------------------|
 
 ## 4. Test Approach Recap
-- Test levels executed (Unit, SIT, System, UAT, Regression, Performance, Security)
-- Tools used
-- Environments used
+Render as a single Markdown table — one row per test level executed; do not also emit a bulleted list.
+
+| Test Level | Executed? (Yes/No) | Tools Used | Environment(s) | Notes |
+|------------|--------------------|------------|----------------|-------|
+| Unit | | | | |
+| SIT | | | | |
+| System | | | | |
+| UAT | | | | |
+| Regression | | | | |
+| Performance | | | | |
+| Security | | | | |
 
 ## 5. Final Metrics
 
