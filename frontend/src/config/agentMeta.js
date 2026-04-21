@@ -104,14 +104,14 @@ export const AGENT_META = {
     visual: 'coverage_donut',
   },
   copado_script: {
-    label: 'Automation Scripts (Copado)',
+    label: 'Automation Scripts',
     phaseId: 'P3',
     icon: '⚡',
     gradient: 'from-amber-500 to-orange-600',
     accentText: 'text-amber-600',
     hints: [
-      'Output is ready-to-run .robot files — drop them into Copado Robotic Testing.',
-      'Chain a Test Cases result so the script mirrors your validated scenarios.',
+      'Pick your framework first — Copado CRT, Playwright, Cypress, Selenium, or Robot Framework.',
+      'Chain a Test Cases result so the scripts mirror your validated scenarios exactly.',
     ],
     visual: 'sparkline',
   },

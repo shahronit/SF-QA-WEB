@@ -40,7 +40,7 @@ const phaseSections = [
       { path: '/testcases', icon: '🧪', title: 'Test Case Development', desc: 'Positive, negative, bulk & edge cases', gradient: 'from-toon-mint to-emerald-400', shadow: 'shadow-toon-mint' },
       { path: '/test-data', icon: '🧬', title: 'Test Data Preparation', desc: 'CSV / SOQL / JSON / Apex factories', gradient: 'from-emerald-500 to-teal-500', shadow: 'shadow-toon-mint' },
       { path: '/rtm', icon: '🧭', title: 'Requirements Traceability Matrix', desc: 'Requirements ↔ test ↔ defect coverage', gradient: 'from-sky-500 to-cyan-500', shadow: 'shadow-toon' },
-      { path: '/copado-scripts', icon: '⚡', title: 'Automation Scripts (Copado)', desc: 'Robot Framework .robot files', gradient: 'from-amber-500 to-orange-600', shadow: 'shadow-toon-yellow' },
+      { path: '/copado-scripts', icon: '⚡', title: 'Automation Scripts', desc: 'Ready-to-run scripts for Playwright, Cypress, Robot Framework & Copado', gradient: 'from-amber-500 to-orange-600', shadow: 'shadow-toon-yellow' },
     ],
   },
   {

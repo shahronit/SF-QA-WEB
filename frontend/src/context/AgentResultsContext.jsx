@@ -12,7 +12,7 @@ const AGENT_LABELS = {
   test_strategy: 'Test Strategy',
   test_plan: 'Test Plan',
   automation_plan: 'Automation Plan',
-  copado_script: 'Copado Scripts',
+  copado_script: 'Automation Scripts',
   test_data: 'Test Data',
   rtm: 'Requirements Traceability Matrix',
   uat_plan: 'UAT Plan',
