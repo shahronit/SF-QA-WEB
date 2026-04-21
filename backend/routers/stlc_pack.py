@@ -54,6 +54,7 @@ class StlcRunRequest(BaseModel):
     user_story: str | None = None
     jira_key_or_url: str | None = None
     project_slug: str | None = None
+    qa_mode: str | None = "salesforce"  # "salesforce" or "general"
 
 
 # ---------------------------------------------------------------------------
@@ -128,12 +129,18 @@ def _build_seed(username: str, body: StlcRunRequest) -> tuple[str, str | None]:
     return "\n\n".join(parts), jira_key
 
 
-def _agent_input(agent: str, seed_text: str, prior_output: str | None) -> dict[str, Any]:
+def _agent_input(
+    agent: str,
+    seed_text: str,
+    prior_output: str | None,
+    qa_mode: str = "salesforce",
+) -> dict[str, Any]:
     """Map the seed text to the primary input field expected by each agent.
 
     The keys here mirror those declared on the matching pages under
     ``frontend/src/pages`` so the prompts receive the same JSON shape they
-    would when invoked manually.
+    would when invoked manually. ``qa_mode`` is propagated to every phase so
+    the whole pack runs in a single mode.
     """
     base: dict[str, Any] = {}
     if agent == "requirement":
@@ -167,6 +174,7 @@ def _agent_input(agent: str, seed_text: str, prior_output: str | None) -> dict[s
             "open_defects": "(use linked Execution Report)",
             "lessons_learned": "Generated end-to-end by the one-click STLC pack.",
         }
+    base["qa_mode"] = qa_mode
     if prior_output:
         base["linked_output"] = prior_output
     return base
@@ -237,6 +245,7 @@ async def run_stlc_pack(body: StlcRunRequest, user=Depends(get_current_user)):
     pack_id = uuid.uuid4().hex
     orch = get_orchestrator()
     orch.set_project(body.project_slug)
+    qa_mode = "general" if str(body.qa_mode or "").strip().lower() == "general" else "salesforce"
 
     async def event_generator() -> Iterable[dict[str, str]]:
         outputs: dict[str, str] = {}
@@ -261,7 +270,7 @@ async def run_stlc_pack(body: StlcRunRequest, user=Depends(get_current_user)):
                 "label": step["label"],
                 "phase": step["phase"],
             })
-            user_input = _agent_input(agent, seed_text, prior_output)
+            user_input = _agent_input(agent, seed_text, prior_output, qa_mode=qa_mode)
             collected: list[str] = []
             err_msg: str | None = None
             q: asyncio.Queue[tuple[str, Any]] = asyncio.Queue()

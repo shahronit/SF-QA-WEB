@@ -274,7 +274,17 @@ class SFQAOrchestrator:
 
     def _build_messages(self, agent_name: str, user_input: dict[str, Any]) -> tuple[str, str]:
         """Build (system_prompt, user_block) for a given agent call."""
-        query = " ".join(str(v) for v in user_input.values() if str(v).strip())
+        # Normalise qa_mode to one of {"salesforce", "general"} (default salesforce
+        # for back-compat with callers that pre-date the toggle).
+        qa_mode_raw = str(user_input.get("qa_mode") or "salesforce").strip().lower()
+        qa_mode = "general" if qa_mode_raw == "general" else "salesforce"
+        # Ensure the value the prompt sees is the normalised one.
+        normalised_input = {**user_input, "qa_mode": qa_mode}
+
+        query = " ".join(
+            str(v) for k, v in normalised_input.items()
+            if k != "qa_mode" and str(v).strip()
+        )
 
         if self._active_project:
             context = self.retriever.get_combined_context(
@@ -299,11 +309,26 @@ class SFQAOrchestrator:
                 "to what the user already stated. Output Markdown only — no HTML tags."
             )
 
+        if qa_mode == "salesforce":
+            scope_instructions += (
+                " Salesforce QA mode is active — apply all Salesforce conventions "
+                "(Apex, SOQL, governor limits, profiles, sharing rules, Experience / "
+                "Commerce Cloud, sandbox vs production, `__c` suffix, etc.)."
+            )
+        else:
+            scope_instructions += (
+                " General QA mode is active — DO NOT use any Salesforce-specific "
+                "terminology, objects, or libraries. Use product-agnostic language "
+                "(entities, roles, business rules, REST/GraphQL APIs, test vs "
+                "production environments). Step 1 of any test case is "
+                "\"Navigate to the application under test.\""
+            )
+
         system_prompt = PROMPTS[agent_name]
         if self._active_project:
             system_prompt = system_prompt.replace(_SCOPE_ONLY, _PROJECT_SCOPE)
 
-        compact_input = json.dumps(user_input, ensure_ascii=False, separators=(",", ":"))
+        compact_input = json.dumps(normalised_input, ensure_ascii=False, separators=(",", ":"))
         user_block = f"{context}\n\nINPUT:\n{compact_input}\n\n{scope_instructions}"
         return system_prompt, user_block
 

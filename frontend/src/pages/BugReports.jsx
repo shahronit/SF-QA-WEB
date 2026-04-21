@@ -11,10 +11,20 @@ export default function BugReports() {
 
   const fullFields = [
     { key: 'bug_description', label: 'What went wrong?', type: 'textarea', rows: 4 },
-    { key: 'steps', label: 'Steps to reproduce', type: 'textarea', rows: 4 },
-    { key: 'expected', label: 'Expected result', type: 'textarea', rows: 2 },
-    { key: 'actual', label: 'Actual result', type: 'textarea', rows: 2 },
-    { key: 'environment', label: 'Environment', type: 'select', options: ['Full Sandbox', 'Partial Sandbox', 'Developer Sandbox', 'UAT', 'Production'] },
+    { key: 'steps', label: 'Steps to reproduce', hint: 'leave blank — AI drafts placeholder steps', type: 'textarea', rows: 4, required: false, advanced: true },
+    { key: 'expected', label: 'Expected result', hint: 'leave blank — AI infers from description', type: 'textarea', rows: 2, required: false, advanced: true },
+    { key: 'actual', label: 'Actual result', hint: 'leave blank — AI infers from description', type: 'textarea', rows: 2, required: false, advanced: true },
+    {
+      key: 'environment',
+      label: 'Environment',
+      type: 'select',
+      optionsByMode: {
+        salesforce: ['Full Sandbox', 'Partial Sandbox', 'Developer Sandbox', 'UAT', 'Production'],
+        general: ['Dev', 'Staging', 'UAT', 'Production'],
+      },
+      required: false,
+      advanced: true,
+    },
   ]
 
   return (

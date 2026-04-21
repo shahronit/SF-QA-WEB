@@ -11,6 +11,7 @@ import { useAgentResults } from '../context/AgentResultsContext'
 import { STLC_PACK_AGENTS, getAgent } from '../config/agentMeta'
 import { Stagger, StaggerItem } from '../components/motion/Stagger'
 import { extractJiraKey } from '../utils/jiraDetect'
+import { useQaMode, QA_MODE_OPTIONS } from '../hooks/useQaMode'
 
 const PHASE_LABELS = {
   requirement: { phase: 'Phase 1', short: 'Requirements Analysis' },
@@ -130,6 +131,7 @@ export default function StlcPack() {
   const [expanded, setExpanded] = useState({})
   const [combined, setCombined] = useState('')
   const [packId, setPackId] = useState('')
+  const [qaMode, setQaMode] = useQaMode()
   const abortRef = useRef(null)
 
   useEffect(() => {
@@ -176,6 +178,7 @@ export default function StlcPack() {
           user_story: userStory || null,
           jira_key_or_url: jiraInput || null,
           project_slug: selectedProject || null,
+          qa_mode: qaMode,
         }),
       })
       if (!resp.ok || !resp.body) {
@@ -256,6 +259,51 @@ export default function StlcPack() {
               Jira disconnected — paste user story instead
             </span>
           )}
+        </div>
+
+        <div className="mb-4 flex flex-col sm:flex-row sm:items-center gap-3 bg-gray-50 rounded-2xl p-3 border border-gray-200">
+          <div className="flex items-center gap-2">
+            <span className="w-9 h-9 rounded-xl bg-gradient-to-br from-toon-purple to-violet-500 flex items-center justify-center text-white text-sm shadow-toon">
+              🎚️
+            </span>
+            <div>
+              <div className="text-sm font-bold text-toon-navy">QA Mode</div>
+              <div className="text-xs text-gray-500">
+                {qaMode === 'salesforce'
+                  ? 'All five phases will use Salesforce conventions.'
+                  : 'All five phases will be product-agnostic (no Salesforce terms).'}
+              </div>
+            </div>
+          </div>
+          <div className="sm:ml-auto inline-flex bg-white rounded-2xl p-1 border border-gray-200 self-start sm:self-center">
+            {QA_MODE_OPTIONS.map(opt => {
+              const active = qaMode === opt.id
+              return (
+                <button
+                  key={opt.id}
+                  type="button"
+                  onClick={() => setQaMode(opt.id)}
+                  disabled={running}
+                  aria-pressed={active}
+                  className={`relative px-4 py-1.5 rounded-xl text-sm font-bold transition-colors ${
+                    active ? 'text-white' : 'text-gray-600 hover:text-toon-navy'
+                  } ${running ? 'opacity-60 cursor-not-allowed' : ''}`}
+                >
+                  {active && (
+                    <motion.span
+                      layoutId="stlc-pack-qa-mode"
+                      className="absolute inset-0 bg-toon-blue rounded-xl shadow-sm"
+                      transition={{ type: 'spring', stiffness: 380, damping: 30 }}
+                    />
+                  )}
+                  <span className="relative flex items-center gap-1.5">
+                    <span aria-hidden="true">{opt.icon}</span>
+                    {opt.label}
+                  </span>
+                </button>
+              )
+            })}
+          </div>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import api from '../api/client'
 import ReportPanel from './ReportPanel'
 import { useAgentResults } from '../context/AgentResultsContext'
@@ -8,6 +10,7 @@ import JiraIssuePicker from './JiraIssuePicker'
 import { Stagger, StaggerItem } from './motion/Stagger'
 import Confetti from './motion/Confetti'
 import { extractJiraKey } from '../utils/jiraDetect'
+import { useQaMode, QA_MODE_OPTIONS } from '../hooks/useQaMode'
 
 function jiraIssueToText(issue) {
   if (!issue) return ''
@@ -39,6 +42,94 @@ function timeAgo(ts) {
   return `${Math.floor(diff / 3600)} hr ago`
 }
 
+// Resolve mode-aware field properties. A field can declare `labelByMode`,
+// `placeholderByMode`, `optionsByMode` (each a {salesforce, general} dict);
+// the resolver falls back to the plain `label` / `placeholder` / `options`
+// when no mode-specific override is provided.
+function resolveField(field, qaMode) {
+  return {
+    ...field,
+    label: field.labelByMode?.[qaMode] ?? field.label,
+    placeholder: field.placeholderByMode?.[qaMode] ?? field.placeholder,
+    options: field.optionsByMode?.[qaMode] ?? field.options,
+  }
+}
+
+const ADV_KEY = (agent) => `qa-studio:adv:${agent}`
+
+// Render a single field cell. Lives at module scope so the JSX is reused
+// verbatim by both the primary section and the Advanced (optional) section.
+function renderFieldBody(field, ctx) {
+  const { shakeStamp, values, handleChange, handleTextareaBlur, autoFetchedNotice } = ctx
+  const isRequired = field.required !== false && field.type !== 'select'
+  return (
+    <motion.div
+      key={shakeStamp || 'idle'}
+      animate={shakeStamp ? { x: [0, -6, 6, -4, 4, 0] } : { x: 0 }}
+      transition={{ duration: 0.45 }}
+    >
+      <label className="block text-sm font-bold text-toon-navy mb-1.5">
+        {field.label}
+        {isRequired && (
+          <motion.span
+            className="text-toon-coral ml-1"
+            animate={shakeStamp ? { scale: [1, 1.4, 1] } : { scale: 1 }}
+            transition={{ duration: 0.4 }}
+          >
+            *
+          </motion.span>
+        )}
+        {field.hint && (
+          <span className="font-normal text-gray-400 ml-2">{field.hint}</span>
+        )}
+      </label>
+      {field.type === 'textarea' ? (
+        <>
+          <textarea
+            className={`toon-textarea ${shakeStamp ? 'ring-2 ring-toon-coral/40' : ''}`}
+            rows={field.rows || 4}
+            placeholder={field.placeholder || ''}
+            value={values[field.key] || ''}
+            onChange={(e) => handleChange(field.key, e.target.value)}
+            onBlur={(e) => handleTextareaBlur(field.key, e.target.value)}
+          />
+          <AnimatePresence>
+            {autoFetchedNotice[field.key] && (
+              <motion.div
+                key={autoFetchedNotice[field.key].stamp}
+                initial={{ opacity: 0, y: -4 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -4 }}
+                transition={{ duration: 0.25 }}
+                className="mt-1.5 inline-flex items-center gap-1.5 text-xs font-bold text-toon-mint bg-emerald-50 border border-emerald-200 px-2.5 py-1 rounded-full"
+              >
+                <span>✨</span>
+                Auto-imported Jira {autoFetchedNotice[field.key].key}
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </>
+      ) : field.type === 'select' ? (
+        <select
+          className="toon-input"
+          value={values[field.key] || field.options?.[0] || ''}
+          onChange={(e) => handleChange(field.key, e.target.value)}
+        >
+          {field.options?.map(o => <option key={o} value={o}>{o}</option>)}
+        </select>
+      ) : (
+        <input
+          type={field.type || 'text'}
+          className={`toon-input ${shakeStamp ? 'ring-2 ring-toon-coral/40' : ''}`}
+          placeholder={field.placeholder || ''}
+          value={values[field.key] || ''}
+          onChange={(e) => handleChange(field.key, e.target.value)}
+        />
+      )}
+    </motion.div>
+  )
+}
+
 export default function AgentForm({ agentName, fields, sheetTitle, extraInput = {} }) {
   const [values, setValues] = useState({})
   const [result, setResult] = useState('')
@@ -50,6 +141,7 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
   const [showLinkedPreview, setShowLinkedPreview] = useState(false)
   const [shakeKeys, setShakeKeys] = useState({})
   const [confettiTrigger, setConfettiTrigger] = useState(0)
+  const [qaMode, setQaMode] = useQaMode()
 
   const { saveResult, getAvailableResults } = useAgentResults()
   const availableResults = getAvailableResults(agentName)
@@ -80,8 +172,26 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
 
   const handleChange = (key, val) => setValues(prev => ({ ...prev, [key]: val }))
 
-  const visibleFields = fields.filter(f => f.type !== 'hidden')
-  const requiredFields = fields.filter(f => f.required !== false && f.type !== 'hidden' && f.type !== 'select')
+  // Resolve per-mode field properties and drop fields that are mode-gated out.
+  const resolvedFields = fields
+    .filter(f => f.type !== 'hidden')
+    .filter(f => f.hideInMode !== qaMode)
+    .map(f => resolveField(f, qaMode))
+
+  // Selects are auto-treated as advanced unless a page explicitly opts out.
+  const isAdvancedField = (f) =>
+    f.advanced === true || (f.type === 'select' && f.advanced !== false)
+
+  const primaryFields = resolvedFields.filter(f => !isAdvancedField(f))
+  const advancedFields = resolvedFields.filter(isAdvancedField)
+  const requiredFields = primaryFields.filter(f => f.required !== false && f.type !== 'select')
+
+  const [advancedOpen, setAdvancedOpen] = useState(() => {
+    try { return localStorage.getItem(ADV_KEY(agentName)) === '1' } catch { return false }
+  })
+  useEffect(() => {
+    try { localStorage.setItem(ADV_KEY(agentName), advancedOpen ? '1' : '0') } catch { /* ignore */ }
+  }, [advancedOpen, agentName])
 
   const allRequiredFilled = requiredFields.every(f => values[f.key]?.trim?.())
   const canGenerate = allRequiredFilled && !loading
@@ -117,7 +227,7 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
         body: JSON.stringify({
-          user_input: mergedInput,
+          user_input: { ...mergedInput, qa_mode: qaMode },
           project_slug: selectedProject || null,
         }),
       })
@@ -234,8 +344,8 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
     const text = jiraIssueToText(issue)
     setValues(prev => {
       const next = { ...prev }
-      const textareaFields = visibleFields.filter(f => f.type === 'textarea')
-      const textFields = visibleFields.filter(f => f.type !== 'textarea' && f.type !== 'select')
+      const textareaFields = resolvedFields.filter(f => f.type === 'textarea')
+      const textFields = resolvedFields.filter(f => f.type !== 'textarea' && f.type !== 'select')
       const titleField = textFields.find(f =>
         /title|summary|name/i.test(f.key)
       )
@@ -257,12 +367,59 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
       }
       return next
     })
-  }, [visibleFields])
+  }, [resolvedFields])
 
   const activeProject = projects.find(p => p.slug === selectedProject)
 
   return (
     <div className="space-y-6">
+      {/* QA Mode toggle */}
+      <div className="toon-card !p-4">
+        <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+          <div className="flex items-center gap-3">
+            <span className="w-9 h-9 rounded-xl bg-gradient-to-br from-toon-purple to-violet-500 flex items-center justify-center text-white text-sm shadow-toon">
+              🎚️
+            </span>
+            <div>
+              <div className="text-sm font-bold text-toon-navy">QA Mode</div>
+              <div className="text-xs text-gray-500">
+                {qaMode === 'salesforce'
+                  ? 'Outputs use Salesforce conventions (Apex, SOQL, profiles, governor limits, …).'
+                  : 'Outputs are product-agnostic (entities, roles, REST/GraphQL, no Salesforce terms).'}
+              </div>
+            </div>
+          </div>
+          <div className="sm:ml-auto inline-flex bg-gray-100 rounded-2xl p-1 self-start sm:self-center">
+            {QA_MODE_OPTIONS.map(opt => {
+              const active = qaMode === opt.id
+              return (
+                <button
+                  key={opt.id}
+                  type="button"
+                  onClick={() => setQaMode(opt.id)}
+                  aria-pressed={active}
+                  className={`relative px-4 py-1.5 rounded-xl text-sm font-bold transition-colors ${
+                    active ? 'text-white' : 'text-gray-600 hover:text-toon-navy'
+                  }`}
+                >
+                  {active && (
+                    <motion.span
+                      layoutId={`qa-mode-${agentName}`}
+                      className="absolute inset-0 bg-toon-blue rounded-xl shadow-sm"
+                      transition={{ type: 'spring', stiffness: 380, damping: 30 }}
+                    />
+                  )}
+                  <span className="relative flex items-center gap-1.5">
+                    <span aria-hidden="true">{opt.icon}</span>
+                    {opt.label}
+                  </span>
+                </button>
+              )
+            })}
+          </div>
+        </div>
+      </div>
+
       {/* Project selector */}
       <div className="toon-card !p-4">
         <div className="flex items-center gap-3">
@@ -356,10 +513,13 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
                     exit={{ height: 0, opacity: 0 }}
                     className="overflow-hidden"
                   >
-                    <pre className="mt-2 p-3 bg-gray-50 rounded-xl text-xs text-gray-600 max-h-40 overflow-auto whitespace-pre-wrap border border-gray-200">
-                      {selectedLinked.content.slice(0, 2000)}
-                      {selectedLinked.content.length > 2000 && '\n\n... (truncated)'}
-                    </pre>
+                    <div className="mt-2 p-3 bg-gray-50 rounded-xl text-xs max-h-60 overflow-auto border border-gray-200 markdown-body table-wrap">
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                        {selectedLinked.content.length > 2000
+                          ? `${selectedLinked.content.slice(0, 2000)}\n\n_… (truncated)_`
+                          : selectedLinked.content}
+                      </ReactMarkdown>
+                    </div>
                   </motion.div>
                 )}
               </AnimatePresence>
@@ -368,78 +528,62 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
         </div>
       )}
 
-      {/* Form fields */}
+      {/* Primary form fields (required-by-default) */}
       <Stagger className="space-y-4" delayChildren={0.1} staggerChildren={0.05}>
-        {visibleFields.map((field) => {
-          const isRequired = field.required !== false && field.type !== 'select'
-          const shakeStamp = shakeKeys[field.key]
-          return (
-            <StaggerItem key={field.key}>
-              <motion.div
-                key={shakeStamp || 'idle'}
-                animate={shakeStamp ? { x: [0, -6, 6, -4, 4, 0] } : { x: 0 }}
-                transition={{ duration: 0.45 }}
-              >
-                <label className="block text-sm font-bold text-toon-navy mb-1.5">
-                  {field.label}
-                  {isRequired && (
-                    <motion.span
-                      className="text-toon-coral ml-1"
-                      animate={shakeStamp ? { scale: [1, 1.4, 1] } : { scale: 1 }}
-                      transition={{ duration: 0.4 }}
-                    >
-                      *
-                    </motion.span>
-                  )}
-                </label>
-                {field.type === 'textarea' ? (
-                  <>
-                    <textarea
-                      className={`toon-textarea ${shakeStamp ? 'ring-2 ring-toon-coral/40' : ''}`}
-                      rows={field.rows || 4}
-                      placeholder={field.placeholder || ''}
-                      value={values[field.key] || ''}
-                      onChange={(e) => handleChange(field.key, e.target.value)}
-                      onBlur={(e) => handleTextareaBlur(field.key, e.target.value)}
-                    />
-                    <AnimatePresence>
-                      {autoFetchedNotice[field.key] && (
-                        <motion.div
-                          key={autoFetchedNotice[field.key].stamp}
-                          initial={{ opacity: 0, y: -4 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          exit={{ opacity: 0, y: -4 }}
-                          transition={{ duration: 0.25 }}
-                          className="mt-1.5 inline-flex items-center gap-1.5 text-xs font-bold text-toon-mint bg-emerald-50 border border-emerald-200 px-2.5 py-1 rounded-full"
-                        >
-                          <span>✨</span>
-                          Auto-imported Jira {autoFetchedNotice[field.key].key}
-                        </motion.div>
-                      )}
-                    </AnimatePresence>
-                  </>
-                ) : field.type === 'select' ? (
-                  <select
-                    className="toon-input"
-                    value={values[field.key] || field.options?.[0] || ''}
-                    onChange={(e) => handleChange(field.key, e.target.value)}
-                  >
-                    {field.options?.map(o => <option key={o} value={o}>{o}</option>)}
-                  </select>
-                ) : (
-                  <input
-                    type={field.type || 'text'}
-                    className={`toon-input ${shakeStamp ? 'ring-2 ring-toon-coral/40' : ''}`}
-                    placeholder={field.placeholder || ''}
-                    value={values[field.key] || ''}
-                    onChange={(e) => handleChange(field.key, e.target.value)}
-                  />
-                )}
-              </motion.div>
-            </StaggerItem>
-          )
-        })}
+        {primaryFields.map((field) => (
+          <StaggerItem key={field.key}>
+            {renderFieldBody(field, {
+              shakeStamp: shakeKeys[field.key],
+              values,
+              handleChange,
+              handleTextareaBlur,
+              autoFetchedNotice,
+            })}
+          </StaggerItem>
+        ))}
       </Stagger>
+
+      {/* Advanced (optional) fields — collapsed by default, persists per-agent */}
+      {advancedFields.length > 0 && (
+        <details
+          className="toon-card !p-0 overflow-hidden"
+          open={advancedOpen}
+          onToggle={(e) => setAdvancedOpen(e.currentTarget.open)}
+        >
+          <summary className="cursor-pointer select-none px-4 py-3 flex items-center gap-3 hover:bg-gray-50 transition-colors list-none">
+            <span className="w-9 h-9 rounded-xl bg-gradient-to-br from-gray-300 to-gray-400 flex items-center justify-center text-white text-sm shadow-toon">
+              ⚙️
+            </span>
+            <div className="flex-1">
+              <div className="text-sm font-bold text-toon-navy">Advanced (optional)</div>
+              <div className="text-xs text-gray-500">
+                Fine-tune {advancedFields.length} {advancedFields.length === 1 ? 'field' : 'fields'} — leave blank to let AI infer.
+              </div>
+            </div>
+            <motion.span
+              className="text-toon-blue text-lg"
+              animate={{ rotate: advancedOpen ? 90 : 0 }}
+              transition={{ duration: 0.2 }}
+              aria-hidden="true"
+            >
+              ▸
+            </motion.span>
+          </summary>
+          <div className="px-4 pb-4 pt-1 space-y-4 border-t border-gray-100">
+            {advancedFields.map((field) => (
+              <div key={field.key}>
+                {renderFieldBody(field, {
+                  shakeStamp: shakeKeys[field.key],
+                  values,
+                  handleChange,
+                  handleTextareaBlur,
+                  autoFetchedNotice,
+                })}
+              </div>
+            ))}
+          </div>
+        </details>
+      )}
 
       {/* Action buttons */}
       <div className="flex gap-3">
