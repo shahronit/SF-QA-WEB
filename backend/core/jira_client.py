@@ -21,13 +21,26 @@ JIRA_HTTP_TIMEOUT = 20
 
 
 def _normalize_jira_url(jira_url: str) -> str:
-    """Strip whitespace + trailing slash and prepend ``https://`` when missing."""
-    url = (jira_url or "").strip().rstrip("/")
-    if not url:
+    """Reduce *jira_url* to ``scheme://host`` for the REST API root.
+
+    Accepts anything the user might paste — bare hostnames, full issue URLs
+    (``https://acme.atlassian.net/browse/ABC-123``), board/project paths
+    (``https://acme.atlassian.net/jira/software/projects/ABC/boards/1``), or
+    URLs with extra query/fragment components — and returns just
+    ``https://acme.atlassian.net``. The Jira Cloud REST API is always
+    rooted at the tenant host, never at a sub-path.
+    """
+    raw = (jira_url or "").strip()
+    if not raw:
         raise ConnectionError("Jira URL is empty.")
-    if not url.startswith(("http://", "https://")):
-        url = "https://" + url
-    return url
+    if not raw.startswith(("http://", "https://")):
+        raw = "https://" + raw
+    parsed = urllib.parse.urlsplit(raw)
+    host = parsed.netloc or parsed.path  # tolerate "host" with no scheme/path
+    if not host:
+        raise ConnectionError(f"Could not parse Jira URL: {jira_url!r}")
+    scheme = parsed.scheme or "https"
+    return f"{scheme}://{host}".rstrip("/")
 
 
 class JiraClient:
@@ -61,8 +74,39 @@ class JiraClient:
         req.add_header("User-Agent", "SF-QA-Studio/1.0")
         try:
             with urllib.request.urlopen(req, timeout=JIRA_HTTP_TIMEOUT) as resp:
-                raw = resp.read().decode()
-                return json.loads(raw) if raw.strip() else {}
+                raw = resp.read().decode("utf-8", errors="replace")
+                content_type = (resp.headers.get("Content-Type") or "").lower()
+                final_url = resp.geturl()
+                if not raw.strip():
+                    return {}
+                if "json" not in content_type:
+                    snippet = raw.strip().replace("\n", " ")[:200]
+                    log.warning(
+                        "Jira returned non-JSON for %s %s (Content-Type=%r, final_url=%r): %s",
+                        method, path, content_type, final_url, snippet,
+                    )
+                    hint = (
+                        "Atlassian sent back HTML instead of JSON. "
+                        "This usually means the Jira URL is wrong (use just "
+                        "https://<your-tenant>.atlassian.net, no /browse/... or "
+                        "/jira/... path), the tenant requires SSO/login that an "
+                        "API token cannot complete, or the request was redirected "
+                        "to a marketing/login page."
+                    )
+                    raise ConnectionError(
+                        f"Jira API {method} {path} returned non-JSON "
+                        f"(Content-Type={content_type or 'unknown'!r}, "
+                        f"final_url={final_url!r}). {hint} "
+                        f"First bytes: {snippet!r}"
+                    )
+                try:
+                    return json.loads(raw)
+                except json.JSONDecodeError as exc:
+                    snippet = raw.strip().replace("\n", " ")[:200]
+                    raise ConnectionError(
+                        f"Jira API {method} {path} returned malformed JSON: "
+                        f"{exc.msg}. First bytes: {snippet!r}"
+                    ) from exc
         except urllib.error.HTTPError as exc:
             err_body = ""
             try:
