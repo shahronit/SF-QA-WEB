@@ -113,10 +113,14 @@ function renderFieldBody(field, ctx) {
       ) : field.type === 'select' ? (
         <select
           className="toon-input"
-          value={values[field.key] || field.options?.[0] || ''}
+          value={values[field.key] || (typeof field.options?.[0] === 'string' ? field.options[0] : field.options?.[0]?.value) || ''}
           onChange={(e) => handleChange(field.key, e.target.value)}
         >
-          {field.options?.map(o => <option key={o} value={o}>{o}</option>)}
+          {field.options?.map(o => {
+            const val = typeof o === 'string' ? o : o.value
+            const lbl = typeof o === 'string' ? o : o.label
+            return <option key={val} value={val}>{lbl}</option>
+          })}
         </select>
       ) : (
         <input
