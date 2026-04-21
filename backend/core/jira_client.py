@@ -4,18 +4,44 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
+import socket
+import ssl
 import urllib.error
 import urllib.parse
 import urllib.request
 from typing import Any
+
+log = logging.getLogger(__name__)
+
+# Network timeout (seconds) for every Jira REST call. Without this, urllib
+# blocks indefinitely behind a corporate proxy / unreachable host and the UI
+# eventually times out with no useful error.
+JIRA_HTTP_TIMEOUT = 20
+
+
+def _normalize_jira_url(jira_url: str) -> str:
+    """Strip whitespace + trailing slash and prepend ``https://`` when missing."""
+    url = (jira_url or "").strip().rstrip("/")
+    if not url:
+        raise ConnectionError("Jira URL is empty.")
+    if not url.startswith(("http://", "https://")):
+        url = "https://" + url
+    return url
 
 
 class JiraClient:
     """Minimal Jira Cloud client using Basic Auth (email + API token)."""
 
     def __init__(self, jira_url: str, email: str, api_token: str) -> None:
-        self.base_url = jira_url.rstrip("/")
-        creds = base64.b64encode(f"{email}:{api_token}".encode()).decode()
+        self.base_url = _normalize_jira_url(jira_url)
+        if not (email or "").strip():
+            raise ConnectionError("Jira email is required.")
+        if not (api_token or "").strip():
+            raise ConnectionError("Jira API token is required.")
+        creds = base64.b64encode(
+            f"{email.strip()}:{api_token.strip()}".encode()
+        ).decode()
         self._auth_header = f"Basic {creds}"
 
     def _request(
@@ -32,17 +58,43 @@ class JiraClient:
         req.add_header("Authorization", self._auth_header)
         req.add_header("Content-Type", "application/json")
         req.add_header("Accept", "application/json")
+        req.add_header("User-Agent", "SF-QA-Studio/1.0")
         try:
-            with urllib.request.urlopen(req) as resp:
+            with urllib.request.urlopen(req, timeout=JIRA_HTTP_TIMEOUT) as resp:
                 raw = resp.read().decode()
                 return json.loads(raw) if raw.strip() else {}
         except urllib.error.HTTPError as exc:
-            err_body = exc.read().decode() if exc.fp else ""
+            err_body = ""
+            try:
+                err_body = exc.read().decode() if exc.fp else ""
+            except Exception:
+                pass
+            log.warning("Jira HTTPError %s for %s %s: %s", exc.code, method, path, err_body[:500])
             raise ConnectionError(
-                f"Jira API {method} {path} returned {exc.code}: {err_body[:500]}"
+                f"Jira API {method} {path} returned {exc.code}: {err_body[:500] or exc.reason}"
+            ) from exc
+        except ssl.SSLError as exc:
+            log.warning("Jira SSL error for %s %s: %s", method, path, exc)
+            raise ConnectionError(
+                f"SSL error reaching Jira ({self.base_url}): {exc}. "
+                "If you are behind a corporate proxy, verify the URL and TLS trust store."
+            ) from exc
+        except socket.timeout as exc:
+            log.warning("Jira timeout (%ss) for %s %s", JIRA_HTTP_TIMEOUT, method, path)
+            raise ConnectionError(
+                f"Jira request timed out after {JIRA_HTTP_TIMEOUT}s "
+                f"({method} {self.base_url}{path}). Check the URL and your network."
             ) from exc
         except urllib.error.URLError as exc:
-            raise ConnectionError(f"Cannot reach Jira: {exc}") from exc
+            log.warning("Jira URLError for %s %s: %s", method, path, exc)
+            raise ConnectionError(
+                f"Cannot reach Jira at {self.base_url}: {exc.reason if hasattr(exc, 'reason') else exc}"
+            ) from exc
+        except Exception as exc:  # noqa: BLE001 - last-resort safety net
+            log.exception("Unexpected Jira error for %s %s", method, path)
+            raise ConnectionError(
+                f"Unexpected error calling Jira ({type(exc).__name__}): {exc}"
+            ) from exc
 
     # ------------------------------------------------------------------
     # Projects
@@ -126,15 +178,22 @@ class JiraClient:
         req = urllib.request.Request(url, method="GET")
         req.add_header("Authorization", self._auth_header)
         req.add_header("Accept", "application/json")
+        req.add_header("User-Agent", "SF-QA-Studio/1.0")
         try:
-            with urllib.request.urlopen(req) as resp:
+            with urllib.request.urlopen(req, timeout=JIRA_HTTP_TIMEOUT) as resp:
                 data = json.loads(resp.read().decode() or "{}")
                 return data.get("values", [])
         except urllib.error.HTTPError as exc:
-            err_body = exc.read().decode() if exc.fp else ""
+            err_body = ""
+            try:
+                err_body = exc.read().decode() if exc.fp else ""
+            except Exception:
+                pass
             raise ConnectionError(
-                f"Jira agile API returned {exc.code}: {err_body[:500]}"
+                f"Jira agile API returned {exc.code}: {err_body[:500] or exc.reason}"
             ) from exc
+        except (socket.timeout, urllib.error.URLError, ssl.SSLError) as exc:
+            raise ConnectionError(f"Cannot reach Jira agile API: {exc}") from exc
 
     # ------------------------------------------------------------------
     # Bug creation

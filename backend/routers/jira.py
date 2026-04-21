@@ -124,10 +124,14 @@ async def connect(body: JiraConnectRequest, user=Depends(get_current_user)):
         projects = client.list_projects()
     except ConnectionError as e:
         raise HTTPException(400, str(e))
+    except Exception as e:  # noqa: BLE001 - keep the error visible to the UI
+        raise HTTPException(
+            400, f"Unexpected Jira error ({type(e).__name__}): {e}"
+        )
     session = {
-        "jira_url": body.jira_url.rstrip("/"),
-        "email": body.email,
-        "api_token": body.api_token,
+        "jira_url": client.base_url,
+        "email": body.email.strip(),
+        "api_token": body.api_token.strip(),
         "connected_at": datetime.now(timezone.utc).isoformat(),
         "projects": projects,
     }

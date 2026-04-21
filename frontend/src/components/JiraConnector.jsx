@@ -21,7 +21,18 @@ export default function JiraConnector({ compact = false }) {
       setOpen(false)
       setUrl(''); setMail(''); setToken('')
     } catch (err) {
-      toast.error(err.response?.data?.detail || 'Failed to connect to Jira')
+      console.error('Jira connect failed:', err)
+      const detail = err?.response?.data?.detail
+      const status = err?.response?.status
+      const networkMsg = err?.message
+      const msg = detail
+        ? `Jira: ${detail}`
+        : status
+          ? `Jira connect failed (HTTP ${status})`
+          : networkMsg
+            ? `Jira connect failed: ${networkMsg}`
+            : 'Failed to connect to Jira (no response from server)'
+      toast.error(msg, { duration: 8000 })
     }
   }
 
