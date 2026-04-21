@@ -172,13 +172,27 @@ class JiraClient:
         return self.search_issues(jql, max_results=max_results)
 
     def search_issues(self, jql: str, max_results: int = 50) -> list[dict[str, Any]]:
-        """Run a JQL search and return simplified issue dicts."""
-        params = urllib.parse.urlencode({
+        """Run a JQL search and return simplified issue dicts.
+
+        Uses the new ``POST /rest/api/3/search/jql`` endpoint. Atlassian
+        removed the legacy ``GET /search`` API on 2025-05-01 (it now
+        returns HTTP 410 Gone). The replacement is body-based and
+        token-paginated; we still cap with ``maxResults`` to keep the
+        UI responsive.
+        """
+        body = {
             "jql": jql,
-            "maxResults": str(max_results),
-            "fields": "summary,status,issuetype,priority,assignee,updated",
-        })
-        data = self._request("GET", f"/search?{params}")
+            "maxResults": int(max_results),
+            "fields": [
+                "summary",
+                "status",
+                "issuetype",
+                "priority",
+                "assignee",
+                "updated",
+            ],
+        }
+        data = self._request("POST", "/search/jql", body)
         issues = data.get("issues", []) if isinstance(data, dict) else []
         return [_summarize_issue(it) for it in issues]
 
