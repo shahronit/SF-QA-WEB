@@ -8,6 +8,7 @@ import ReportPanel from './ReportPanel'
 import { useAgentResults, AGENT_LABELS } from '../context/AgentResultsContext'
 import { useJira } from '../context/JiraContext'
 import JiraIssuePicker from './JiraIssuePicker'
+import CustomPromptEditor from './CustomPromptEditor'
 import { Stagger, StaggerItem } from './motion/Stagger'
 import Confetti from './motion/Confetti'
 import GeneratingScene from './motion/GeneratingScene'
@@ -145,6 +146,11 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
   const [selectedProject, setSelectedProject] = useState('')
   const [linkedAgent, setLinkedAgent] = useState('')
   const [showLinkedPreview, setShowLinkedPreview] = useState(false)
+  // Per-session, per-device override for the system prompt. Only the Test
+  // Case Development agent currently surfaces a UI to set this; the
+  // override is stored in localStorage by CustomPromptEditor and shipped
+  // on every request while the toggle is ON.
+  const [systemPromptOverride, setSystemPromptOverride] = useState(null)
   // Past-session results pulled from /history when no in-session results exist.
   // Each entry mirrors the in-session shape ({name, label, content, timestamp}).
   const [historicalRuns, setHistoricalRuns] = useState([])
@@ -271,6 +277,7 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
         body: JSON.stringify({
           user_input: { ...mergedInput, qa_mode: qaMode },
           project_slug: selectedProject || null,
+          ...(systemPromptOverride ? { system_prompt_override: systemPromptOverride } : {}),
         }),
       })
       if (!resp.ok) {
@@ -557,37 +564,140 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
         </div>
       </div>
 
-      {/* Project selector */}
-      <div className="toon-card !p-4">
-        <div className="flex items-center gap-3">
-          <span className="w-9 h-9 rounded-xl bg-gradient-to-br from-sky-400 to-toon-blue flex items-center justify-center text-white text-sm shadow-toon">
-            📂
-          </span>
-          <div className="flex-1">
-            <label className="block text-sm font-bold text-toon-navy mb-1.5">
-              Project Context
-              <span className="font-normal text-gray-400 ml-2">(optional — scopes RAG to project docs)</span>
-            </label>
-            <select
-              className="toon-input !py-2"
-              value={selectedProject}
-              onChange={e => setSelectedProject(e.target.value)}
-            >
-              <option value="">— No project (global knowledge only) —</option>
-              {projects.map(p => (
-                <option key={p.slug} value={p.slug}>
-                  {p.name}{p.docs ? ` (${p.docs} docs)` : ''}
-                </option>
-              ))}
-            </select>
+      {/* Project Context (RAG) + Link Previous Agent Output sit side by
+          side so users see at a glance that they can combine RAG project
+          docs, a linked prior agent output, and Jira import below. The
+          Requirements agent has no upstream to chain from, so its
+          Project Context card spans the full width instead. */}
+      <div className={agentName === 'requirement' ? '' : 'grid grid-cols-1 lg:grid-cols-2 gap-4 items-stretch'}>
+        {/* Project selector */}
+        <div className="toon-card !p-4 h-full">
+          <div className="flex items-center gap-3">
+            <span className="w-9 h-9 rounded-xl bg-gradient-to-br from-sky-400 to-toon-blue flex items-center justify-center text-white text-sm shadow-toon">
+              📂
+            </span>
+            <div className="flex-1">
+              <label className="block text-sm font-bold text-toon-navy mb-1.5">
+                Project Context
+                <span className="font-normal text-gray-400 ml-2">(optional — RAG over project docs)</span>
+              </label>
+              <select
+                className="toon-input !py-2"
+                value={selectedProject}
+                onChange={e => setSelectedProject(e.target.value)}
+              >
+                <option value="">— No project (global knowledge only) —</option>
+                {projects.map(p => (
+                  <option key={p.slug} value={p.slug}>
+                    {p.name}{p.docs ? ` (${p.docs} docs)` : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
+          {activeProject && (
+            <div className="mt-2 ml-12 flex items-center gap-2 text-xs text-toon-mint font-bold">
+              <span>✅</span>
+              Using project: {activeProject.name}
+              {activeProject.description && (
+                <span className="text-gray-400 font-normal">— {activeProject.description}</span>
+              )}
+            </div>
+          )}
         </div>
-        {activeProject && (
-          <div className="mt-2 ml-12 flex items-center gap-2 text-xs text-toon-mint font-bold">
-            <span>✅</span>
-            Using project: {activeProject.name}
-            {activeProject.description && (
-              <span className="text-gray-400 font-normal">— {activeProject.description}</span>
+
+        {/* Linked output selector — always rendered so users discover the
+            chaining feature even before any prior runs exist. Hidden on
+            the Requirements agent (it has no upstream agent to chain from). */}
+        {agentName !== 'requirement' && (
+          <div className="toon-card !p-4 h-full">
+            <div className="flex items-center gap-3">
+              <span className="w-9 h-9 rounded-xl bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center text-white text-sm shadow-toon">
+                🔗
+              </span>
+              <div className="flex-1">
+                <label className="block text-sm font-bold text-toon-navy mb-1.5">
+                  Link Previous Agent Output
+                  <span className="font-normal text-gray-400 ml-2">(optional — chain prior agent results)</span>
+                </label>
+                <select
+                  className="toon-input !py-2"
+                  value={linkedAgent}
+                  onChange={e => { setLinkedAgent(e.target.value); setShowLinkedPreview(false) }}
+                  disabled={availableResults.length === 0 && historicalRuns.length === 0}
+                >
+                  {availableResults.length === 0 && historicalRuns.length === 0 ? (
+                    <option value="">— No previous agent runs available —</option>
+                  ) : (
+                    <>
+                      <option value="">— No linked output —</option>
+                      {availableResults.length > 0 && (
+                        <optgroup label="This session">
+                          {availableResults.map(r => (
+                            <option key={r.name} value={r.name}>
+                              {r.label} ({timeAgo(r.timestamp)})
+                            </option>
+                          ))}
+                        </optgroup>
+                      )}
+                      {historicalRuns.length > 0 && (
+                        <optgroup label="From past sessions">
+                          {historicalRuns.map(r => (
+                            <option key={r.name} value={r.name}>
+                              {r.label} ({timeAgo(r.timestamp)})
+                            </option>
+                          ))}
+                        </optgroup>
+                      )}
+                    </>
+                  )}
+                </select>
+                {availableResults.length === 0 && historicalRuns.length === 0 && (
+                  <p className="text-xs text-gray-500 mt-1.5">
+                    No prior runs available — generate one to chain its output here.
+                  </p>
+                )}
+              </div>
+            </div>
+
+            {selectedLinked && (
+              <div className="mt-3 ml-12">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-toon-mint font-bold flex items-center gap-1">
+                    <span>✅</span> Linked: {selectedLinked.label}
+                  </span>
+                  <button
+                    onClick={() => setShowLinkedPreview(p => !p)}
+                    className="text-xs text-toon-blue hover:underline font-semibold"
+                  >
+                    {showLinkedPreview ? 'Hide preview' : 'Show preview'}
+                  </button>
+                  <button
+                    onClick={() => { setLinkedAgent(''); setShowLinkedPreview(false) }}
+                    className="text-xs text-toon-coral hover:underline font-semibold"
+                  >
+                    Clear
+                  </button>
+                </div>
+                <AnimatePresence>
+                  {showLinkedPreview && (
+                    <motion.div
+                      initial={{ height: 0, opacity: 0 }}
+                      animate={{ height: 'auto', opacity: 1 }}
+                      exit={{ height: 0, opacity: 0 }}
+                      className="overflow-hidden"
+                    >
+                      <div className="mt-2 p-3 bg-gray-50 rounded-xl text-xs max-h-60 overflow-auto border border-gray-200 markdown-body table-wrap">
+                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                          {selectedLinked.content.length > 2000
+                            ? `${selectedLinked.content.slice(0, 2000)}\n\n_… (truncated)_`
+                            : selectedLinked.content}
+                        </ReactMarkdown>
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
             )}
           </div>
         )}
@@ -605,100 +715,14 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
         />
       )}
 
-      {/* Linked output selector — always rendered so users discover the
-          chaining feature even before any prior runs exist. Hidden on
-          the Requirements agent (it has no upstream agent to chain from). */}
-      {agentName !== 'requirement' && (
-      <div className="toon-card !p-4">
-        <div className="flex items-center gap-3">
-          <span className="w-9 h-9 rounded-xl bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center text-white text-sm shadow-toon">
-            🔗
-          </span>
-          <div className="flex-1">
-            <label className="block text-sm font-bold text-toon-navy mb-1.5">
-              Link Previous Agent Output
-              <span className="font-normal text-gray-400 ml-2">(optional — chain results from another agent)</span>
-            </label>
-            <select
-              className="toon-input !py-2"
-              value={linkedAgent}
-              onChange={e => { setLinkedAgent(e.target.value); setShowLinkedPreview(false) }}
-              disabled={availableResults.length === 0 && historicalRuns.length === 0}
-            >
-              {availableResults.length === 0 && historicalRuns.length === 0 ? (
-                <option value="">— No previous agent runs available —</option>
-              ) : (
-                <>
-                  <option value="">— No linked output —</option>
-                  {availableResults.length > 0 && (
-                    <optgroup label="This session">
-                      {availableResults.map(r => (
-                        <option key={r.name} value={r.name}>
-                          {r.label} ({timeAgo(r.timestamp)})
-                        </option>
-                      ))}
-                    </optgroup>
-                  )}
-                  {historicalRuns.length > 0 && (
-                    <optgroup label="From past sessions">
-                      {historicalRuns.map(r => (
-                        <option key={r.name} value={r.name}>
-                          {r.label} ({timeAgo(r.timestamp)})
-                        </option>
-                      ))}
-                    </optgroup>
-                  )}
-                </>
-              )}
-            </select>
-            {availableResults.length === 0 && historicalRuns.length === 0 && (
-              <p className="text-xs text-gray-500 mt-1.5">
-                No prior runs available — generate one to chain its output here.
-              </p>
-            )}
-          </div>
-        </div>
-
-        {selectedLinked && (
-          <div className="mt-3 ml-12">
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-toon-mint font-bold flex items-center gap-1">
-                <span>✅</span> Linked: {selectedLinked.label}
-              </span>
-              <button
-                onClick={() => setShowLinkedPreview(p => !p)}
-                className="text-xs text-toon-blue hover:underline font-semibold"
-              >
-                {showLinkedPreview ? 'Hide preview' : 'Show preview'}
-              </button>
-              <button
-                onClick={() => { setLinkedAgent(''); setShowLinkedPreview(false) }}
-                className="text-xs text-toon-coral hover:underline font-semibold"
-              >
-                Clear
-              </button>
-            </div>
-            <AnimatePresence>
-              {showLinkedPreview && (
-                <motion.div
-                  initial={{ height: 0, opacity: 0 }}
-                  animate={{ height: 'auto', opacity: 1 }}
-                  exit={{ height: 0, opacity: 0 }}
-                  className="overflow-hidden"
-                >
-                  <div className="mt-2 p-3 bg-gray-50 rounded-xl text-xs max-h-60 overflow-auto border border-gray-200 markdown-body table-wrap">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                      {selectedLinked.content.length > 2000
-                        ? `${selectedLinked.content.slice(0, 2000)}\n\n_… (truncated)_`
-                        : selectedLinked.content}
-                    </ReactMarkdown>
-                  </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </div>
-        )}
-      </div>
+      {/* Test Case Development users can override the system prompt for
+          their session. Persisted to localStorage; the default prompt on
+          disk is never modified. Other agents stay untouched. */}
+      {agentName === 'testcase' && (
+        <CustomPromptEditor
+          agentName={agentName}
+          onChange={setSystemPromptOverride}
+        />
       )}
 
       {/* Primary form fields (required-by-default) */}

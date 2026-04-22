@@ -282,8 +282,8 @@ export default function JiraIssuePicker({
             Import from Jira
             <span className="font-normal text-gray-400 ml-2">
               {multiSelect
-                ? '(optional — pick one or many tickets, or use a whole sprint as scope)'
-                : '(optional — auto-fills form from a Jira issue)'}
+                ? '(optional — combines with Project Context above; pick one or many tickets, or use a whole sprint as scope)'
+                : '(optional — combines with Project Context above; auto-fills form from a Jira issue)'}
             </span>
           </h3>
           <button
