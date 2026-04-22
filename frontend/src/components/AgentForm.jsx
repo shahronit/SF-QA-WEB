@@ -467,74 +467,89 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
       {/* Jira issue picker (only when connected) */}
       {jiraConnected && <JiraIssuePicker onImport={handleJiraImport} />}
 
-      {/* Linked output selector */}
-      {availableResults.length > 0 && (
-        <div className="toon-card !p-4">
-          <div className="flex items-center gap-3">
-            <span className="w-9 h-9 rounded-xl bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center text-white text-sm shadow-toon">
-              🔗
-            </span>
-            <div className="flex-1">
-              <label className="block text-sm font-bold text-toon-navy mb-1.5">
-                Link Previous Agent Output
-                <span className="font-normal text-gray-400 ml-2">(optional — chain results from another agent)</span>
-              </label>
-              <select
-                className="toon-input !py-2"
-                value={linkedAgent}
-                onChange={e => { setLinkedAgent(e.target.value); setShowLinkedPreview(false) }}
-              >
-                <option value="">— No linked output —</option>
-                {availableResults.map(r => (
-                  <option key={r.name} value={r.name}>
-                    {r.label} ({timeAgo(r.timestamp)})
-                  </option>
-                ))}
-              </select>
-            </div>
+      {/* Linked output selector — always rendered so users discover the
+          chaining feature even before any prior runs exist. */}
+      <div className="toon-card !p-4">
+        <div className="flex items-center gap-3">
+          <span className="w-9 h-9 rounded-xl bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center text-white text-sm shadow-toon">
+            🔗
+          </span>
+          <div className="flex-1">
+            <label className="block text-sm font-bold text-toon-navy mb-1.5">
+              Link Previous Agent Output
+              <span className="font-normal text-gray-400 ml-2">(optional — chain results from another agent)</span>
+            </label>
+            <select
+              className="toon-input !py-2"
+              value={linkedAgent}
+              onChange={e => { setLinkedAgent(e.target.value); setShowLinkedPreview(false) }}
+              disabled={availableResults.length === 0}
+            >
+              {availableResults.length === 0 ? (
+                <option value="">— No previous agent runs in this session yet —</option>
+              ) : (
+                <>
+                  <option value="">— No linked output —</option>
+                  {availableResults.map(r => (
+                    <option key={r.name} value={r.name}>
+                      {r.label} ({timeAgo(r.timestamp)})
+                    </option>
+                  ))}
+                </>
+              )}
+            </select>
+            {availableResults.length === 0 && (
+              <p className="text-xs text-gray-500 mt-1.5">
+                Run another agent first, or open an earlier result from{' '}
+                <a href="/history" className="text-toon-blue font-semibold hover:underline">
+                  History
+                </a>{' '}
+                to chain its output here.
+              </p>
+            )}
           </div>
-
-          {selectedLinked && (
-            <div className="mt-3 ml-12">
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-toon-mint font-bold flex items-center gap-1">
-                  <span>✅</span> Linked: {selectedLinked.label}
-                </span>
-                <button
-                  onClick={() => setShowLinkedPreview(p => !p)}
-                  className="text-xs text-toon-blue hover:underline font-semibold"
-                >
-                  {showLinkedPreview ? 'Hide preview' : 'Show preview'}
-                </button>
-                <button
-                  onClick={() => { setLinkedAgent(''); setShowLinkedPreview(false) }}
-                  className="text-xs text-toon-coral hover:underline font-semibold"
-                >
-                  Clear
-                </button>
-              </div>
-              <AnimatePresence>
-                {showLinkedPreview && (
-                  <motion.div
-                    initial={{ height: 0, opacity: 0 }}
-                    animate={{ height: 'auto', opacity: 1 }}
-                    exit={{ height: 0, opacity: 0 }}
-                    className="overflow-hidden"
-                  >
-                    <div className="mt-2 p-3 bg-gray-50 rounded-xl text-xs max-h-60 overflow-auto border border-gray-200 markdown-body table-wrap">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                        {selectedLinked.content.length > 2000
-                          ? `${selectedLinked.content.slice(0, 2000)}\n\n_… (truncated)_`
-                          : selectedLinked.content}
-                      </ReactMarkdown>
-                    </div>
-                  </motion.div>
-                )}
-              </AnimatePresence>
-            </div>
-          )}
         </div>
-      )}
+
+        {selectedLinked && (
+          <div className="mt-3 ml-12">
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-toon-mint font-bold flex items-center gap-1">
+                <span>✅</span> Linked: {selectedLinked.label}
+              </span>
+              <button
+                onClick={() => setShowLinkedPreview(p => !p)}
+                className="text-xs text-toon-blue hover:underline font-semibold"
+              >
+                {showLinkedPreview ? 'Hide preview' : 'Show preview'}
+              </button>
+              <button
+                onClick={() => { setLinkedAgent(''); setShowLinkedPreview(false) }}
+                className="text-xs text-toon-coral hover:underline font-semibold"
+              >
+                Clear
+              </button>
+            </div>
+            <AnimatePresence>
+              {showLinkedPreview && (
+                <motion.div
+                  initial={{ height: 0, opacity: 0 }}
+                  animate={{ height: 'auto', opacity: 1 }}
+                  exit={{ height: 0, opacity: 0 }}
+                  className="overflow-hidden"
+                >
+                  <div className="mt-2 p-3 bg-gray-50 rounded-xl text-xs max-h-60 overflow-auto border border-gray-200 markdown-body table-wrap">
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                      {selectedLinked.content.length > 2000
+                        ? `${selectedLinked.content.slice(0, 2000)}\n\n_… (truncated)_`
+                        : selectedLinked.content}
+                    </ReactMarkdown>
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+        )}
+      </div>
 
       {/* Primary form fields (required-by-default) */}
       <Stagger className="space-y-4" delayChildren={0.1} staggerChildren={0.05}>

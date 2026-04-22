@@ -630,6 +630,36 @@ class JiraClient:
             "url": f"{self.base_url}/browse/{issue_key}",
         }
 
+    def create_issue(
+        self,
+        project_key: str,
+        summary: str,
+        description_markdown: str,
+        issuetype: str = "Test",
+    ) -> dict[str, str]:
+        """Create an issue of *issuetype* (default ``Test``) and return {key, url}.
+
+        Used by the Test Management push flow to create native Jira test issues
+        when the user does not have an Xray / Zephyr Scale add-on. Falls back
+        cleanly when the project does not have the requested issue type — the
+        Jira REST API returns a 400 with a descriptive message that the caller
+        surfaces to the UI.
+        """
+        payload = {
+            "fields": {
+                "project": {"key": project_key},
+                "summary": summary,
+                "issuetype": {"name": issuetype},
+                "description": _markdown_to_adf(description_markdown),
+            }
+        }
+        result = self._request("POST", "/issue", payload)
+        issue_key = result.get("key", "")
+        return {
+            "key": issue_key,
+            "url": f"{self.base_url}/browse/{issue_key}",
+        }
+
 
 def _markdown_to_adf(text: str) -> dict[str, Any]:
     """Convert markdown text to a minimal ADF document.

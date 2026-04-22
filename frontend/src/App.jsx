@@ -2,6 +2,7 @@ import { Routes, Route, Navigate } from 'react-router-dom'
 import { AuthProvider, useAuth } from './context/AuthContext'
 import { AgentResultsProvider } from './context/AgentResultsContext'
 import { JiraProvider } from './context/JiraContext'
+import { TestManagementProvider } from './context/TestManagementContext'
 import { Toaster } from 'react-hot-toast'
 import Layout from './components/Layout'
 import Login from './pages/Login'
@@ -14,7 +15,6 @@ import Regression from './pages/Regression'
 import Estimation from './pages/Estimation'
 import Projects from './pages/Projects'
 import History from './pages/History'
-import TestStrategy from './pages/TestStrategy'
 import TestPlanDoc from './pages/TestPlanDoc'
 import AutomationPlan from './pages/AutomationPlan'
 import CopadoScript from './pages/CopadoScript'
@@ -37,7 +37,8 @@ export default function App() {
   return (
     <AuthProvider>
       <JiraProvider>
-        <AgentResultsProvider>
+        <TestManagementProvider>
+          <AgentResultsProvider>
           <Toaster position="top-right" toastOptions={{ duration: 3000, style: { borderRadius: '16px', fontFamily: 'Nunito' } }} />
           <Routes>
           <Route path="/login" element={<Login />} />
@@ -49,7 +50,7 @@ export default function App() {
             <Route path="smoke" element={<SmokeTests />} />
             <Route path="regression" element={<Regression />} />
             <Route path="estimation" element={<Estimation />} />
-            <Route path="test-strategy" element={<TestStrategy />} />
+            <Route path="test-strategy" element={<Navigate to="/test-plan" replace />} />
             <Route path="test-plan" element={<TestPlanDoc />} />
             <Route path="automation-plan" element={<AutomationPlan />} />
             <Route path="copado-scripts" element={<CopadoScript />} />
@@ -64,7 +65,8 @@ export default function App() {
             <Route path="history" element={<History />} />
           </Route>
         </Routes>
-        </AgentResultsProvider>
+          </AgentResultsProvider>
+        </TestManagementProvider>
       </JiraProvider>
     </AuthProvider>
   )

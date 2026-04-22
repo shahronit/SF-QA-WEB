@@ -14,54 +14,33 @@ const utilityTiles = [
 
 const phaseSections = [
   {
-    phase: 'Phase 1 — Requirement Analysis',
+    phase: 'Manual QA',
     accent: 'from-blue-500 to-indigo-500',
-    mascot: 'RequirementMascot',
-    tiles: [
-      { path: '/requirements', icon: '📝', title: 'Requirements Analysis', desc: 'User stories → risks, objects, acceptance criteria', gradient: 'from-blue-600 to-blue-500', shadow: 'shadow-toon' },
-    ],
-  },
-  {
-    phase: 'Phase 2 — Test Planning',
-    accent: 'from-indigo-500 to-cyan-500',
-    mascot: 'PlanningMascot',
-    tiles: [
-      { path: '/test-strategy', icon: '🎯', title: 'Test Strategy', desc: 'IEEE 829-aligned strategy docs', gradient: 'from-indigo-500 to-blue-600', shadow: 'shadow-toon' },
-      { path: '/test-plan', icon: '📋', title: 'Test Plan Documentation', desc: 'Formal test plan for the release', gradient: 'from-cyan-500 to-teal-500', shadow: 'shadow-toon-mint' },
-      { path: '/estimation', icon: '📊', title: 'Test Effort Estimation', desc: 'Multi-technique effort & buffer', gradient: 'from-toon-purple to-violet-400', shadow: 'shadow-toon-purple' },
-      { path: '/automation-plan', icon: '🤖', title: 'Test Automation Plan', desc: 'Framework, CI/CD & ROI', gradient: 'from-rose-500 to-pink-500', shadow: 'shadow-toon-coral' },
-    ],
-  },
-  {
-    phase: 'Phase 3 — Test Case Development',
-    accent: 'from-emerald-500 to-teal-500',
     mascot: 'DesignMascot',
     tiles: [
-      { path: '/testcases', icon: '🧪', title: 'Test Case Development', desc: 'Positive, negative, bulk & edge cases', gradient: 'from-toon-mint to-emerald-400', shadow: 'shadow-toon-mint' },
-      { path: '/test-data', icon: '🧬', title: 'Test Data Preparation', desc: 'CSV / SOQL / JSON / Apex factories', gradient: 'from-emerald-500 to-teal-500', shadow: 'shadow-toon-mint' },
-      { path: '/rtm', icon: '🧭', title: 'Requirements Traceability Matrix', desc: 'Requirements ↔ test ↔ defect coverage', gradient: 'from-sky-500 to-cyan-500', shadow: 'shadow-toon' },
-      { path: '/copado-scripts', icon: '⚡', title: 'Automation Scripts', desc: 'Ready-to-run scripts for Playwright, Cypress, Robot Framework & Copado', gradient: 'from-amber-500 to-orange-600', shadow: 'shadow-toon-yellow' },
+      { path: '/requirements',   icon: '📝', title: 'Requirements Analysis',   desc: 'User stories → risks, objects, acceptance criteria', gradient: 'from-blue-600 to-blue-500',      shadow: 'shadow-toon' },
+      { path: '/test-plan',      icon: '📋', title: 'Test Plan & Strategy',    desc: 'IEEE 829-aligned strategy + formal test plan',       gradient: 'from-cyan-500 to-teal-500',     shadow: 'shadow-toon-mint' },
+      { path: '/testcases',      icon: '🧪', title: 'Test Case Development',   desc: 'Positive, negative, bulk & edge cases',              gradient: 'from-toon-mint to-emerald-400', shadow: 'shadow-toon-mint' },
+      { path: '/smoke',          icon: '💨', title: 'Smoke Test Execution',    desc: 'Post-release build validation',                      gradient: 'from-orange-400 to-toon-yellow', shadow: 'shadow-toon-yellow' },
+      { path: '/regression',     icon: '🔄', title: 'Regression Testing',      desc: 'Change impact analysis',                             gradient: 'from-toon-navy to-blue-700',    shadow: 'shadow-toon' },
+      { path: '/bugs',           icon: '🐛', title: 'Defect Reports',          desc: 'AI-assisted bug reports → Jira',                     gradient: 'from-toon-coral to-red-400',    shadow: 'shadow-toon-coral' },
+      { path: '/closure-report', icon: '🏁', title: 'Test Closure Report',     desc: 'End-of-cycle sign-off report',                       gradient: 'from-violet-500 to-purple-600', shadow: 'shadow-toon-purple' },
     ],
   },
   {
-    phase: 'Phase 4 — Test Execution',
-    accent: 'from-orange-500 to-red-500',
-    mascot: 'ExecutionMascot',
+    phase: 'Advanced QA Agents',
+    accent: 'from-violet-500 to-fuchsia-500',
+    mascot: 'PlanningMascot',
     tiles: [
-      { path: '/smoke', icon: '💨', title: 'Smoke Test Execution', desc: 'Post-release build validation', gradient: 'from-orange-400 to-toon-yellow', shadow: 'shadow-toon-yellow' },
-      { path: '/regression', icon: '🔄', title: 'Regression Testing', desc: 'Change impact analysis', gradient: 'from-toon-navy to-blue-700', shadow: 'shadow-toon' },
-      { path: '/uat-plan', icon: '🤝', title: 'UAT Plan & Sign-off', desc: 'Business acceptance scenarios', gradient: 'from-fuchsia-500 to-pink-500', shadow: 'shadow-toon-coral' },
-      { path: '/bugs', icon: '🐛', title: 'Defect Reports', desc: 'AI-assisted bug reports → Jira', gradient: 'from-toon-coral to-red-400', shadow: 'shadow-toon-coral' },
-      { path: '/execution-report', icon: '📈', title: 'Test Execution Report', desc: 'Cycle metrics & Go/No-Go', gradient: 'from-orange-500 to-red-500', shadow: 'shadow-toon-coral' },
-    ],
-  },
-  {
-    phase: 'Phase 5 — Test Cycle Closure',
-    accent: 'from-violet-500 to-purple-600',
-    mascot: 'ClosureMascot',
-    tiles: [
-      { path: '/rca', icon: '🔍', title: 'Root Cause Analysis', desc: '5-Whys + Fishbone + actions', gradient: 'from-rose-500 to-red-600', shadow: 'shadow-toon-coral' },
-      { path: '/closure-report', icon: '🏁', title: 'Test Closure Report', desc: 'End-of-cycle sign-off report', gradient: 'from-violet-500 to-purple-600', shadow: 'shadow-toon-purple' },
+      { path: '/estimation',       icon: '📊', title: 'Test Effort Estimation',     desc: 'Multi-technique effort & buffer',                         gradient: 'from-toon-purple to-violet-400', shadow: 'shadow-toon-purple' },
+      { path: '/automation-plan',  icon: '🤖', title: 'Test Automation Plan',       desc: 'Framework, CI/CD & ROI',                                  gradient: 'from-rose-500 to-pink-500',      shadow: 'shadow-toon-coral' },
+      { path: '/test-data',        icon: '🧬', title: 'Test Data Preparation',      desc: 'CSV / SOQL / JSON / Apex factories',                      gradient: 'from-emerald-500 to-teal-500',   shadow: 'shadow-toon-mint' },
+      { path: '/rtm',              icon: '🧭', title: 'Requirements Traceability',  desc: 'Requirements ↔ test ↔ defect coverage',                   gradient: 'from-sky-500 to-cyan-500',       shadow: 'shadow-toon' },
+      { path: '/copado-scripts',   icon: '⚡', title: 'Automation Scripts',         desc: 'Playwright, Cypress, Selenium, Robot Framework, Copado…', gradient: 'from-amber-500 to-orange-600',   shadow: 'shadow-toon-yellow' },
+      { path: '/uat-plan',         icon: '🤝', title: 'UAT Plan & Sign-off',        desc: 'Business acceptance scenarios',                           gradient: 'from-fuchsia-500 to-pink-500',   shadow: 'shadow-toon-coral' },
+      { path: '/execution-report', icon: '📈', title: 'Test Execution Report',      desc: 'Cycle metrics & Go/No-Go',                                gradient: 'from-orange-500 to-red-500',     shadow: 'shadow-toon-coral' },
+      { path: '/rca',              icon: '🔍', title: 'Root Cause Analysis',        desc: '5-Whys + Fishbone + actions',                             gradient: 'from-rose-500 to-red-600',       shadow: 'shadow-toon-coral' },
+      { path: '/stlc-pack',        icon: '🚀', title: '1-click STLC Pack',          desc: 'Run the full STLC end-to-end from a Jira ticket',         gradient: 'from-violet-500 to-fuchsia-500', shadow: 'shadow-toon-purple' },
     ],
   },
 ]
@@ -104,7 +83,7 @@ export default function Hub() {
           </div>
         </div>
         <Stagger className="flex flex-wrap gap-3 mt-5 relative z-10" delayChildren={0.3} staggerChildren={0.07}>
-          {['16 AI Agents', 'STLC End-to-End', 'RAG Grounded', 'Agent Chaining'].map(label => (
+          {['7 Manual + 9 Advanced Agents', 'STLC End-to-End', 'RAG Grounded', 'Agent Chaining'].map(label => (
             <StaggerItem key={label}>
               <motion.span
                 whileHover={{ scale: 1.05, y: -2 }}
@@ -174,7 +153,7 @@ export default function Hub() {
         ))}
       </div>
 
-      {phaseSections.map((section) => (
+      {phaseSections.filter(s => s.phase === 'Manual QA').map((section) => (
         <motion.div
           key={section.phase}
           className="mb-10 relative"
@@ -218,6 +197,24 @@ export default function Hub() {
           </Stagger>
         </motion.div>
       ))}
+
+      <motion.div
+        initial={{ opacity: 0, y: 12 }}
+        whileInView={{ opacity: 1, y: 0 }}
+        viewport={{ once: true, margin: '-60px' }}
+        transition={{ duration: 0.4 }}
+        className="rounded-toon-lg bg-gradient-to-r from-violet-500/10 to-fuchsia-500/10 border border-violet-200 p-4 flex items-center gap-3 text-sm"
+      >
+        <span className="w-9 h-9 rounded-xl bg-gradient-to-br from-violet-500 to-fuchsia-500 flex items-center justify-center text-white text-base shadow-toon-purple">
+          ⚙️
+        </span>
+        <div className="flex-1 min-w-0">
+          <div className="font-bold text-toon-navy">Looking for advanced agents?</div>
+          <div className="text-gray-500 text-xs">
+            Effort Estimation, Automation Plan, Test Data, RTM, Automation Scripts, UAT, Execution Report, RCA, and the 1-click STLC Pack are available from the sidebar.
+          </div>
+        </div>
+      </motion.div>
     </div>
   )
 }
