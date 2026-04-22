@@ -2,11 +2,13 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import toast from 'react-hot-toast'
 import api from '../api/client'
 import ReportPanel from './ReportPanel'
-import { useAgentResults } from '../context/AgentResultsContext'
+import { useAgentResults, AGENT_LABELS } from '../context/AgentResultsContext'
 import { useJira } from '../context/JiraContext'
 import JiraIssuePicker from './JiraIssuePicker'
+import CustomPromptEditor from './CustomPromptEditor'
 import { Stagger, StaggerItem } from './motion/Stagger'
 import Confetti from './motion/Confetti'
 import GeneratingScene from './motion/GeneratingScene'
@@ -144,13 +146,25 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
   const [selectedProject, setSelectedProject] = useState('')
   const [linkedAgent, setLinkedAgent] = useState('')
   const [showLinkedPreview, setShowLinkedPreview] = useState(false)
+  // Per-session, per-device override for the system prompt. Only the Test
+  // Case Development agent currently surfaces a UI to set this; the
+  // override is stored in localStorage by CustomPromptEditor and shipped
+  // on every request while the toggle is ON.
+  const [systemPromptOverride, setSystemPromptOverride] = useState(null)
+  // Past-session results pulled from /history when no in-session results exist.
+  // Each entry mirrors the in-session shape ({name, label, content, timestamp}).
+  const [historicalRuns, setHistoricalRuns] = useState([])
   const [shakeKeys, setShakeKeys] = useState({})
   const [confettiTrigger, setConfettiTrigger] = useState(0)
   const [qaMode, setQaMode] = useQaMode()
 
   const { saveResult, getAvailableResults } = useAgentResults()
   const availableResults = getAvailableResults(agentName)
-  const { connected: jiraConnected, resolveFromText } = useJira()
+  const { connected: jiraConnected, resolveFromText, getIssue: jiraGetIssue, listIssues: jiraListIssues } = useJira()
+
+  // Multi-select + sprint-scope CTAs are only meaningful on the
+  // Test Plan & Strategy agent — every other agent stays single-select.
+  const allowMultiPick = agentName === 'test_plan'
 
   // Per-field set of Jira keys we have already auto-imported, so on-blur
   // doesn't re-fetch the same ticket every time the user clicks elsewhere.
@@ -174,6 +188,33 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
       window.removeEventListener('qa:projects-updated', onProjectsUpdated)
     }
   }, [fetchProjects])
+
+  // Fall back to /history when no in-session results exist so the Link
+  // Previous Agent Output dropdown still has something to chain. We
+  // skip the requirements agent entirely (the card is hidden there).
+  useEffect(() => {
+    if (agentName === 'requirement') return
+    if (availableResults.length > 0) return
+    let cancelled = false
+    api.get('/history/', { params: { limit: 10 } })
+      .then(({ data }) => {
+        if (cancelled) return
+        const records = (data?.records || []).slice(0, 10)
+        const mapped = records
+          .filter(rec => rec.agent && rec.agent !== agentName)
+          .map((rec, idx) => ({
+            name: `history:${idx}`,
+            label: AGENT_LABELS[rec.agent] || rec.agent,
+            content: rec.output || rec.output_preview || '',
+            timestamp: rec.ts ? Date.parse(rec.ts) || Date.now() : Date.now(),
+            source: 'history',
+          }))
+          .filter(r => r.content)
+        setHistoricalRuns(mapped)
+      })
+      .catch(() => { if (!cancelled) setHistoricalRuns([]) })
+    return () => { cancelled = true }
+  }, [agentName, availableResults.length])
 
   const handleChange = (key, val) => setValues(prev => ({ ...prev, [key]: val }))
 
@@ -201,7 +242,9 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
   const allRequiredFilled = requiredFields.every(f => values[f.key]?.trim?.())
   const canGenerate = allRequiredFilled && !loading
 
-  const selectedLinked = availableResults.find(r => r.name === linkedAgent)
+  const selectedLinked =
+    availableResults.find(r => r.name === linkedAgent) ||
+    historicalRuns.find(r => r.name === linkedAgent)
 
   const handleRun = async () => {
     if (loading) return
@@ -234,6 +277,7 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
         body: JSON.stringify({
           user_input: { ...mergedInput, qa_mode: qaMode },
           project_slug: selectedProject || null,
+          ...(systemPromptOverride ? { system_prompt_override: systemPromptOverride } : {}),
         }),
       })
       if (!resp.ok) {
@@ -377,6 +421,98 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
     })
   }, [resolvedFields])
 
+  // Fetch full detail for a list of issues with bounded concurrency, then
+  // format the consolidated scope block. Used by both `handleJiraImportMany`
+  // (user checked rows) and `handleSprintScope` (Use entire sprint CTA).
+  const fetchAndFormatScope = useCallback(async (issueKeys, headerLine) => {
+    const concurrency = 5
+    const results = new Array(issueKeys.length)
+    let cursor = 0
+    const worker = async () => {
+      while (cursor < issueKeys.length) {
+        const i = cursor++
+        try {
+          results[i] = await jiraGetIssue(issueKeys[i])
+        } catch {
+          results[i] = null
+        }
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(concurrency, issueKeys.length) }, worker))
+    const ok = results.filter(Boolean)
+    const lines = []
+    if (headerLine) lines.push(headerLine, '')
+    lines.push(`Tickets in scope (${ok.length}):`, '')
+    for (const issue of ok) {
+      lines.push(`### ${issue.key} — ${issue.summary || '(no summary)'}`)
+      const meta = []
+      if (issue.status) meta.push(`Status: ${issue.status}`)
+      if (issue.issuetype) meta.push(`Type: ${issue.issuetype}`)
+      if (issue.priority) meta.push(`Priority: ${issue.priority}`)
+      if (meta.length) lines.push(meta.join(' | '))
+      const desc = (issue.description || '').trim()
+      if (desc) {
+        lines.push('Description:')
+        lines.push(desc.length > 800 ? `${desc.slice(0, 800)}…` : desc)
+      } else {
+        lines.push('Description: (none)')
+      }
+      lines.push('')
+    }
+    return { block: lines.join('\n').trimEnd(), count: ok.length }
+  }, [jiraGetIssue])
+
+  // Write a consolidated scope block into the primary textarea
+  // (replacing whatever was there — multi-import is a "set scope" gesture,
+  // not an append, otherwise the form fills with stacked sprint dumps).
+  const writeScopeBlock = useCallback((block) => {
+    const textareaFields = resolvedFields.filter(f => f.type === 'textarea')
+    const primaryArea =
+      textareaFields.find(f => /requirement|story|description|scope|test_cases|test_cases_or_scope/i.test(f.key)) ||
+      textareaFields[0]
+    if (!primaryArea) return
+    setValues(prev => ({ ...prev, [primaryArea.key]: block }))
+  }, [resolvedFields])
+
+  const handleJiraImportMany = useCallback(async (issuesList) => {
+    if (!issuesList?.length) return
+    const t = toast.loading(`Importing ${issuesList.length} ticket${issuesList.length === 1 ? '' : 's'}…`)
+    try {
+      const { block, count } = await fetchAndFormatScope(
+        issuesList.map(it => it.key),
+        null,
+      )
+      writeScopeBlock(block)
+      toast.success(`Loaded ${count} ticket${count === 1 ? '' : 's'} into scope`, { id: t })
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || 'Failed to import tickets', { id: t })
+    }
+  }, [fetchAndFormatScope, writeScopeBlock])
+
+  const handleSprintScope = useCallback(async ({ projectKey, sprintId, sprintName }) => {
+    if (!projectKey || !sprintId) return
+    const t = toast.loading(`Fetching sprint "${sprintName}"…`)
+    try {
+      const list = await jiraListIssues(projectKey, {
+        sprintId,
+        maxResults: 200,
+      })
+      if (!list.length) {
+        toast.error(`Sprint "${sprintName}" has no tickets`, { id: t })
+        return
+      }
+      const header = `Sprint scope: ${sprintName} (project ${projectKey}) — ${list.length} ticket${list.length === 1 ? '' : 's'}`
+      const { block, count } = await fetchAndFormatScope(
+        list.map(it => it.key),
+        header,
+      )
+      writeScopeBlock(block)
+      toast.success(`Loaded ${count} ticket${count === 1 ? '' : 's'} from "${sprintName}" — click Generate`, { id: t })
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || 'Failed to load sprint', { id: t })
+    }
+  }, [jiraListIssues, fetchAndFormatScope, writeScopeBlock])
+
   const activeProject = projects.find(p => p.slug === selectedProject)
 
   return (
@@ -428,112 +564,165 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
         </div>
       </div>
 
-      {/* Project selector */}
-      <div className="toon-card !p-4">
-        <div className="flex items-center gap-3">
-          <span className="w-9 h-9 rounded-xl bg-gradient-to-br from-sky-400 to-toon-blue flex items-center justify-center text-white text-sm shadow-toon">
-            📂
-          </span>
-          <div className="flex-1">
-            <label className="block text-sm font-bold text-toon-navy mb-1.5">
-              Project Context
-              <span className="font-normal text-gray-400 ml-2">(optional — scopes RAG to project docs)</span>
-            </label>
-            <select
-              className="toon-input !py-2"
-              value={selectedProject}
-              onChange={e => setSelectedProject(e.target.value)}
-            >
-              <option value="">— No project (global knowledge only) —</option>
-              {projects.map(p => (
-                <option key={p.slug} value={p.slug}>
-                  {p.name}{p.docs ? ` (${p.docs} docs)` : ''}
-                </option>
-              ))}
-            </select>
-          </div>
-        </div>
-        {activeProject && (
-          <div className="mt-2 ml-12 flex items-center gap-2 text-xs text-toon-mint font-bold">
-            <span>✅</span>
-            Using project: {activeProject.name}
-            {activeProject.description && (
-              <span className="text-gray-400 font-normal">— {activeProject.description}</span>
-            )}
-          </div>
-        )}
-      </div>
-
-      {/* Jira issue picker (only when connected) */}
-      {jiraConnected && <JiraIssuePicker onImport={handleJiraImport} />}
-
-      {/* Linked output selector */}
-      {availableResults.length > 0 && (
-        <div className="toon-card !p-4">
+      {/* Project Context (RAG) + Link Previous Agent Output sit side by
+          side so users see at a glance that they can combine RAG project
+          docs, a linked prior agent output, and Jira import below. The
+          Requirements agent has no upstream to chain from, so its
+          Project Context card spans the full width instead. */}
+      <div className={agentName === 'requirement' ? '' : 'grid grid-cols-1 lg:grid-cols-2 gap-4 items-stretch'}>
+        {/* Project selector */}
+        <div className="toon-card !p-4 h-full">
           <div className="flex items-center gap-3">
-            <span className="w-9 h-9 rounded-xl bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center text-white text-sm shadow-toon">
-              🔗
+            <span className="w-9 h-9 rounded-xl bg-gradient-to-br from-sky-400 to-toon-blue flex items-center justify-center text-white text-sm shadow-toon">
+              📂
             </span>
             <div className="flex-1">
               <label className="block text-sm font-bold text-toon-navy mb-1.5">
-                Link Previous Agent Output
-                <span className="font-normal text-gray-400 ml-2">(optional — chain results from another agent)</span>
+                Project Context
+                <span className="font-normal text-gray-400 ml-2">(optional — RAG over project docs)</span>
               </label>
               <select
                 className="toon-input !py-2"
-                value={linkedAgent}
-                onChange={e => { setLinkedAgent(e.target.value); setShowLinkedPreview(false) }}
+                value={selectedProject}
+                onChange={e => setSelectedProject(e.target.value)}
               >
-                <option value="">— No linked output —</option>
-                {availableResults.map(r => (
-                  <option key={r.name} value={r.name}>
-                    {r.label} ({timeAgo(r.timestamp)})
+                <option value="">— No project (global knowledge only) —</option>
+                {projects.map(p => (
+                  <option key={p.slug} value={p.slug}>
+                    {p.name}{p.docs ? ` (${p.docs} docs)` : ''}
                   </option>
                 ))}
               </select>
             </div>
           </div>
-
-          {selectedLinked && (
-            <div className="mt-3 ml-12">
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-toon-mint font-bold flex items-center gap-1">
-                  <span>✅</span> Linked: {selectedLinked.label}
-                </span>
-                <button
-                  onClick={() => setShowLinkedPreview(p => !p)}
-                  className="text-xs text-toon-blue hover:underline font-semibold"
-                >
-                  {showLinkedPreview ? 'Hide preview' : 'Show preview'}
-                </button>
-                <button
-                  onClick={() => { setLinkedAgent(''); setShowLinkedPreview(false) }}
-                  className="text-xs text-toon-coral hover:underline font-semibold"
-                >
-                  Clear
-                </button>
-              </div>
-              <AnimatePresence>
-                {showLinkedPreview && (
-                  <motion.div
-                    initial={{ height: 0, opacity: 0 }}
-                    animate={{ height: 'auto', opacity: 1 }}
-                    exit={{ height: 0, opacity: 0 }}
-                    className="overflow-hidden"
-                  >
-                    <div className="mt-2 p-3 bg-gray-50 rounded-xl text-xs max-h-60 overflow-auto border border-gray-200 markdown-body table-wrap">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                        {selectedLinked.content.length > 2000
-                          ? `${selectedLinked.content.slice(0, 2000)}\n\n_… (truncated)_`
-                          : selectedLinked.content}
-                      </ReactMarkdown>
-                    </div>
-                  </motion.div>
-                )}
-              </AnimatePresence>
+          {activeProject && (
+            <div className="mt-2 ml-12 flex items-center gap-2 text-xs text-toon-mint font-bold">
+              <span>✅</span>
+              Using project: {activeProject.name}
+              {activeProject.description && (
+                <span className="text-gray-400 font-normal">— {activeProject.description}</span>
+              )}
             </div>
           )}
         </div>
+
+        {/* Linked output selector — always rendered so users discover the
+            chaining feature even before any prior runs exist. Hidden on
+            the Requirements agent (it has no upstream agent to chain from). */}
+        {agentName !== 'requirement' && (
+          <div className="toon-card !p-4 h-full">
+            <div className="flex items-center gap-3">
+              <span className="w-9 h-9 rounded-xl bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center text-white text-sm shadow-toon">
+                🔗
+              </span>
+              <div className="flex-1">
+                <label className="block text-sm font-bold text-toon-navy mb-1.5">
+                  Link Previous Agent Output
+                  <span className="font-normal text-gray-400 ml-2">(optional — chain prior agent results)</span>
+                </label>
+                <select
+                  className="toon-input !py-2"
+                  value={linkedAgent}
+                  onChange={e => { setLinkedAgent(e.target.value); setShowLinkedPreview(false) }}
+                  disabled={availableResults.length === 0 && historicalRuns.length === 0}
+                >
+                  {availableResults.length === 0 && historicalRuns.length === 0 ? (
+                    <option value="">— No previous agent runs available —</option>
+                  ) : (
+                    <>
+                      <option value="">— No linked output —</option>
+                      {availableResults.length > 0 && (
+                        <optgroup label="This session">
+                          {availableResults.map(r => (
+                            <option key={r.name} value={r.name}>
+                              {r.label} ({timeAgo(r.timestamp)})
+                            </option>
+                          ))}
+                        </optgroup>
+                      )}
+                      {historicalRuns.length > 0 && (
+                        <optgroup label="From past sessions">
+                          {historicalRuns.map(r => (
+                            <option key={r.name} value={r.name}>
+                              {r.label} ({timeAgo(r.timestamp)})
+                            </option>
+                          ))}
+                        </optgroup>
+                      )}
+                    </>
+                  )}
+                </select>
+                {availableResults.length === 0 && historicalRuns.length === 0 && (
+                  <p className="text-xs text-gray-500 mt-1.5">
+                    No prior runs available — generate one to chain its output here.
+                  </p>
+                )}
+              </div>
+            </div>
+
+            {selectedLinked && (
+              <div className="mt-3 ml-12">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-toon-mint font-bold flex items-center gap-1">
+                    <span>✅</span> Linked: {selectedLinked.label}
+                  </span>
+                  <button
+                    onClick={() => setShowLinkedPreview(p => !p)}
+                    className="text-xs text-toon-blue hover:underline font-semibold"
+                  >
+                    {showLinkedPreview ? 'Hide preview' : 'Show preview'}
+                  </button>
+                  <button
+                    onClick={() => { setLinkedAgent(''); setShowLinkedPreview(false) }}
+                    className="text-xs text-toon-coral hover:underline font-semibold"
+                  >
+                    Clear
+                  </button>
+                </div>
+                <AnimatePresence>
+                  {showLinkedPreview && (
+                    <motion.div
+                      initial={{ height: 0, opacity: 0 }}
+                      animate={{ height: 'auto', opacity: 1 }}
+                      exit={{ height: 0, opacity: 0 }}
+                      className="overflow-hidden"
+                    >
+                      <div className="mt-2 p-3 bg-gray-50 rounded-xl text-xs max-h-60 overflow-auto border border-gray-200 markdown-body table-wrap">
+                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                          {selectedLinked.content.length > 2000
+                            ? `${selectedLinked.content.slice(0, 2000)}\n\n_… (truncated)_`
+                            : selectedLinked.content}
+                        </ReactMarkdown>
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Jira issue picker (only when connected). The Test Plan & Strategy
+          agent gets multi-select + 'Use entire sprint as scope'; every
+          other agent stays single-select. */}
+      {jiraConnected && (
+        <JiraIssuePicker
+          onImport={handleJiraImport}
+          multiSelect={allowMultiPick}
+          onImportMany={allowMultiPick ? handleJiraImportMany : undefined}
+          onUseSprintScope={allowMultiPick ? handleSprintScope : undefined}
+        />
+      )}
+
+      {/* Test Case Development users can override the system prompt for
+          their session. Persisted to localStorage; the default prompt on
+          disk is never modified. Other agents stay untouched. */}
+      {agentName === 'testcase' && (
+        <CustomPromptEditor
+          agentName={agentName}
+          onChange={setSystemPromptOverride}
+        />
       )}
 
       {/* Primary form fields (required-by-default) */}
@@ -631,31 +820,15 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
         </motion.button>
       </div>
 
-      <Confetti trigger={confettiTrigger} />
-
-      {/* "Boy on a laptop" 3D-styled waiting scene.
-          - When the user just clicked Generate and no tokens have arrived
-            yet (loading && !result), the big hero version takes the
-            place where the ReportPanel will eventually appear so the
-            user has something engaging to look at instead of a blank
-            wait.
-          - Once content starts streaming (loading && result), the big
-            scene fades out and a compact banner sits above the live
-            ReportPanel so the user still sees the "AI is still working"
-            cue while watching the streamed text. */}
+      {/* "Boy on a laptop" waiting scene — only rendered while we are
+          still waiting for the first token. As soon as content starts
+          streaming, ReportPanel takes over and shows its own inline
+          "Streaming…" indicator, so we don't need a second scene. */}
       <AnimatePresence mode="wait">
         {loading && !result && (
           <GeneratingScene key="hero-scene" size="lg" />
         )}
       </AnimatePresence>
-
-      {loading && result && (
-        <GeneratingScene
-          size="sm"
-          caption="Still streaming…"
-          subCaption="The AI is still writing your report."
-        />
-      )}
 
       {/* No keyed AnimatePresence wrapper here: ReportPanel has its own
           entrance animation. A keyed wrapper would re-mount the panel
@@ -670,6 +843,11 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
           loading={loading}
         />
       )}
+
+      {/* Confetti is a fixed-position overlay — kept outside the
+          space-y stack so it never contributes a phantom margin
+          between the action buttons and the Report panel. */}
+      <Confetti trigger={confettiTrigger} />
     </div>
   )
 }

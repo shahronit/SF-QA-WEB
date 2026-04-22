@@ -2,15 +2,15 @@ import { createContext, useContext, useState, useCallback } from 'react'
 
 const AgentResultsContext = createContext(null)
 
-const AGENT_LABELS = {
+export const AGENT_LABELS = {
   requirement: 'Requirements Analysis',
   testcase: 'Test Cases',
   bug_report: 'Bug Report',
   smoke: 'Smoke Tests',
   regression: 'Regression Tests',
   estimation: 'Estimation',
-  test_strategy: 'Test Strategy',
-  test_plan: 'Test Plan',
+  test_strategy: 'Test Plan & Strategy',
+  test_plan: 'Test Plan & Strategy',
   automation_plan: 'Automation Plan',
   copado_script: 'Automation Scripts',
   test_data: 'Test Data',

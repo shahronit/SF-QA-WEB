@@ -34,6 +34,26 @@ class AgentRequest(BaseModel):
 
     user_input: dict
     project_slug: str | None = None
+    # Optional, per-request override of the system prompt. Used by the
+    # Test Case Development "Customize prompt" toggle. Capped server-side
+    # in the orchestrator (see ``_build_messages``). The default prompt
+    # in ``backend/core/prompts/prompts.py`` is never modified.
+    system_prompt_override: str | None = None
+
+
+@router.get("/{agent_name}/prompt")
+async def get_agent_prompt(agent_name: str, user=Depends(get_current_user)):
+    """Return the raw default system prompt for *agent_name*.
+
+    The frontend uses this so it can show the user the default prompt
+    (read-only) and pre-fill the customise textarea. We deliberately
+    return the raw string with no project-scope substitution so the
+    user sees exactly what ships with the app.
+    """
+    from core.prompts.prompts import PROMPTS
+    if agent_name not in PROMPTS:
+        raise HTTPException(404, f"Unknown agent: {agent_name}")
+    return {"agent": agent_name, "prompt": PROMPTS[agent_name]}
 
 
 @router.post("/{agent_name}/run")
@@ -49,9 +69,16 @@ async def run_agent(
     orch = get_orchestrator()
     orch.set_project(body.project_slug)
     try:
-        result = await run_in_threadpool(orch.run_agent, agent_name, body.user_input)
+        result = await run_in_threadpool(
+            orch.run_agent,
+            agent_name,
+            body.user_input,
+            body.system_prompt_override,
+        )
     except KeyError:
         raise HTTPException(400, f"Unknown agent: {agent_name}")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
     return {"result": result, "agent": agent_name}
 
 
@@ -73,7 +100,9 @@ async def stream_agent(
     def _producer() -> None:
         """Run the sync generator in a worker thread, push chunks to the queue."""
         try:
-            for chunk in orch.stream_agent(agent_name, body.user_input):
+            for chunk in orch.stream_agent(
+                agent_name, body.user_input, body.system_prompt_override
+            ):
                 loop.call_soon_threadsafe(
                     queue.put_nowait,
                     {"event": "token", "data": json.dumps({"text": chunk})},

@@ -55,11 +55,49 @@ export function JiraProvider({ children }) {
     }
   }, [])
 
-  const listIssues = useCallback(async (projectKey, issueType = '', maxResults = 50) => {
-    const { data } = await api.get('/jira/issues', {
-      params: { project_key: projectKey, issue_type: issueType, max_results: maxResults },
-    })
+  // Accepts either the legacy positional form
+  //   listIssues(projectKey, issueType, maxResults)
+  // or an options object as the second argument:
+  //   listIssues(projectKey, { issueType, maxResults, sprintId, activeSprintsOnly })
+  const listIssues = useCallback(async (projectKey, issueTypeOrOpts = '', maxResults = 50) => {
+    let issueType = ''
+    let max = maxResults
+    let sprintId = null
+    let activeSprintsOnly = false
+    if (issueTypeOrOpts && typeof issueTypeOrOpts === 'object') {
+      issueType = issueTypeOrOpts.issueType || ''
+      if (typeof issueTypeOrOpts.maxResults === 'number') max = issueTypeOrOpts.maxResults
+      sprintId = issueTypeOrOpts.sprintId ?? null
+      activeSprintsOnly = !!issueTypeOrOpts.activeSprintsOnly
+    } else {
+      issueType = issueTypeOrOpts || ''
+    }
+    const params = {
+      project_key: projectKey,
+      issue_type: issueType,
+      max_results: max,
+    }
+    if (sprintId !== null && sprintId !== undefined && sprintId !== '') {
+      params.sprint_id = sprintId
+    } else if (activeSprintsOnly) {
+      params.active_sprints_only = true
+    }
+    const { data } = await api.get('/jira/issues', { params })
     return data.issues || []
+  }, [])
+
+  const listSprints = useCallback(async (projectKey) => {
+    if (!projectKey) return { board_id: null, board_name: null, sprints: [], reason: 'no_project' }
+    try {
+      const { data } = await api.get('/jira/sprints', {
+        params: { project_key: projectKey },
+      })
+      return data || { sprints: [] }
+    } catch {
+      // Best-effort: agile API can be 403 for users without board access.
+      // The picker treats this as "no sprints available" without raising.
+      return { board_id: null, board_name: null, sprints: [], reason: 'fetch_error' }
+    }
   }, [])
 
   const getIssue = useCallback(async (issueKey) => {
@@ -89,6 +127,7 @@ export function JiraProvider({ children }) {
         disconnect,
         refreshStatus,
         listIssues,
+        listSprints,
         getIssue,
         resolveFromText,
       }}

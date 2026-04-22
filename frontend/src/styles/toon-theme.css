@@ -85,9 +85,14 @@
 .markdown-body strong { @apply font-bold text-toon-navy; }
 .markdown-body hr { @apply my-4 border-gray-200; }
 
-/* Table styling — professional QA report tables */
+/* Table styling — professional QA report tables.
+   Note: width is `max-content` (and `min-width: 100%`) so wide tables grow
+   beyond the container instead of squashing — the surrounding `.table-wrap`
+   adds the horizontal scrollbar. */
 .markdown-body table {
-  @apply w-full border-collapse mb-5 text-sm;
+  @apply border-collapse mb-5 text-sm;
+  width: max-content;
+  min-width: 100%;
   border: 2px solid #e2e8f0;
   border-radius: 12px;
   overflow: hidden;

@@ -6,6 +6,8 @@ import api from '../api/client'
 import toast from 'react-hot-toast'
 import { getAgent } from '../config/agentMeta'
 import Sparkline from './motion/Sparkline'
+import TestManagementPush from './TestManagementPush'
+import JiraBugPush from './JiraBugPush'
 import ExecutionBars from './insights/ExecutionBars'
 import CoverageDonut from './insights/CoverageDonut'
 import TechniqueCompare from './insights/TechniqueCompare'
@@ -117,7 +119,7 @@ export default function ReportPanel({ content, agentName, sheetTitle, stamp, loa
     <motion.div
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
-      className="toon-card mt-6"
+      className="toon-card"
     >
       <div className="flex items-center justify-between gap-2 mb-4">
         <div className="flex items-center gap-2">
@@ -246,6 +248,8 @@ export default function ReportPanel({ content, agentName, sheetTitle, stamp, loa
         <button onClick={() => download('pdf')} className="toon-btn toon-btn-coral text-sm py-2 px-4">📄 PDF</button>
         <button onClick={() => download('markdown')} className="toon-btn toon-btn-purple text-sm py-2 px-4">📝 Markdown</button>
         <button onClick={copyText} className="toon-btn bg-gray-400 hover:bg-gray-500 text-sm py-2 px-4">📑 Copy</button>
+        <TestManagementPush markdown={content} agentName={agentName} />
+        <JiraBugPush markdown={content} agentName={agentName} />
       </div>
     </motion.div>
   )

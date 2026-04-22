@@ -208,10 +208,13 @@ class SFQAOrchestrator:
         self._model_chains: dict[str, list[str]] = {}
         self._max_retries_map: dict[str, int] = {}
 
-        if openai_api_key:
-            self._providers["openai"] = _OpenAIProvider(openai_api_key)
-            self._model_chains["openai"] = [openai_model] + (openai_fallbacks or [])
-            self._max_retries_map["openai"] = openai_max_retries
+        # NOTE: OpenAI / ChatGPT is intentionally not registered as a
+        # selectable provider. The class and config plumbing remain so it
+        # can be re-enabled later by un-commenting the block below.
+        # if openai_api_key:
+        #     self._providers["openai"] = _OpenAIProvider(openai_api_key)
+        #     self._model_chains["openai"] = [openai_model] + (openai_fallbacks or [])
+        #     self._max_retries_map["openai"] = openai_max_retries
 
         if gemini_api_key:
             self._providers["gemini"] = _GeminiProvider(gemini_api_key)
@@ -219,7 +222,7 @@ class SFQAOrchestrator:
             self._max_retries_map["gemini"] = gemini_max_retries
 
         self._active_provider = provider if provider in self._providers else next(
-            iter(self._providers), "openai"
+            iter(self._providers), "gemini"
         )
 
     # -- public helpers --
@@ -272,8 +275,22 @@ class SFQAOrchestrator:
             )
         return prov
 
-    def _build_messages(self, agent_name: str, user_input: dict[str, Any]) -> tuple[str, str]:
-        """Build (system_prompt, user_block) for a given agent call."""
+    def _build_messages(
+        self,
+        agent_name: str,
+        user_input: dict[str, Any],
+        system_prompt_override: str | None = None,
+    ) -> tuple[str, str]:
+        """Build (system_prompt, user_block) for a given agent call.
+
+        When *system_prompt_override* is a non-empty string, it replaces the
+        baked-in ``PROMPTS[agent_name]``. The marker swap that adapts the
+        prompt to project mode still runs on the override (no-op if the
+        marker isn't present), so user-edited prompts inherit the same
+        scope handling as the defaults. We hard-cap overrides at 32 KB to
+        prevent accidental abuse — that's roughly twice the size of our
+        longest baked-in prompt.
+        """
         # Normalise qa_mode to one of {"salesforce", "general"} (default salesforce
         # for back-compat with callers that pre-date the toggle).
         qa_mode_raw = str(user_input.get("qa_mode") or "salesforce").strip().lower()
@@ -324,7 +341,15 @@ class SFQAOrchestrator:
                 "\"Navigate to the application under test.\""
             )
 
-        system_prompt = PROMPTS[agent_name]
+        override = (system_prompt_override or "").strip()
+        if override:
+            if len(override) > 32_000:
+                raise ValueError(
+                    "system_prompt_override exceeds the 32 000-character limit."
+                )
+            system_prompt = override
+        else:
+            system_prompt = PROMPTS[agent_name]
         if self._active_project:
             system_prompt = system_prompt.replace(_SCOPE_ONLY, _PROJECT_SCOPE)
 
@@ -386,7 +411,12 @@ class SFQAOrchestrator:
 
     # -- public agent methods --
 
-    def run_agent(self, agent_name: str, user_input: dict[str, Any]) -> str:
+    def run_agent(
+        self,
+        agent_name: str,
+        user_input: dict[str, Any],
+        system_prompt_override: str | None = None,
+    ) -> str:
         """Run one agent end-to-end: RAG query from flattened input, then LLM."""
         if agent_name not in PROMPTS:
             raise KeyError(f"Unknown agent: {agent_name}. Valid: {list(PROMPTS)}")
@@ -397,7 +427,9 @@ class SFQAOrchestrator:
                 "Set `GEMINI_API_KEY` or `OPENAI_API_KEY` in `backend/.env`."
             )
 
-        system_prompt, user_block = self._build_messages(agent_name, user_input)
+        system_prompt, user_block = self._build_messages(
+            agent_name, user_input, system_prompt_override
+        )
         content = ""
         try:
             content = self._call_with_retry(system_prompt, user_block)
@@ -421,7 +453,12 @@ class SFQAOrchestrator:
             })
         return content
 
-    def stream_agent(self, agent_name: str, user_input: dict[str, Any]) -> Iterator[str]:
+    def stream_agent(
+        self,
+        agent_name: str,
+        user_input: dict[str, Any],
+        system_prompt_override: str | None = None,
+    ) -> Iterator[str]:
         """Stream decoded tokens; logs the joined result when the stream completes."""
         if agent_name not in PROMPTS:
             yield f"Unknown agent: {agent_name}"
@@ -430,7 +467,13 @@ class SFQAOrchestrator:
             yield "**Error:** No LLM provider is configured. Set API keys in `backend/.env`."
             return
 
-        system_prompt, user_block = self._build_messages(agent_name, user_input)
+        try:
+            system_prompt, user_block = self._build_messages(
+                agent_name, user_input, system_prompt_override
+            )
+        except ValueError as exc:
+            yield f"**Error:** {exc}"
+            return
         collected: list[str] = []
         try:
             for piece in self._stream_with_fallback(system_prompt, user_block):

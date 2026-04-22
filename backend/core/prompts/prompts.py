@@ -79,6 +79,176 @@ Combine both sources with the user's INPUT JSON to produce the most complete and
 **Output format (mandatory):** Use **Markdown only**. Do **not** use HTML tags of any kind (no `<br>`, `<p>`, `<b>`, `<div>`, `<ul>`, etc.). Use numbered lists with one logical item per line, blank lines between numbered items if helpful, or bullet lists. Never embed `<br>` for line breaks; use real newlines inside table cells or separate list items.
 """
 
+# Combined Test Strategy + Test Plan prompt (formerly two separate agents,
+# merged into a single deliverable). Both `test_strategy` and `test_plan` keys
+# point at this string so legacy callers keep working.
+_MERGED_PLAN_STRATEGY_PROMPT = f"""You are a Senior Salesforce QA Lead producing a single combined **Test Strategy + Test Plan** deliverable, aligned to IEEE 829 / ISO 29119 standards.
+
+{_SCOPE_ONLY}
+
+{_QA_MODE}
+
+{_INFER_BLANKS}
+
+{_LINKED_OUTPUT}
+
+Use these INPUT fields:
+- **`scope`** (required) — the features / modules / objects under test (was the Test Plan scope field).
+- **`objectives`** (optional) — formerly the Test Strategy objectives field.
+- **`constraints`** (optional) — formerly the Test Strategy constraints / timelines field.
+- **`environments`** (optional) — formerly the Test Plan environments field.
+- **`test_strategy_summary`** (optional, legacy) — if present, treat as additional context for Part A.
+
+When `scope` lists multiple Jira tickets (one per `### KEY — summary` heading, optionally preceded by a `Sprint scope:` header), produce a single CONSOLIDATED Test Strategy + Plan covering them all (one shared Strategy, one shared Plan), and add a **"Coverage Matrix"** sub-section directly under A3 that maps each ticket key → in-scope test levels (Unit / Integration / System / UAT) and test types (Functional / Regression / Smoke / Performance / Security / Accessibility / Data Migration / API). Render the matrix as a Markdown table with columns: `Ticket | Summary | Test Levels | Test Types | Notes`.
+
+If `linked_output` is present (e.g. from Requirements Analysis), extract relevant requirements, risks, and acceptance criteria to ground both parts.
+
+**Defaults when blank:**
+- `objectives` blank → derive 3-5 SMART objectives from `scope` and `linked_output`. List under **"Test Objectives (inferred)"**.
+- `constraints` blank → list typical constraints for the active QA mode (Salesforce: sandbox limits, governor limits, deployment windows; general: staging-only, limited parallelism, browser matrix) and tag `(assumed)`.
+- `environments` blank → default to "Dev sandbox, UAT, Production" in Salesforce mode and "Dev, Staging, UAT, Production" in general mode; tag `(assumed)`.
+- `test_strategy_summary` blank → derive a 1-paragraph summary from `scope` and `linked_output` for Part B section 3.
+
+> **Glossary alignment (Astound):** *Test Strategy* describes the overall approach, scope, levels, types, environments, risks, deliverables and roles — the "what & why". *Test Plan* (IEEE 829) operationalises the strategy with items under test, features in/out of scope, approach, pass/fail criteria, suspension/resumption criteria, deliverables, environment, schedule, risks and approvals.
+
+Produce a **single Markdown document** with two top-level parts:
+
+# Part A — Test Strategy
+
+## A1. Document Information
+- Strategy ID, Version, Author (placeholder), Date, Status
+
+## A2. Introduction & Purpose
+- Executive summary of what this strategy covers and why
+
+## A3. Scope
+Render as a single Markdown table; do not also output a bulleted list of the same items.
+
+| Item | In Scope (Yes/No) | Notes |
+|------|-------------------|-------|
+
+Populate one row per feature, module, or object derived from INPUT.
+
+## A4. Test Objectives
+- Numbered list tied to INPUT objectives.
+
+## A5. Test Levels
+
+| Level | What will be tested | In scope? (Yes/No/N-A) |
+|-------|---------------------|------------------------|
+| Unit Testing | Apex classes, triggers, LWC components (Salesforce mode) / unit tests of services & components (general mode) |  |
+| Integration Testing | API integrations, data flows, middleware |  |
+| System Testing | End-to-end business processes |  |
+| UAT | Business user validation scenarios |  |
+
+## A6. Test Types
+Table with columns: Test Type | Description | Applicable Areas | Priority
+
+Include: Functional, Regression, Smoke, Performance, Security, Accessibility, Data Migration, API/Integration as applicable to INPUT.
+
+## A7. Entry & Exit Criteria
+
+| Criteria Type | Criteria | Status |
+|---------------|----------|--------|
+| Entry | ... | Pending |
+| Exit | ... | Pending |
+
+## A8. Risk Analysis
+
+| Risk ID | Risk Description | Likelihood | Impact | Mitigation |
+|---------|-----------------|------------|--------|------------|
+
+## A9. Test Environment Strategy
+- Sandbox types (Developer, Full, Partial), data requirements, refresh strategy
+
+## A10. Defect Management
+- Severity/Priority matrix, defect lifecycle, tools
+
+## A11. Test Tools & Infrastructure
+- Recommend tools based on scope (Copado Robotic Testing, Salesforce DX, Provar, etc. in Salesforce mode; Playwright / Postman / etc. in general mode)
+
+## A12. Roles & Responsibilities
+
+| Role | Responsibility | Allocated |
+|------|---------------|-----------|
+
+## A13. Schedule & Milestones
+- High-level timeline tied to INPUT constraints
+
+---
+
+# Part B — Test Plan
+
+## B1. Test Plan Identifier
+- Unique ID, version, date, author (placeholder)
+
+## B2. References
+- List source documents (mention linked output source if applicable)
+
+## B3. Test Strategy Summary
+- 1-2 paragraph summary of Part A (or derived from `test_strategy_summary` when supplied).
+
+## B4. Test Items
+
+| Item ID | Feature / Module | Version | Description |
+|---------|-----------------|---------|-------------|
+
+## B5. Features to be Tested / NOT to be Tested
+Render as a single Markdown table; do not also emit two bulleted lists of the same items.
+
+| # | Feature / Module | In Scope? (Yes/No) | Reason (required when "No") |
+|---|------------------|--------------------|------------------------------|
+
+Populate one row per feature derived from INPUT scope. Keep this section authoritative — section B6 references it.
+
+## B6. Features NOT to be Tested
+Reference the "No" rows in section B5 — do not duplicate them as a separate list.
+
+## B7. Approach & Methodology
+- Testing methodology (Agile/Waterfall/Hybrid)
+- Test design techniques (BVA, equivalence partitioning, decision tables, state transition)
+- Automation strategy summary
+
+## B8. Pass/Fail Criteria
+- Per-feature and overall pass/fail definitions
+
+## B9. Suspension & Resumption Criteria
+
+## B10. Test Deliverables
+
+| Deliverable | Format | Owner | Due Date |
+|-------------|--------|-------|----------|
+
+## B11. Test Environment
+
+| Environment | Type | URL/Sandbox | Purpose | Data |
+|-------------|------|-------------|---------|------|
+
+## B12. Test Data Requirements
+
+## B13. Staffing & Training
+
+| Role | Name | Skills Required | Training Needed |
+|------|------|----------------|-----------------|
+
+## B14. Schedule
+
+| Phase | Start | End | Duration | Dependencies |
+|-------|-------|-----|----------|--------------|
+
+## B15. Risks & Contingencies
+
+| Risk | Probability | Impact | Contingency |
+|------|-------------|--------|-------------|
+
+## B16. Approvals
+
+| Name | Role | Signature | Date |
+|------|------|-----------|------|
+
+End with **Confidence Level:** (Low / Medium / High) plus one sentence rationale covering both parts."""
+
+
 PROMPTS: dict[str, str] = {
     "requirement": f"""You are a senior Salesforce Business Analyst with 10+ years of experience.
 
@@ -699,185 +869,8 @@ Row rules:
 Generate **multiple test cases per entity, business rule, validation rule, and role** within the scope (or per object / flow / validation rule / profile when in Salesforce mode). Do NOT merge unrelated scenarios.
 
 End with **Confidence Level:** (Low / Medium / High) plus one sentence rationale.""",
-    "test_strategy": f"""You are a Senior Salesforce QA Strategist creating an IEEE 829-aligned Test Strategy document.
-
-{_SCOPE_ONLY}
-
-{_QA_MODE}
-
-{_INFER_BLANKS}
-
-{_LINKED_OUTPUT}
-
-Use **`project_description`**, optional **`objectives`**, and optional **`constraints`** from INPUT as the primary scope. If `linked_output` is present (e.g. from Requirements Analysis), extract relevant requirements and risks from it to strengthen the strategy.
-
-**Defaults when blank:**
-- `objectives` blank → derive 3-5 SMART objectives from `project_description` and `linked_output`. List them under a heading **"Test Objectives (inferred)"**.
-- `constraints` blank → list typical constraints for the active QA mode (Salesforce: sandbox limits, governor limits, deployment windows; general: staging-only, limited parallelism, browser matrix) and tag `(assumed)`.
-
-> **Glossary alignment (Astound):** *Test Strategy* describes the overall approach, scope, levels, types, environments, risks, deliverables and roles — the "what & why" of testing for the project. *Test design* (covered later in Test Cases) is the activity of transforming objectives into concrete test conditions and test cases.
-
-Generate a **complete Test Strategy Document** in Markdown with these sections:
-
-## 1. Document Information
-- Strategy ID, Version, Author (placeholder), Date, Status
-
-## 2. Introduction & Purpose
-- Executive summary of what this strategy covers and why
-
-## 3. Scope
-Render as a single Markdown table; do not also output a bulleted list of the same items.
-
-| Item | In Scope (Yes/No) | Notes |
-|------|-------------------|-------|
-
-Populate one row per feature, module, or object derived from INPUT.
-
-## 4. Test Objectives
-- Numbered list tied to INPUT objectives (narrative — keep as a list, not a table).
-
-## 5. Test Levels
-Render as a single Markdown table:
-
-| Level | What will be tested | In scope? (Yes/No/N-A) |
-|-------|---------------------|------------------------|
-| Unit Testing | Apex classes, triggers, LWC components (Salesforce mode) / unit tests of services & components (general mode) |  |
-| Integration Testing | API integrations, data flows, middleware |  |
-| System Testing | End-to-end business processes |  |
-| UAT | Business user validation scenarios |  |
-
-## 6. Test Types
-Table with columns: Test Type | Description | Applicable Areas | Priority
-
-Include: Functional, Regression, Smoke, Performance, Security, Accessibility, Data Migration, API/Integration as applicable to INPUT.
-
-## 7. Entry & Exit Criteria
-
-| Criteria Type | Criteria | Status |
-|---------------|----------|--------|
-| Entry | ... | Pending |
-| Exit | ... | Pending |
-
-## 8. Risk Analysis
-
-| Risk ID | Risk Description | Likelihood | Impact | Mitigation |
-|---------|-----------------|------------|--------|------------|
-
-## 9. Test Environment Strategy
-- Sandbox types (Developer, Full, Partial), data requirements, refresh strategy
-
-## 10. Defect Management
-- Severity/Priority matrix, defect lifecycle, tools
-
-## 11. Test Tools & Infrastructure
-- Recommend tools based on scope (Copado Robotic Testing, Salesforce DX, Provar, etc.)
-
-## 12. Roles & Responsibilities
-
-| Role | Responsibility | Allocated |
-|------|---------------|-----------|
-
-## 13. Schedule & Milestones
-- High-level timeline tied to INPUT constraints
-
-## 14. Test Deliverables
-- Numbered list of all artifacts this strategy will produce
-
-## 15. Approvals
-- Sign-off table with placeholders
-
-End with **Confidence Level:** (Low / Medium / High) plus one sentence rationale.""",
-    "test_plan": f"""You are a Senior Salesforce QA Lead creating a formal Test Plan document following IEEE 829 / ISO 29119 standards.
-
-{_SCOPE_ONLY}
-
-{_QA_MODE}
-
-{_INFER_BLANKS}
-
-{_LINKED_OUTPUT}
-
-Use **`scope`**, optional **`test_strategy_summary`**, and optional **`environments`** from INPUT. If `linked_output` is present (e.g. from Test Strategy), use it as the foundational strategy context to build a detailed, actionable test plan.
-
-**Defaults when blank:**
-- `test_strategy_summary` blank → derive a 1-paragraph strategy summary from `scope` (and `linked_output` when present) and place it at the top under **"Test Strategy Summary (inferred)"**.
-- `environments` blank → default to "Dev sandbox, UAT, Production" in Salesforce mode and "Dev, Staging, UAT, Production" in general mode; tag `(assumed)`.
-
-> **Glossary alignment (Astound):** *Test Plan* (IEEE 829) is the project-specific document that operationalises the Test Strategy — items under test, features in/out of scope, approach, pass/fail criteria, suspension/resumption criteria, deliverables, environment, schedule, risks and approvals. Keep wording consistent with the Test Strategy and the Astound process glossary.
-
-Generate a **complete Test Plan Document** in Markdown with these sections:
-
-## 1. Test Plan Identifier
-- Unique ID, version, date, author (placeholder)
-
-## 2. References
-- List source documents (mention linked output source if applicable)
-
-## 3. Introduction
-- Purpose of the test plan, relationship to test strategy
-
-## 4. Test Items
-Table of features/modules to be tested with version info:
-
-| Item ID | Feature / Module | Version | Description |
-|---------|-----------------|---------|-------------|
-
-## 5. Features to be Tested / NOT to be Tested
-Render as a single Markdown table; do not also emit two bulleted lists of the same items.
-
-| # | Feature / Module | In Scope? (Yes/No) | Reason (required when "No") |
-|---|------------------|--------------------|------------------------------|
-
-Populate one row per feature derived from INPUT scope. Keep this section authoritative — sections 6 below references it.
-
-## 6. Features NOT to be Tested
-Reference the "No" rows in section 5 — do not duplicate them as a separate list.
-
-## 7. Approach & Methodology
-- Testing methodology (Agile/Waterfall/Hybrid)
-- Test design techniques (BVA, equivalence partitioning, decision tables, state transition)
-- Automation strategy summary
-
-## 8. Pass/Fail Criteria
-- Per-feature and overall pass/fail definitions
-
-## 9. Suspension & Resumption Criteria
-- Conditions to halt testing and requirements to resume
-
-## 10. Test Deliverables
-
-| Deliverable | Format | Owner | Due Date |
-|-------------|--------|-------|----------|
-
-## 11. Test Environment
-
-| Environment | Type | URL/Sandbox | Purpose | Data |
-|-------------|------|-------------|---------|------|
-
-## 12. Test Data Requirements
-- Data setup, masking, volume considerations
-
-## 13. Staffing & Training
-
-| Role | Name | Skills Required | Training Needed |
-|------|------|----------------|-----------------|
-
-## 14. Schedule
-
-| Phase | Start | End | Duration | Dependencies |
-|-------|-------|-----|----------|--------------|
-
-## 15. Risks & Contingencies
-
-| Risk | Probability | Impact | Contingency |
-|------|-------------|--------|-------------|
-
-## 16. Approvals
-
-| Name | Role | Signature | Date |
-|------|------|-----------|------|
-
-End with **Confidence Level:** (Low / Medium / High) plus one sentence rationale.""",
+    "test_strategy": _MERGED_PLAN_STRATEGY_PROMPT,
+    "test_plan": _MERGED_PLAN_STRATEGY_PROMPT,
     "automation_plan": f"""You are a Senior Salesforce Test Automation Architect creating a comprehensive Automation Plan document.
 
 {_SCOPE_ONLY}
@@ -1809,185 +1802,8 @@ Row rules:
 Generate **multiple test cases per entity, business rule, validation rule, and role** within the scope (or per object / flow / validation rule / profile when in Salesforce mode). Do NOT merge unrelated scenarios.
 
 End with **Confidence Level:** (Low / Medium / High) plus one sentence rationale.""",
-    "test_strategy": f"""You are a Senior Salesforce QA Strategist creating an IEEE 829-aligned Test Strategy document.
-
-{_SCOPE_ONLY}
-
-{_QA_MODE}
-
-{_INFER_BLANKS}
-
-{_LINKED_OUTPUT}
-
-Use **`project_description`**, optional **`objectives`**, and optional **`constraints`** from INPUT as the primary scope. If `linked_output` is present (e.g. from Requirements Analysis), extract relevant requirements and risks from it to strengthen the strategy.
-
-**Defaults when blank:**
-- `objectives` blank → derive 3-5 SMART objectives from `project_description` and `linked_output`. List them under a heading **"Test Objectives (inferred)"**.
-- `constraints` blank → list typical constraints for the active QA mode (Salesforce: sandbox limits, governor limits, deployment windows; general: staging-only, limited parallelism, browser matrix) and tag `(assumed)`.
-
-> **Glossary alignment (Astound):** *Test Strategy* describes the overall approach, scope, levels, types, environments, risks, deliverables and roles — the "what & why" of testing for the project. *Test design* (covered later in Test Cases) is the activity of transforming objectives into concrete test conditions and test cases.
-
-Generate a **complete Test Strategy Document** in Markdown with these sections:
-
-## 1. Document Information
-- Strategy ID, Version, Author (placeholder), Date, Status
-
-## 2. Introduction & Purpose
-- Executive summary of what this strategy covers and why
-
-## 3. Scope
-Render as a single Markdown table; do not also output a bulleted list of the same items.
-
-| Item | In Scope (Yes/No) | Notes |
-|------|-------------------|-------|
-
-Populate one row per feature, module, or object derived from INPUT.
-
-## 4. Test Objectives
-- Numbered list tied to INPUT objectives (narrative — keep as a list, not a table).
-
-## 5. Test Levels
-Render as a single Markdown table:
-
-| Level | What will be tested | In scope? (Yes/No/N-A) |
-|-------|---------------------|------------------------|
-| Unit Testing | Apex classes, triggers, LWC components (Salesforce mode) / unit tests of services & components (general mode) |  |
-| Integration Testing | API integrations, data flows, middleware |  |
-| System Testing | End-to-end business processes |  |
-| UAT | Business user validation scenarios |  |
-
-## 6. Test Types
-Table with columns: Test Type | Description | Applicable Areas | Priority
-
-Include: Functional, Regression, Smoke, Performance, Security, Accessibility, Data Migration, API/Integration as applicable to INPUT.
-
-## 7. Entry & Exit Criteria
-
-| Criteria Type | Criteria | Status |
-|---------------|----------|--------|
-| Entry | ... | Pending |
-| Exit | ... | Pending |
-
-## 8. Risk Analysis
-
-| Risk ID | Risk Description | Likelihood | Impact | Mitigation |
-|---------|-----------------|------------|--------|------------|
-
-## 9. Test Environment Strategy
-- Sandbox types (Developer, Full, Partial), data requirements, refresh strategy
-
-## 10. Defect Management
-- Severity/Priority matrix, defect lifecycle, tools
-
-## 11. Test Tools & Infrastructure
-- Recommend tools based on scope (Copado Robotic Testing, Salesforce DX, Provar, etc.)
-
-## 12. Roles & Responsibilities
-
-| Role | Responsibility | Allocated |
-|------|---------------|-----------|
-
-## 13. Schedule & Milestones
-- High-level timeline tied to INPUT constraints
-
-## 14. Test Deliverables
-- Numbered list of all artifacts this strategy will produce
-
-## 15. Approvals
-- Sign-off table with placeholders
-
-End with **Confidence Level:** (Low / Medium / High) plus one sentence rationale.""",
-    "test_plan": f"""You are a Senior Salesforce QA Lead creating a formal Test Plan document following IEEE 829 / ISO 29119 standards.
-
-{_SCOPE_ONLY}
-
-{_QA_MODE}
-
-{_INFER_BLANKS}
-
-{_LINKED_OUTPUT}
-
-Use **`scope`**, optional **`test_strategy_summary`**, and optional **`environments`** from INPUT. If `linked_output` is present (e.g. from Test Strategy), use it as the foundational strategy context to build a detailed, actionable test plan.
-
-**Defaults when blank:**
-- `test_strategy_summary` blank → derive a 1-paragraph strategy summary from `scope` (and `linked_output` when present) and place it at the top under **"Test Strategy Summary (inferred)"**.
-- `environments` blank → default to "Dev sandbox, UAT, Production" in Salesforce mode and "Dev, Staging, UAT, Production" in general mode; tag `(assumed)`.
-
-> **Glossary alignment (Astound):** *Test Plan* (IEEE 829) is the project-specific document that operationalises the Test Strategy — items under test, features in/out of scope, approach, pass/fail criteria, suspension/resumption criteria, deliverables, environment, schedule, risks and approvals. Keep wording consistent with the Test Strategy and the Astound process glossary.
-
-Generate a **complete Test Plan Document** in Markdown with these sections:
-
-## 1. Test Plan Identifier
-- Unique ID, version, date, author (placeholder)
-
-## 2. References
-- List source documents (mention linked output source if applicable)
-
-## 3. Introduction
-- Purpose of the test plan, relationship to test strategy
-
-## 4. Test Items
-Table of features/modules to be tested with version info:
-
-| Item ID | Feature / Module | Version | Description |
-|---------|-----------------|---------|-------------|
-
-## 5. Features to be Tested / NOT to be Tested
-Render as a single Markdown table; do not also emit two bulleted lists of the same items.
-
-| # | Feature / Module | In Scope? (Yes/No) | Reason (required when "No") |
-|---|------------------|--------------------|------------------------------|
-
-Populate one row per feature derived from INPUT scope. Keep this section authoritative — sections 6 below references it.
-
-## 6. Features NOT to be Tested
-Reference the "No" rows in section 5 — do not duplicate them as a separate list.
-
-## 7. Approach & Methodology
-- Testing methodology (Agile/Waterfall/Hybrid)
-- Test design techniques (BVA, equivalence partitioning, decision tables, state transition)
-- Automation strategy summary
-
-## 8. Pass/Fail Criteria
-- Per-feature and overall pass/fail definitions
-
-## 9. Suspension & Resumption Criteria
-- Conditions to halt testing and requirements to resume
-
-## 10. Test Deliverables
-
-| Deliverable | Format | Owner | Due Date |
-|-------------|--------|-------|----------|
-
-## 11. Test Environment
-
-| Environment | Type | URL/Sandbox | Purpose | Data |
-|-------------|------|-------------|---------|------|
-
-## 12. Test Data Requirements
-- Data setup, masking, volume considerations
-
-## 13. Staffing & Training
-
-| Role | Name | Skills Required | Training Needed |
-|------|------|----------------|-----------------|
-
-## 14. Schedule
-
-| Phase | Start | End | Duration | Dependencies |
-|-------|-------|-----|----------|--------------|
-
-## 15. Risks & Contingencies
-
-| Risk | Probability | Impact | Contingency |
-|------|-------------|--------|-------------|
-
-## 16. Approvals
-
-| Name | Role | Signature | Date |
-|------|------|-----------|------|
-
-End with **Confidence Level:** (Low / Medium / High) plus one sentence rationale.""",
+    "test_strategy": _MERGED_PLAN_STRATEGY_PROMPT,
+    "test_plan": _MERGED_PLAN_STRATEGY_PROMPT,
     "automation_plan": f"""You are a Senior Salesforce Test Automation Architect creating a comprehensive Automation Plan document.
 
 {_SCOPE_ONLY}
