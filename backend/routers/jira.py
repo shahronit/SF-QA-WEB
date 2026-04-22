@@ -189,19 +189,48 @@ async def list_jira_issues(
     project_key: str,
     issue_type: str = "",
     max_results: int = 50,
+    sprint_id: int | None = None,
+    active_sprints_only: bool = False,
     user=Depends(get_current_user),
 ):
-    """Browse issues for a project, optionally filtered by issue type."""
+    """Browse issues for a project, optionally filtered by issue type and sprint.
+
+    - ``sprint_id`` narrows results to a single sprint (takes precedence).
+    - ``active_sprints_only`` (when ``sprint_id`` is unset) narrows to the
+      project's currently-open sprints.
+    """
     client = _get_client(user["username"])
     try:
         issues = client.list_issues(
             project_key=project_key,
             issue_type=issue_type or None,
             max_results=max_results,
+            sprint_id=sprint_id,
+            active_sprints_only=active_sprints_only,
         )
     except ConnectionError as e:
         raise HTTPException(400, str(e))
     return {"issues": issues}
+
+
+@router.get("/sprints")
+async def list_jira_sprints(
+    project_key: str,
+    state: str = "active,future",
+    user=Depends(get_current_user),
+):
+    """Return sprints for *project_key* by auto-detecting its first scrum board.
+
+    Always returns ``200`` with ``{board_id, board_name, sprints, reason?}``.
+    A missing board or 403 surfaces as an empty ``sprints`` list with a
+    ``reason`` field, so the frontend can hide the dropdown gracefully
+    rather than treat it as a hard error.
+    """
+    client = _get_client(user["username"])
+    try:
+        return client.list_sprints_for_project(project_key, state=state)
+    except ConnectionError as e:
+        raise HTTPException(400, str(e))
 
 
 @router.get("/issue/{issue_key}")

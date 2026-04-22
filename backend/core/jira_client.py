@@ -164,14 +164,25 @@ class JiraClient:
         project_key: str,
         issue_type: str | None = None,
         max_results: int = 50,
+        sprint_id: int | None = None,
+        active_sprints_only: bool = False,
     ) -> list[dict[str, Any]]:
-        """Browse issues for a project, optionally filtered by issue type.
+        """Browse issues for a project, optionally filtered by issue type and sprint.
+
+        - ``sprint_id`` (when set) narrows to a single sprint via JQL
+          ``sprint = {id}``.
+        - ``active_sprints_only`` (when true and ``sprint_id`` is unset)
+          narrows to currently-open sprints via ``sprint in openSprints()``.
 
         Returns a simplified list of {key, summary, status, issuetype, priority, assignee}.
         """
         jql_parts = [f"project = {project_key}"]
         if issue_type:
             jql_parts.append(f'issuetype = "{issue_type}"')
+        if sprint_id is not None:
+            jql_parts.append(f"sprint = {int(sprint_id)}")
+        elif active_sprints_only:
+            jql_parts.append("sprint in openSprints()")
         jql = " AND ".join(jql_parts) + " ORDER BY updated DESC"
         return self.search_issues(jql, max_results=max_results)
 
@@ -234,17 +245,22 @@ class JiraClient:
             "url": f"{self.base_url}/browse/{data.get('key', issue_key)}",
         }
 
-    def get_sprints(self, board_id: int) -> list[dict[str, Any]]:
-        """Return active+future sprints for a board (uses agile API)."""
-        url = f"{self.base_url}/rest/agile/1.0/board/{board_id}/sprint?state=active,future"
+    def _agile_get(self, path: str) -> dict[str, Any]:
+        """Perform a GET against the Jira Agile REST API (``/rest/agile/1.0``).
+
+        Kept separate from ``_request`` because the agile API lives at a
+        different base path and returns slightly different error envelopes.
+        Always returns a dict ({} on empty body).
+        """
+        url = f"{self.base_url}/rest/agile/1.0{path}"
         req = urllib.request.Request(url, method="GET")
         req.add_header("Authorization", self._auth_header)
         req.add_header("Accept", "application/json")
         req.add_header("User-Agent", "SF-QA-Studio/1.0")
         try:
             with urllib.request.urlopen(req, timeout=JIRA_HTTP_TIMEOUT) as resp:
-                data = json.loads(resp.read().decode() or "{}")
-                return data.get("values", [])
+                raw = resp.read().decode() or "{}"
+                return json.loads(raw) if raw.strip() else {}
         except urllib.error.HTTPError as exc:
             err_body = ""
             try:
@@ -256,6 +272,96 @@ class JiraClient:
             ) from exc
         except (socket.timeout, urllib.error.URLError, ssl.SSLError) as exc:
             raise ConnectionError(f"Cannot reach Jira agile API: {exc}") from exc
+
+    def get_sprints(self, board_id: int) -> list[dict[str, Any]]:
+        """Return active+future sprints for a board (uses agile API)."""
+        data = self._agile_get(f"/board/{board_id}/sprint?state=active,future")
+        return data.get("values", []) if isinstance(data, dict) else []
+
+    def list_boards_for_project(self, project_key: str) -> list[dict[str, Any]]:
+        """Return all agile boards (scrum + kanban) tied to *project_key*.
+
+        Each entry: ``{id, name, type}`` where ``type`` is typically
+        ``scrum`` or ``kanban``. Returns ``[]`` when the project has
+        no boards or the agile API is unavailable.
+        """
+        data = self._agile_get(
+            f"/board?projectKeyOrId={urllib.parse.quote(project_key)}"
+        )
+        result: list[dict[str, Any]] = []
+        for b in (data.get("values") or []):
+            if not isinstance(b, dict):
+                continue
+            result.append({
+                "id": b.get("id"),
+                "name": b.get("name", ""),
+                "type": b.get("type", ""),
+            })
+        return result
+
+    def list_sprints_for_project(
+        self,
+        project_key: str,
+        state: str = "active,future",
+    ) -> dict[str, Any]:
+        """Auto-detect the project's first scrum board and return its sprints.
+
+        Returns ``{board_id, board_name, sprints}`` on success, or
+        ``{board_id: None, board_name: None, sprints: [], reason: "..."}``
+        when no scrum board exists or the agile API is forbidden.
+
+        Each sprint entry mirrors Jira's payload: ``{id, name, state,
+        startDate, endDate, ...}`` so the frontend can render a useful
+        label without further lookups.
+        """
+        try:
+            boards = self.list_boards_for_project(project_key)
+        except ConnectionError as exc:
+            return {
+                "board_id": None,
+                "board_name": None,
+                "sprints": [],
+                "reason": f"agile_api_error: {exc}",
+            }
+        scrum_board = next(
+            (b for b in boards if (b.get("type") or "").lower() == "scrum"),
+            None,
+        )
+        if not scrum_board:
+            return {
+                "board_id": None,
+                "board_name": None,
+                "sprints": [],
+                "reason": "no_scrum_board",
+            }
+        try:
+            data = self._agile_get(
+                f"/board/{int(scrum_board['id'])}/sprint?state={urllib.parse.quote(state)}"
+            )
+        except ConnectionError as exc:
+            return {
+                "board_id": scrum_board.get("id"),
+                "board_name": scrum_board.get("name"),
+                "sprints": [],
+                "reason": f"sprint_fetch_error: {exc}",
+            }
+        sprints: list[dict[str, Any]] = []
+        for s in (data.get("values") or []):
+            if not isinstance(s, dict):
+                continue
+            sprints.append({
+                "id": s.get("id"),
+                "name": s.get("name", ""),
+                "state": s.get("state", ""),
+                "start_date": s.get("startDate"),
+                "end_date": s.get("endDate"),
+                "goal": s.get("goal"),
+            })
+        return {
+            "board_id": scrum_board.get("id"),
+            "board_name": scrum_board.get("name"),
+            "sprints": sprints,
+        }
 
     # ------------------------------------------------------------------
     # Full-detail fetch (parallel, partial-failure-isolated)

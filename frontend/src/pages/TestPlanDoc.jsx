@@ -15,6 +15,7 @@ export default function TestPlanDoc() {
               salesforce: 'Test scope (objects in scope)',
               general: 'Test scope (modules / entities)',
             },
+            hint: "or pick a Jira project + sprint above and use 'Select all' / 'Use entire sprint as scope'",
             type: 'textarea',
             rows: 5,
             placeholderByMode: {

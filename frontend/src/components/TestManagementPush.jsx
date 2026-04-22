@@ -317,8 +317,18 @@ export default function TestManagementPush({ markdown, agentName }) {
                   </div>
                 ) : (
                   <div className="space-y-4">
-                    <div className="flex flex-wrap items-end gap-3">
-                      <div className="flex-1 min-w-[220px]">
+                    <div className="flex items-center justify-end -mb-1">
+                      <button
+                        onClick={() => disconnect(target === 'native_jira' ? null : target)}
+                        disabled={target === 'native_jira'}
+                        className="text-xs text-gray-400 hover:text-toon-coral underline disabled:opacity-40 disabled:no-underline"
+                        title={target === 'native_jira' ? 'Disconnect Jira from the Dashboard' : 'Disconnect this target'}
+                      >
+                        Disconnect
+                      </button>
+                    </div>
+                    <div className="grid sm:grid-cols-2 gap-3 items-start">
+                      <div>
                         <label className="block text-xs font-bold text-toon-navy mb-1">Jira project</label>
                         <select
                           className="toon-input !py-2"
@@ -333,7 +343,7 @@ export default function TestManagementPush({ markdown, agentName }) {
                           ))}
                         </select>
                       </div>
-                      <div className="flex-1 min-w-[220px]">
+                      <div>
                         <label className="block text-xs font-bold text-toon-navy mb-1">
                           Linked user story <span className="font-normal text-gray-400">(optional)</span>
                         </label>
@@ -362,14 +372,6 @@ export default function TestManagementPush({ markdown, agentName }) {
                           Appended to each pushed test case description as <code>Linked story: {userStoryKey || '<KEY>'}</code>.
                         </p>
                       </div>
-                      <button
-                        onClick={() => disconnect(target === 'native_jira' ? null : target)}
-                        disabled={target === 'native_jira'}
-                        className="text-xs text-gray-400 hover:text-toon-coral underline disabled:opacity-40 disabled:no-underline"
-                        title={target === 'native_jira' ? 'Disconnect Jira from the Dashboard' : 'Disconnect this target'}
-                      >
-                        Disconnect
-                      </button>
                     </div>
 
                     {parsing ? (

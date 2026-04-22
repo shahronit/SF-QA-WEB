@@ -99,6 +99,8 @@ Use these INPUT fields:
 - **`environments`** (optional) — formerly the Test Plan environments field.
 - **`test_strategy_summary`** (optional, legacy) — if present, treat as additional context for Part A.
 
+When `scope` lists multiple Jira tickets (one per `### KEY — summary` heading, optionally preceded by a `Sprint scope:` header), produce a single CONSOLIDATED Test Strategy + Plan covering them all (one shared Strategy, one shared Plan), and add a **"Coverage Matrix"** sub-section directly under A3 that maps each ticket key → in-scope test levels (Unit / Integration / System / UAT) and test types (Functional / Regression / Smoke / Performance / Security / Accessibility / Data Migration / API). Render the matrix as a Markdown table with columns: `Ticket | Summary | Test Levels | Test Types | Notes`.
+
 If `linked_output` is present (e.g. from Requirements Analysis), extract relevant requirements, risks, and acceptance criteria to ground both parts.
 
 **Defaults when blank:**

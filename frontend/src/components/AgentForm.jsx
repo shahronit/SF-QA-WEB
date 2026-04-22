@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import toast from 'react-hot-toast'
 import api from '../api/client'
 import ReportPanel from './ReportPanel'
 import { useAgentResults, AGENT_LABELS } from '../context/AgentResultsContext'
@@ -153,7 +154,11 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
 
   const { saveResult, getAvailableResults } = useAgentResults()
   const availableResults = getAvailableResults(agentName)
-  const { connected: jiraConnected, resolveFromText } = useJira()
+  const { connected: jiraConnected, resolveFromText, getIssue: jiraGetIssue, listIssues: jiraListIssues } = useJira()
+
+  // Multi-select + sprint-scope CTAs are only meaningful on the
+  // Test Plan & Strategy agent — every other agent stays single-select.
+  const allowMultiPick = agentName === 'test_plan'
 
   // Per-field set of Jira keys we have already auto-imported, so on-blur
   // doesn't re-fetch the same ticket every time the user clicks elsewhere.
@@ -409,6 +414,98 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
     })
   }, [resolvedFields])
 
+  // Fetch full detail for a list of issues with bounded concurrency, then
+  // format the consolidated scope block. Used by both `handleJiraImportMany`
+  // (user checked rows) and `handleSprintScope` (Use entire sprint CTA).
+  const fetchAndFormatScope = useCallback(async (issueKeys, headerLine) => {
+    const concurrency = 5
+    const results = new Array(issueKeys.length)
+    let cursor = 0
+    const worker = async () => {
+      while (cursor < issueKeys.length) {
+        const i = cursor++
+        try {
+          results[i] = await jiraGetIssue(issueKeys[i])
+        } catch {
+          results[i] = null
+        }
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(concurrency, issueKeys.length) }, worker))
+    const ok = results.filter(Boolean)
+    const lines = []
+    if (headerLine) lines.push(headerLine, '')
+    lines.push(`Tickets in scope (${ok.length}):`, '')
+    for (const issue of ok) {
+      lines.push(`### ${issue.key} — ${issue.summary || '(no summary)'}`)
+      const meta = []
+      if (issue.status) meta.push(`Status: ${issue.status}`)
+      if (issue.issuetype) meta.push(`Type: ${issue.issuetype}`)
+      if (issue.priority) meta.push(`Priority: ${issue.priority}`)
+      if (meta.length) lines.push(meta.join(' | '))
+      const desc = (issue.description || '').trim()
+      if (desc) {
+        lines.push('Description:')
+        lines.push(desc.length > 800 ? `${desc.slice(0, 800)}…` : desc)
+      } else {
+        lines.push('Description: (none)')
+      }
+      lines.push('')
+    }
+    return { block: lines.join('\n').trimEnd(), count: ok.length }
+  }, [jiraGetIssue])
+
+  // Write a consolidated scope block into the primary textarea
+  // (replacing whatever was there — multi-import is a "set scope" gesture,
+  // not an append, otherwise the form fills with stacked sprint dumps).
+  const writeScopeBlock = useCallback((block) => {
+    const textareaFields = resolvedFields.filter(f => f.type === 'textarea')
+    const primaryArea =
+      textareaFields.find(f => /requirement|story|description|scope|test_cases|test_cases_or_scope/i.test(f.key)) ||
+      textareaFields[0]
+    if (!primaryArea) return
+    setValues(prev => ({ ...prev, [primaryArea.key]: block }))
+  }, [resolvedFields])
+
+  const handleJiraImportMany = useCallback(async (issuesList) => {
+    if (!issuesList?.length) return
+    const t = toast.loading(`Importing ${issuesList.length} ticket${issuesList.length === 1 ? '' : 's'}…`)
+    try {
+      const { block, count } = await fetchAndFormatScope(
+        issuesList.map(it => it.key),
+        null,
+      )
+      writeScopeBlock(block)
+      toast.success(`Loaded ${count} ticket${count === 1 ? '' : 's'} into scope`, { id: t })
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || 'Failed to import tickets', { id: t })
+    }
+  }, [fetchAndFormatScope, writeScopeBlock])
+
+  const handleSprintScope = useCallback(async ({ projectKey, sprintId, sprintName }) => {
+    if (!projectKey || !sprintId) return
+    const t = toast.loading(`Fetching sprint "${sprintName}"…`)
+    try {
+      const list = await jiraListIssues(projectKey, {
+        sprintId,
+        maxResults: 200,
+      })
+      if (!list.length) {
+        toast.error(`Sprint "${sprintName}" has no tickets`, { id: t })
+        return
+      }
+      const header = `Sprint scope: ${sprintName} (project ${projectKey}) — ${list.length} ticket${list.length === 1 ? '' : 's'}`
+      const { block, count } = await fetchAndFormatScope(
+        list.map(it => it.key),
+        header,
+      )
+      writeScopeBlock(block)
+      toast.success(`Loaded ${count} ticket${count === 1 ? '' : 's'} from "${sprintName}" — click Generate`, { id: t })
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || 'Failed to load sprint', { id: t })
+    }
+  }, [jiraListIssues, fetchAndFormatScope, writeScopeBlock])
+
   const activeProject = projects.find(p => p.slug === selectedProject)
 
   return (
@@ -496,8 +593,17 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
         )}
       </div>
 
-      {/* Jira issue picker (only when connected) */}
-      {jiraConnected && <JiraIssuePicker onImport={handleJiraImport} />}
+      {/* Jira issue picker (only when connected). The Test Plan & Strategy
+          agent gets multi-select + 'Use entire sprint as scope'; every
+          other agent stays single-select. */}
+      {jiraConnected && (
+        <JiraIssuePicker
+          onImport={handleJiraImport}
+          multiSelect={allowMultiPick}
+          onImportMany={allowMultiPick ? handleJiraImportMany : undefined}
+          onUseSprintScope={allowMultiPick ? handleSprintScope : undefined}
+        />
+      )}
 
       {/* Linked output selector — always rendered so users discover the
           chaining feature even before any prior runs exist. Hidden on
@@ -690,31 +796,15 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
         </motion.button>
       </div>
 
-      <Confetti trigger={confettiTrigger} />
-
-      {/* "Boy on a laptop" 3D-styled waiting scene.
-          - When the user just clicked Generate and no tokens have arrived
-            yet (loading && !result), the big hero version takes the
-            place where the ReportPanel will eventually appear so the
-            user has something engaging to look at instead of a blank
-            wait.
-          - Once content starts streaming (loading && result), the big
-            scene fades out and a compact banner sits above the live
-            ReportPanel so the user still sees the "AI is still working"
-            cue while watching the streamed text. */}
+      {/* "Boy on a laptop" waiting scene — only rendered while we are
+          still waiting for the first token. As soon as content starts
+          streaming, ReportPanel takes over and shows its own inline
+          "Streaming…" indicator, so we don't need a second scene. */}
       <AnimatePresence mode="wait">
         {loading && !result && (
           <GeneratingScene key="hero-scene" size="lg" />
         )}
       </AnimatePresence>
-
-      {loading && result && (
-        <GeneratingScene
-          size="sm"
-          caption="Still streaming…"
-          subCaption="The AI is still writing your report."
-        />
-      )}
 
       {/* No keyed AnimatePresence wrapper here: ReportPanel has its own
           entrance animation. A keyed wrapper would re-mount the panel
@@ -729,6 +819,11 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
           loading={loading}
         />
       )}
+
+      {/* Confetti is a fixed-position overlay — kept outside the
+          space-y stack so it never contributes a phantom margin
+          between the action buttons and the Report panel. */}
+      <Confetti trigger={confettiTrigger} />
     </div>
   )
 }

@@ -119,7 +119,7 @@ export default function ReportPanel({ content, agentName, sheetTitle, stamp, loa
     <motion.div
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
-      className="toon-card mt-6"
+      className="toon-card"
     >
       <div className="flex items-center justify-between gap-2 mb-4">
         <div className="flex items-center gap-2">
