@@ -115,6 +115,7 @@ class PushRequest(BaseModel):
     project_key: str
     testcases: list[TestCaseDTO]
     issuetype: str | None = None  # only honoured for native_jira (default 'Test')
+    user_story_key: str | None = None  # appended to each test case description
 
 
 # ---------------------------------------------------------------------------
@@ -233,6 +234,19 @@ async def push(body: PushRequest, user=Depends(get_current_user)) -> dict[str, A
         raise HTTPException(400, "No test cases supplied.")
     if not body.project_key:
         raise HTTPException(400, "project_key is required.")
+
+    # Append "Linked story: <KEY>" to every test case's preconditions so the
+    # link surfaces on every target's description / objective field. We do not
+    # call Jira's issue-link API — per product decision the story key is just
+    # textual context for traceability.
+    story_key = (body.user_story_key or "").strip()
+    if story_key:
+        for dto in body.testcases:
+            tag = f"Linked story: {story_key}"
+            dto.preconditions = (
+                f"{(dto.preconditions or '').rstrip()}\n\n{tag}"
+                if dto.preconditions else tag
+            )
 
     target = body.target
     results: list[dict[str, Any]] = []

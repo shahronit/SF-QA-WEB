@@ -630,6 +630,32 @@ class JiraClient:
             "url": f"{self.base_url}/browse/{issue_key}",
         }
 
+    def create_issue_link(
+        self,
+        link_type: str,
+        inward_key: str,
+        outward_key: str,
+    ) -> None:
+        """Create a Jira issue link of *link_type* between two issues.
+
+        Maps to ``POST /rest/api/3/issueLink``. The ``inwardIssue`` is the
+        new issue (e.g. the freshly created bug) and ``outwardIssue`` is
+        the ticket the user picked. Jira derives the inward/outward verb
+        labels from the link type (e.g. ``Relates`` ↔ ``relates to``).
+
+        Raises :class:`ConnectionError` on HTTP / network failure so the
+        caller can surface a per-issue error without aborting the whole
+        bug-creation flow.
+        """
+        if not link_type or not inward_key or not outward_key:
+            raise ConnectionError("link_type, inward_key, and outward_key are all required.")
+        payload = {
+            "type": {"name": link_type},
+            "inwardIssue": {"key": inward_key},
+            "outwardIssue": {"key": outward_key},
+        }
+        self._request("POST", "/issueLink", payload)
+
     def create_issue(
         self,
         project_key: str,

@@ -4,7 +4,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import api from '../api/client'
 import ReportPanel from './ReportPanel'
-import { useAgentResults } from '../context/AgentResultsContext'
+import { useAgentResults, AGENT_LABELS } from '../context/AgentResultsContext'
 import { useJira } from '../context/JiraContext'
 import JiraIssuePicker from './JiraIssuePicker'
 import { Stagger, StaggerItem } from './motion/Stagger'
@@ -144,6 +144,9 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
   const [selectedProject, setSelectedProject] = useState('')
   const [linkedAgent, setLinkedAgent] = useState('')
   const [showLinkedPreview, setShowLinkedPreview] = useState(false)
+  // Past-session results pulled from /history when no in-session results exist.
+  // Each entry mirrors the in-session shape ({name, label, content, timestamp}).
+  const [historicalRuns, setHistoricalRuns] = useState([])
   const [shakeKeys, setShakeKeys] = useState({})
   const [confettiTrigger, setConfettiTrigger] = useState(0)
   const [qaMode, setQaMode] = useQaMode()
@@ -175,6 +178,33 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
     }
   }, [fetchProjects])
 
+  // Fall back to /history when no in-session results exist so the Link
+  // Previous Agent Output dropdown still has something to chain. We
+  // skip the requirements agent entirely (the card is hidden there).
+  useEffect(() => {
+    if (agentName === 'requirement') return
+    if (availableResults.length > 0) return
+    let cancelled = false
+    api.get('/history/', { params: { limit: 10 } })
+      .then(({ data }) => {
+        if (cancelled) return
+        const records = (data?.records || []).slice(0, 10)
+        const mapped = records
+          .filter(rec => rec.agent && rec.agent !== agentName)
+          .map((rec, idx) => ({
+            name: `history:${idx}`,
+            label: AGENT_LABELS[rec.agent] || rec.agent,
+            content: rec.output || rec.output_preview || '',
+            timestamp: rec.ts ? Date.parse(rec.ts) || Date.now() : Date.now(),
+            source: 'history',
+          }))
+          .filter(r => r.content)
+        setHistoricalRuns(mapped)
+      })
+      .catch(() => { if (!cancelled) setHistoricalRuns([]) })
+    return () => { cancelled = true }
+  }, [agentName, availableResults.length])
+
   const handleChange = (key, val) => setValues(prev => ({ ...prev, [key]: val }))
 
   // Resolve per-mode field properties and drop fields that are mode-gated out.
@@ -201,7 +231,9 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
   const allRequiredFilled = requiredFields.every(f => values[f.key]?.trim?.())
   const canGenerate = allRequiredFilled && !loading
 
-  const selectedLinked = availableResults.find(r => r.name === linkedAgent)
+  const selectedLinked =
+    availableResults.find(r => r.name === linkedAgent) ||
+    historicalRuns.find(r => r.name === linkedAgent)
 
   const handleRun = async () => {
     if (loading) return
@@ -468,7 +500,9 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
       {jiraConnected && <JiraIssuePicker onImport={handleJiraImport} />}
 
       {/* Linked output selector — always rendered so users discover the
-          chaining feature even before any prior runs exist. */}
+          chaining feature even before any prior runs exist. Hidden on
+          the Requirements agent (it has no upstream agent to chain from). */}
+      {agentName !== 'requirement' && (
       <div className="toon-card !p-4">
         <div className="flex items-center gap-3">
           <span className="w-9 h-9 rounded-xl bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center text-white text-sm shadow-toon">
@@ -483,28 +517,37 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
               className="toon-input !py-2"
               value={linkedAgent}
               onChange={e => { setLinkedAgent(e.target.value); setShowLinkedPreview(false) }}
-              disabled={availableResults.length === 0}
+              disabled={availableResults.length === 0 && historicalRuns.length === 0}
             >
-              {availableResults.length === 0 ? (
-                <option value="">— No previous agent runs in this session yet —</option>
+              {availableResults.length === 0 && historicalRuns.length === 0 ? (
+                <option value="">— No previous agent runs available —</option>
               ) : (
                 <>
                   <option value="">— No linked output —</option>
-                  {availableResults.map(r => (
-                    <option key={r.name} value={r.name}>
-                      {r.label} ({timeAgo(r.timestamp)})
-                    </option>
-                  ))}
+                  {availableResults.length > 0 && (
+                    <optgroup label="This session">
+                      {availableResults.map(r => (
+                        <option key={r.name} value={r.name}>
+                          {r.label} ({timeAgo(r.timestamp)})
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
+                  {historicalRuns.length > 0 && (
+                    <optgroup label="From past sessions">
+                      {historicalRuns.map(r => (
+                        <option key={r.name} value={r.name}>
+                          {r.label} ({timeAgo(r.timestamp)})
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
                 </>
               )}
             </select>
-            {availableResults.length === 0 && (
+            {availableResults.length === 0 && historicalRuns.length === 0 && (
               <p className="text-xs text-gray-500 mt-1.5">
-                Run another agent first, or open an earlier result from{' '}
-                <a href="/history" className="text-toon-blue font-semibold hover:underline">
-                  History
-                </a>{' '}
-                to chain its output here.
+                No prior runs available — generate one to chain its output here.
               </p>
             )}
           </div>
@@ -550,6 +593,7 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
           </div>
         )}
       </div>
+      )}
 
       {/* Primary form fields (required-by-default) */}
       <Stagger className="space-y-4" delayChildren={0.1} staggerChildren={0.05}>

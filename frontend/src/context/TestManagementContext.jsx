@@ -70,9 +70,10 @@ export function TestManagementProvider({ children }) {
     return data
   }, [])
 
-  const push = useCallback(async ({ target, project_key, testcases, issuetype }) => {
+  const push = useCallback(async ({ target, project_key, testcases, issuetype, user_story_key }) => {
     const body = { target, project_key, testcases }
     if (issuetype) body.issuetype = issuetype
+    if (user_story_key) body.user_story_key = user_story_key
     const { data } = await api.post('/test-management/push', body)
     return data
   }, [])

@@ -105,6 +105,11 @@ class JiraCreateBugRequest(BaseModel):
     project_key: str
     summary: str
     description: str
+    # Optional issue link — when set, after the bug is created we attempt to
+    # link it to the chosen ticket using the given link type. Failures here
+    # are non-fatal: the bug is still returned, with a ``link_error`` field.
+    linked_issue_key: str | None = None
+    link_type: str = "Relates"
     # Legacy clients may still send these — they are accepted but ignored when
     # an active session exists.
     jira_url: str | None = None
@@ -288,6 +293,21 @@ async def create_bug(body: JiraCreateBugRequest, user=Depends(get_current_user))
     else:
         raise HTTPException(401, "Not connected to Jira and no credentials provided.")
     try:
-        return client.create_bug(body.project_key, body.summary, body.description)
+        created = client.create_bug(body.project_key, body.summary, body.description)
     except ConnectionError as e:
         raise HTTPException(400, str(e))
+
+    linked_key = (body.linked_issue_key or "").strip()
+    if linked_key:
+        link_type = (body.link_type or "Relates").strip() or "Relates"
+        try:
+            client.create_issue_link(link_type, created["key"], linked_key)
+            created["linked_issue_key"] = linked_key
+            created["link_type"] = link_type
+        except ConnectionError as exc:
+            # Bug already exists in Jira — surface the link failure but
+            # do not roll back; the user can re-link manually.
+            created["linked_issue_key"] = linked_key
+            created["link_type"] = link_type
+            created["link_error"] = str(exc)
+    return created

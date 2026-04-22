@@ -114,7 +114,7 @@ function ConnectZephyr({ onDone }) {
 
 export default function TestManagementPush({ markdown, agentName }) {
   const { status, refreshStatus, parse, push, disconnect } = useTestManagement()
-  const { projects, connected: jiraConnected } = useJira()
+  const { projects, connected: jiraConnected, listIssues } = useJira()
   const [open, setOpen] = useState(false)
   const [target, setTarget] = useState('xray')
   const [parsing, setParsing] = useState(false)
@@ -123,6 +123,9 @@ export default function TestManagementPush({ markdown, agentName }) {
   const [selected, setSelected] = useState({})
   const [titleEdits, setTitleEdits] = useState({})
   const [projectKey, setProjectKey] = useState('')
+  const [userStoryKey, setUserStoryKey] = useState('')
+  const [stories, setStories] = useState([])
+  const [storiesLoading, setStoriesLoading] = useState(false)
   const [results, setResults] = useState(null)
 
   const targetConnected = useMemo(() => {
@@ -138,7 +141,29 @@ export default function TestManagementPush({ markdown, agentName }) {
     setTitleEdits({})
     setResults(null)
     setProjectKey('')
+    setUserStoryKey('')
+    setStories([])
   }
+
+  // When the user picks a Jira project, fetch its Stories so the
+  // user-story field can offer typeahead suggestions. We always request
+  // via JiraContext so we use the active Jira session — this works for
+  // all three targets as long as Jira is connected. If Jira is not
+  // connected the field stays free-text.
+  useEffect(() => {
+    if (!open) return
+    if (!projectKey || !jiraConnected) {
+      setStories([])
+      return
+    }
+    let cancelled = false
+    setStoriesLoading(true)
+    listIssues(projectKey, 'Story', 50)
+      .then(list => { if (!cancelled) setStories(list || []) })
+      .catch(() => { if (!cancelled) setStories([]) })
+      .finally(() => { if (!cancelled) setStoriesLoading(false) })
+    return () => { cancelled = true }
+  }, [open, projectKey, jiraConnected, listIssues])
 
   const openModal = async () => {
     setOpen(true)
@@ -198,6 +223,7 @@ export default function TestManagementPush({ markdown, agentName }) {
         target,
         project_key: projectKey,
         testcases: payload,
+        user_story_key: userStoryKey.trim() || null,
       })
       setResults(data)
       if (data.failed === 0) {
@@ -297,7 +323,7 @@ export default function TestManagementPush({ markdown, agentName }) {
                         <select
                           className="toon-input !py-2"
                           value={projectKey}
-                          onChange={e => setProjectKey(e.target.value)}
+                          onChange={e => { setProjectKey(e.target.value); setUserStoryKey('') }}
                         >
                           <option value="">— Select project —</option>
                           {(projects || []).map(p => (
@@ -306,6 +332,35 @@ export default function TestManagementPush({ markdown, agentName }) {
                             </option>
                           ))}
                         </select>
+                      </div>
+                      <div className="flex-1 min-w-[220px]">
+                        <label className="block text-xs font-bold text-toon-navy mb-1">
+                          Linked user story <span className="font-normal text-gray-400">(optional)</span>
+                        </label>
+                        <input
+                          list="tm-story-list"
+                          className="toon-input !py-2"
+                          value={userStoryKey}
+                          onChange={e => setUserStoryKey(e.target.value)}
+                          placeholder={
+                            !jiraConnected
+                              ? 'e.g. ABC-123 (Jira not connected — free text)'
+                              : !projectKey
+                                ? 'Select a project to load stories'
+                                : storiesLoading
+                                  ? 'Loading stories…'
+                                  : 'Type or pick a story key (e.g. ABC-123)'
+                          }
+                          disabled={pushing}
+                        />
+                        <datalist id="tm-story-list">
+                          {(stories || []).map(s => (
+                            <option key={s.key} value={s.key}>{s.summary}</option>
+                          ))}
+                        </datalist>
+                        <p className="text-[11px] text-gray-400 mt-1">
+                          Appended to each pushed test case description as <code>Linked story: {userStoryKey || '<KEY>'}</code>.
+                        </p>
                       </div>
                       <button
                         onClick={() => disconnect(target === 'native_jira' ? null : target)}
@@ -334,8 +389,8 @@ export default function TestManagementPush({ markdown, agentName }) {
                           </button>
                           <span>{selectedCount} of {cases.length} selected</span>
                         </div>
-                        <div className="border border-gray-200 rounded-2xl overflow-hidden">
-                          <table className="w-full text-sm">
+                        <div className="border border-gray-200 rounded-2xl overflow-x-auto">
+                          <table className="w-full min-w-[640px] text-sm">
                             <thead className="bg-gray-50 text-xs text-gray-500 uppercase">
                               <tr>
                                 <th className="p-2 w-10"></th>

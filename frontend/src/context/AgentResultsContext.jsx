@@ -2,7 +2,7 @@ import { createContext, useContext, useState, useCallback } from 'react'
 
 const AgentResultsContext = createContext(null)
 
-const AGENT_LABELS = {
+export const AGENT_LABELS = {
   requirement: 'Requirements Analysis',
   testcase: 'Test Cases',
   bug_report: 'Bug Report',
