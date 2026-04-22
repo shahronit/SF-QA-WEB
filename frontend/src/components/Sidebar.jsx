@@ -47,9 +47,8 @@ const navGroups = [
   },
 ]
 
-const PROVIDER_ORDER = ['openai', 'gemini']
+const PROVIDER_ORDER = ['gemini']
 const PROVIDER_META = {
-  openai: { icon: '🤖', label: 'ChatGPT', color: 'from-emerald-500 to-teal-400' },
   gemini: { icon: '💎', label: 'Gemini Pro', color: 'from-blue-500 to-cyan-400' },
 }
 

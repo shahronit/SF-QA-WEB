@@ -208,10 +208,13 @@ class SFQAOrchestrator:
         self._model_chains: dict[str, list[str]] = {}
         self._max_retries_map: dict[str, int] = {}
 
-        if openai_api_key:
-            self._providers["openai"] = _OpenAIProvider(openai_api_key)
-            self._model_chains["openai"] = [openai_model] + (openai_fallbacks or [])
-            self._max_retries_map["openai"] = openai_max_retries
+        # NOTE: OpenAI / ChatGPT is intentionally not registered as a
+        # selectable provider. The class and config plumbing remain so it
+        # can be re-enabled later by un-commenting the block below.
+        # if openai_api_key:
+        #     self._providers["openai"] = _OpenAIProvider(openai_api_key)
+        #     self._model_chains["openai"] = [openai_model] + (openai_fallbacks or [])
+        #     self._max_retries_map["openai"] = openai_max_retries
 
         if gemini_api_key:
             self._providers["gemini"] = _GeminiProvider(gemini_api_key)
@@ -219,7 +222,7 @@ class SFQAOrchestrator:
             self._max_retries_map["gemini"] = gemini_max_retries
 
         self._active_provider = provider if provider in self._providers else next(
-            iter(self._providers), "openai"
+            iter(self._providers), "gemini"
         )
 
     # -- public helpers --
