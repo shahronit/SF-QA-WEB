@@ -36,6 +36,10 @@ class Settings(BaseSettings):
     FIREBASE_CREDENTIALS_JSON: str = ""
     FIREBASE_PROJECT_ID: str = ""
 
+    GOOGLE_OAUTH_CLIENT_ID: str = ""
+    GOOGLE_OAUTH_CLIENT_SECRET: str = ""
+    GOOGLE_OAUTH_REDIRECT_URI: str = "http://localhost:8080/api/gdrive/callback"
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

@@ -5,11 +5,15 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import re
 import socket
 import ssl
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timezone
 from typing import Any
 
 log = logging.getLogger(__name__)
@@ -254,6 +258,349 @@ class JiraClient:
             raise ConnectionError(f"Cannot reach Jira agile API: {exc}") from exc
 
     # ------------------------------------------------------------------
+    # Full-detail fetch (parallel, partial-failure-isolated)
+    # ------------------------------------------------------------------
+
+    def get_full_issue(
+        self,
+        issue_key: str,
+        gdrive_client: Any | None = None,
+    ) -> dict[str, Any]:
+        """Fetch all available detail categories for a Jira issue in parallel.
+
+        Uses a ThreadPoolExecutor (max 8 workers) mirroring the p-limit(8)
+        pattern from the spec.  Each category fetcher is isolated: a failure
+        in one category records an error entry and does not abort the others.
+
+        If a connected ``gdrive_client`` is supplied, any Google Drive URLs
+        detected in the issue description, comments, remote links, or
+        attachments are fetched in parallel and their extracted text is
+        returned under ``gdrive_files``. ``gdrive_links_detected`` always
+        surfaces the URLs so the UI can prompt for connection when no
+        client is available.
+
+        Returns a structured dict with a ``fetch_metadata`` summary,
+        per-category results, and an ``errors`` list.
+        """
+        started = time.monotonic()
+        errors: list[dict[str, Any]] = []
+
+        # Core is fetched first — other categories are independent and only
+        # need the issue key, so they can all run in parallel after this.
+        core: dict[str, Any] = {}
+        try:
+            core = self._fetch_core(issue_key)
+        except Exception as exc:  # noqa: BLE001
+            errors.append({"category": "core", "reason": "NETWORK_ERROR", "message": str(exc)})
+
+        parallel_tasks: dict[str, Any] = {
+            "comments":     self._fetch_comments,
+            "changelog":    self._fetch_changelog,
+            "worklogs":     self._fetch_worklogs,
+            "remote_links": self._fetch_remote_links,
+            "watchers":     self._fetch_watchers,
+            "votes":        self._fetch_votes,
+            "transitions":  self._fetch_transitions,
+        }
+
+        results: dict[str, Any] = {"core": core}
+
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            futures = {
+                executor.submit(fn, issue_key): name
+                for name, fn in parallel_tasks.items()
+            }
+            for future in as_completed(futures):
+                name = futures[future]
+                try:
+                    results[name] = future.result()
+                except ConnectionError as exc:
+                    msg = str(exc)
+                    reason = (
+                        "PERMISSION_DENIED" if "403" in msg else
+                        "NOT_FOUND" if "404" in msg else
+                        "RATE_LIMITED" if "429" in msg else
+                        "NETWORK_ERROR"
+                    )
+                    results[name] = [] if name not in ("votes", "worklogs", "watchers") else {}
+                    errors.append({"category": name, "reason": reason, "message": msg})
+                except Exception as exc:  # noqa: BLE001
+                    results[name] = []
+                    errors.append({"category": name, "reason": "PARSE_ERROR", "message": str(exc)})
+
+        # Derived categories — no extra HTTP calls
+        results["participants"] = _derive_participants(
+            core, results.get("comments", [])
+        )
+
+        # Extract sprint / epic / attachments / linked_issues / subtasks from raw fields
+        raw_fields = core.pop("_raw_fields", {})
+        results["attachments"] = _extract_attachments(raw_fields)
+        results["linked_issues"] = _extract_linked_issues(raw_fields)
+        results["subtasks"] = _extract_subtasks(raw_fields)
+        results["sprint"] = _extract_sprint(raw_fields)
+
+        epic_key = _extract_epic_key(raw_fields)
+        results["epic"] = self._fetch_epic(epic_key) if epic_key else None
+
+        # Google Drive auto-fetch — best-effort, non-fatal on failure.
+        detected_gdrive = _extract_gdrive_links(
+            core,
+            results.get("comments", []),
+            results.get("remote_links", []),
+            results.get("attachments", []),
+        )
+        results["gdrive_links_detected"] = detected_gdrive
+        results["gdrive_files"] = []
+        if detected_gdrive and gdrive_client is not None:
+            try:
+                results["gdrive_files"] = gdrive_client.read_many(detected_gdrive)
+            except Exception as exc:  # noqa: BLE001
+                errors.append({
+                    "category": "gdrive_files",
+                    "reason": "NETWORK_ERROR",
+                    "message": str(exc),
+                })
+
+        elapsed_ms = int((time.monotonic() - started) * 1000)
+        failed_category_names = {e["category"] for e in errors}
+        succeeded = [k for k in results if k not in ("errors", "fetch_metadata") and k not in failed_category_names]
+
+        results["errors"] = errors
+        results["fetch_metadata"] = {
+            "issue_key": issue_key,
+            "fetched_at": datetime.now(timezone.utc).isoformat(),
+            "duration_ms": elapsed_ms,
+            "jira_base_url": self.base_url,
+            "succeeded_categories": succeeded,
+            "failed_categories": errors,
+        }
+
+        return results
+
+    # ------------------------------------------------------------------
+    # Private category fetchers
+    # ------------------------------------------------------------------
+
+    def _fetch_core(self, issue_key: str) -> dict[str, Any]:
+        """Fetch enriched core issue fields using expand."""
+        field_list = (
+            "summary,description,issuetype,status,priority,resolution,"
+            "assignee,reporter,creator,project,components,labels,"
+            "fixVersions,versions,environment,created,updated,duedate,"
+            "resolutiondate,timeoriginalestimate,timeestimate,timespent,"
+            "aggregatetimespent,votes,watches,subtasks,attachment,"
+            "issuelinks,parent,customfield_10014,customfield_10016,"
+            "customfield_10020,security"
+        )
+        data = self._request(
+            "GET",
+            f"/issue/{issue_key}?expand=renderedFields,names&fields={field_list}",
+        )
+        fields = data.get("fields", {}) or {}
+        description = fields.get("description")
+        description_text = _adf_to_text(description) if isinstance(description, dict) else (description or "")
+
+        parent = fields.get("parent")
+        parent_info: dict[str, Any] | None = None
+        if parent:
+            parent_info = {
+                "key": parent.get("key", ""),
+                "summary": ((parent.get("fields") or {}).get("summary") or ""),
+            }
+
+        return {
+            "key": data.get("key", issue_key),
+            "summary": fields.get("summary", ""),
+            "description": description_text,
+            "issuetype": (fields.get("issuetype") or {}).get("name", ""),
+            "status": (fields.get("status") or {}).get("name", ""),
+            "status_category": ((fields.get("status") or {}).get("statusCategory") or {}).get("name", ""),
+            "priority": (fields.get("priority") or {}).get("name", ""),
+            "resolution": (fields.get("resolution") or {}).get("name"),
+            "assignee": _person(fields.get("assignee")),
+            "reporter": _person(fields.get("reporter")),
+            "creator": _person(fields.get("creator")),
+            "project": {
+                "key": (fields.get("project") or {}).get("key", ""),
+                "name": (fields.get("project") or {}).get("name", ""),
+            },
+            "components": [c.get("name", "") for c in (fields.get("components") or [])],
+            "labels": fields.get("labels") or [],
+            "fix_versions": [v.get("name", "") for v in (fields.get("fixVersions") or [])],
+            "affects_versions": [v.get("name", "") for v in (fields.get("versions") or [])],
+            "environment": fields.get("environment"),
+            "created": fields.get("created"),
+            "updated": fields.get("updated"),
+            "due_date": fields.get("duedate"),
+            "resolution_date": fields.get("resolutiondate"),
+            "time_original_estimate": fields.get("timeoriginalestimate"),
+            "time_estimate": fields.get("timeestimate"),
+            "time_spent": fields.get("timespent"),
+            "aggregate_time_spent": fields.get("aggregatetimespent"),
+            "story_points": fields.get("customfield_10016"),
+            "epic_link": fields.get("customfield_10014"),
+            "parent": parent_info,
+            "url": f"{self.base_url}/browse/{data.get('key', issue_key)}",
+            # Kept for extraction helpers in get_full_issue(); stripped before returning
+            "_raw_fields": fields,
+        }
+
+    def _paginate(self, path: str, results_key: str, page_size: int = 100) -> list[dict[str, Any]]:
+        """Generic offset paginator for Jira REST endpoints."""
+        items: list[dict[str, Any]] = []
+        start_at = 0
+        while True:
+            sep = "&" if "?" in path else "?"
+            data = self._request("GET", f"{path}{sep}startAt={start_at}&maxResults={page_size}")
+            if not isinstance(data, dict):
+                break
+            batch = data.get(results_key, []) or []
+            items.extend(batch)
+            total = data.get("total", 0)
+            is_last = data.get("isLast", False)
+            start_at += len(batch)
+            if is_last or not batch or start_at >= total:
+                break
+        return items
+
+    def _fetch_comments(self, issue_key: str) -> list[dict[str, Any]]:
+        """Fetch all comments with ADF-to-text conversion."""
+        entries = self._paginate(f"/issue/{issue_key}/comment?orderBy=created", "comments")
+        result = []
+        for c in entries:
+            body = c.get("body")
+            result.append({
+                "id": c.get("id"),
+                "author": _person(c.get("author")),
+                "body": _adf_to_text(body) if isinstance(body, dict) else (body or ""),
+                "created": c.get("created"),
+                "updated": c.get("updated"),
+                "visibility": c.get("visibility"),
+                "jsd_public": c.get("jsdPublic"),
+            })
+        return result
+
+    def _fetch_changelog(self, issue_key: str) -> list[dict[str, Any]]:
+        """Fetch the full change history with pagination."""
+        entries = self._paginate(f"/issue/{issue_key}/changelog", "values")
+        return [
+            {
+                "id": entry.get("id"),
+                "author": _person(entry.get("author")),
+                "created": entry.get("created"),
+                "items": [
+                    {
+                        "field": it.get("field"),
+                        "field_type": it.get("fieldtype"),
+                        "from": it.get("from"),
+                        "from_string": it.get("fromString"),
+                        "to": it.get("to"),
+                        "to_string": it.get("toString"),
+                    }
+                    for it in (entry.get("items") or [])
+                ],
+            }
+            for entry in entries
+        ]
+
+    def _fetch_worklogs(self, issue_key: str) -> dict[str, Any]:
+        """Fetch worklog entries and aggregate total time spent."""
+        entries = self._paginate(f"/issue/{issue_key}/worklog", "worklogs")
+        total_seconds = sum(w.get("timeSpentSeconds", 0) for w in entries)
+        return {
+            "total_time_spent_seconds": total_seconds,
+            "total_worklogs": len(entries),
+            "entries": [
+                {
+                    "id": w.get("id"),
+                    "author": _person(w.get("author")),
+                    "comment": _adf_to_text(w["comment"]) if isinstance(w.get("comment"), dict) else (w.get("comment") or ""),
+                    "started": w.get("started"),
+                    "created": w.get("created"),
+                    "updated": w.get("updated"),
+                    "time_spent": w.get("timeSpent"),
+                    "time_spent_seconds": w.get("timeSpentSeconds", 0),
+                }
+                for w in entries
+            ],
+        }
+
+    def _fetch_remote_links(self, issue_key: str) -> list[dict[str, Any]]:
+        """Fetch remote links (Confluence pages, external URLs, etc.)."""
+        data = self._request("GET", f"/issue/{issue_key}/remotelink")
+        if not isinstance(data, list):
+            return []
+        return [
+            {
+                "id": link.get("id"),
+                "relationship": link.get("relationship"),
+                "url": (link.get("object") or {}).get("url"),
+                "title": (link.get("object") or {}).get("title"),
+                "summary": (link.get("object") or {}).get("summary"),
+                "resolved": ((link.get("object") or {}).get("status") or {}).get("resolved"),
+            }
+            for link in data
+        ]
+
+    def _fetch_watchers(self, issue_key: str) -> dict[str, Any]:
+        """Fetch the watcher list and count."""
+        data = self._request("GET", f"/issue/{issue_key}/watchers")
+        if not isinstance(data, dict):
+            return {"watch_count": 0, "watchers": []}
+        return {
+            "watch_count": data.get("watchCount", 0),
+            "is_watching": data.get("isWatching", False),
+            "watchers": [_person(w) for w in (data.get("watchers") or [])],
+        }
+
+    def _fetch_votes(self, issue_key: str) -> dict[str, Any]:
+        """Fetch vote count for the issue."""
+        data = self._request("GET", f"/issue/{issue_key}/votes")
+        if not isinstance(data, dict):
+            return {"votes": 0, "has_voted": False}
+        return {
+            "votes": data.get("votes", 0),
+            "has_voted": data.get("hasVoted", False),
+        }
+
+    def _fetch_transitions(self, issue_key: str) -> list[dict[str, Any]]:
+        """Fetch available status transitions."""
+        data = self._request("GET", f"/issue/{issue_key}/transitions")
+        if not isinstance(data, dict):
+            return []
+        return [
+            {
+                "id": t.get("id"),
+                "name": t.get("name"),
+                "to_status": (t.get("to") or {}).get("name"),
+                "to_status_category": ((t.get("to") or {}).get("statusCategory") or {}).get("name"),
+                "has_screen": t.get("hasScreen", False),
+                "is_global": t.get("isGlobal", False),
+            }
+            for t in (data.get("transitions") or [])
+        ]
+
+    def _fetch_epic(self, epic_key: str) -> dict[str, Any] | None:
+        """Fetch summary detail for the linked epic."""
+        try:
+            data = self._request(
+                "GET",
+                f"/issue/{epic_key}?fields=summary,status,assignee,duedate,customfield_10011",
+            )
+            fields = data.get("fields", {}) or {}
+            return {
+                "key": data.get("key", epic_key),
+                "summary": fields.get("summary", ""),
+                "status": (fields.get("status") or {}).get("name", ""),
+                "assignee": _person(fields.get("assignee")),
+                "due_date": fields.get("duedate"),
+                "epic_name": fields.get("customfield_10011"),
+            }
+        except Exception:  # noqa: BLE001
+            return None
+
+    # ------------------------------------------------------------------
     # Bug creation
     # ------------------------------------------------------------------
 
@@ -349,3 +696,225 @@ def _adf_to_text(node: Any) -> str:
     elif node_type in {"bulletList", "orderedList"}:
         pass
     return text
+
+
+# ---------------------------------------------------------------------------
+# Full-issue extraction helpers (module-level, called from get_full_issue)
+# ---------------------------------------------------------------------------
+
+def _person(raw: Any) -> dict[str, str] | None:
+    """Normalise a Jira user object to a minimal dict."""
+    if not raw or not isinstance(raw, dict):
+        return None
+    return {
+        "account_id": raw.get("accountId", ""),
+        "display_name": raw.get("displayName", ""),
+        "email": raw.get("emailAddress", ""),
+        "avatar_url": (raw.get("avatarUrls") or {}).get("48x48", ""),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Google Drive link detection
+# ---------------------------------------------------------------------------
+# Matches any docs.google.com or drive.google.com URL. Trailing punctuation
+# common in prose (`,`, `.`, `)`, etc.) and angle brackets are excluded so
+# we don't pull garbage chars into the captured URL.
+_GDRIVE_URL_RE = re.compile(
+    r"https?://(?:docs|drive)\.google\.com/[^\s\"'<>)\]]+",
+    re.IGNORECASE,
+)
+
+
+def _scan_for_gdrive(text: Any, sink: list[str]) -> None:
+    """Append every Google Drive URL found in *text* to *sink* (in-order)."""
+    if not text:
+        return
+    if isinstance(text, str):
+        for match in _GDRIVE_URL_RE.findall(text):
+            sink.append(match.rstrip(".,;:"))
+    elif isinstance(text, dict):
+        for value in text.values():
+            _scan_for_gdrive(value, sink)
+    elif isinstance(text, list):
+        for item in text:
+            _scan_for_gdrive(item, sink)
+
+
+def _extract_gdrive_links(
+    core: dict[str, Any],
+    comments: list[dict[str, Any]],
+    remote_links: list[dict[str, Any]],
+    attachments: list[dict[str, Any]],
+) -> list[str]:
+    """Return unique Google Drive URLs found anywhere in the issue payload.
+
+    Scans the issue description, every comment body, every remote link URL,
+    and any attachment that looks like an external link (e.g. paperclip
+    pasted as a Google Drive URL rather than an uploaded binary).
+    Order is preserved from first occurrence.
+    """
+    sink: list[str] = []
+
+    if isinstance(core, dict):
+        _scan_for_gdrive(core.get("description"), sink)
+        _scan_for_gdrive(core.get("environment"), sink)
+
+    for comment in comments or []:
+        if isinstance(comment, dict):
+            _scan_for_gdrive(comment.get("body"), sink)
+
+    for link in remote_links or []:
+        if not isinstance(link, dict):
+            continue
+        _scan_for_gdrive(link.get("url"), sink)
+        _scan_for_gdrive(link.get("title"), sink)
+        _scan_for_gdrive(link.get("summary"), sink)
+
+    for att in attachments or []:
+        if not isinstance(att, dict):
+            continue
+        # Some teams paste Drive URLs as the "filename"/"url" of an attachment
+        # link rather than uploading a binary; catch both fields.
+        _scan_for_gdrive(att.get("url"), sink)
+        _scan_for_gdrive(att.get("filename"), sink)
+
+    seen: set[str] = set()
+    unique: list[str] = []
+    for url in sink:
+        if url not in seen:
+            seen.add(url)
+            unique.append(url)
+    return unique
+
+
+def _extract_attachments(fields: dict[str, Any]) -> list[dict[str, Any]]:
+    """Extract attachment metadata from core issue fields."""
+    return [
+        {
+            "id": att.get("id"),
+            "filename": att.get("filename"),
+            "author": _person(att.get("author")),
+            "created": att.get("created"),
+            "size": att.get("size"),
+            "mime_type": att.get("mimeType"),
+            "url": att.get("content"),
+            "thumbnail": att.get("thumbnail"),
+        }
+        for att in (fields.get("attachment") or [])
+    ]
+
+
+def _extract_linked_issues(fields: dict[str, Any]) -> list[dict[str, Any]]:
+    """Extract issue links from core fields."""
+    links = []
+    for link in (fields.get("issuelinks") or []):
+        link_type = (link.get("type") or {})
+        if link.get("outwardIssue"):
+            issue = link["outwardIssue"]
+            direction = "outward"
+            label = link_type.get("outward", "")
+        elif link.get("inwardIssue"):
+            issue = link["inwardIssue"]
+            direction = "inward"
+            label = link_type.get("inward", "")
+        else:
+            continue
+        f = issue.get("fields", {}) or {}
+        links.append({
+            "id": link.get("id"),
+            "type": link_type.get("name", ""),
+            "direction": direction,
+            "label": label,
+            "key": issue.get("key", ""),
+            "summary": f.get("summary", ""),
+            "status": (f.get("status") or {}).get("name", ""),
+            "priority": (f.get("priority") or {}).get("name", ""),
+            "issuetype": (f.get("issuetype") or {}).get("name", ""),
+            "assignee": _person(f.get("assignee")),
+        })
+    return links
+
+
+def _extract_subtasks(fields: dict[str, Any]) -> list[dict[str, Any]]:
+    """Extract sub-tasks from core fields."""
+    result = []
+    for sub in (fields.get("subtasks") or []):
+        sf = sub.get("fields", {}) or {}
+        result.append({
+            "key": sub.get("key", ""),
+            "summary": sf.get("summary", ""),
+            "status": (sf.get("status") or {}).get("name", ""),
+            "priority": (sf.get("priority") or {}).get("name", ""),
+            "issuetype": (sf.get("issuetype") or {}).get("name", ""),
+            "assignee": _person(sf.get("assignee")),
+        })
+    return result
+
+
+def _extract_sprint(fields: dict[str, Any]) -> dict[str, Any] | None:
+    """Extract sprint info from customfield_10020 (Jira Software)."""
+    sprint_field = fields.get("customfield_10020")
+    if not sprint_field:
+        return None
+    # The field can be a list of sprint objects or a single object
+    if isinstance(sprint_field, list):
+        # Take the most recent (last) sprint
+        sprint_raw = sprint_field[-1] if sprint_field else None
+    elif isinstance(sprint_field, dict):
+        sprint_raw = sprint_field
+    else:
+        return None
+    if not sprint_raw or not isinstance(sprint_raw, dict):
+        return None
+    return {
+        "id": sprint_raw.get("id"),
+        "name": sprint_raw.get("name"),
+        "state": sprint_raw.get("state"),
+        "start_date": sprint_raw.get("startDate"),
+        "end_date": sprint_raw.get("endDate"),
+        "complete_date": sprint_raw.get("completeDate"),
+        "goal": sprint_raw.get("goal"),
+        "board_id": sprint_raw.get("boardId") or sprint_raw.get("originBoardId"),
+    }
+
+
+def _extract_epic_key(fields: dict[str, Any]) -> str | None:
+    """Return the epic issue key from customfield_10014 (Epic Link), if present."""
+    epic_link = fields.get("customfield_10014")
+    if isinstance(epic_link, str) and epic_link.strip():
+        return epic_link.strip()
+    # Newer Jira uses parent for epics
+    parent = fields.get("parent")
+    if isinstance(parent, dict):
+        parent_fields = parent.get("fields", {}) or {}
+        if (parent_fields.get("issuetype") or {}).get("name", "").lower() == "epic":
+            return parent.get("key")
+    return None
+
+
+def _derive_participants(
+    core: dict[str, Any],
+    comments: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Build a deduplicated participant list from all available sources."""
+    seen: dict[str, dict[str, Any]] = {}
+
+    def _add(person: dict[str, Any] | None, role: str) -> None:
+        if not person:
+            return
+        aid = person.get("account_id", "")
+        if not aid:
+            return
+        if aid not in seen:
+            seen[aid] = {**person, "roles": [role]}
+        elif role not in seen[aid]["roles"]:
+            seen[aid]["roles"].append(role)
+
+    _add(core.get("assignee"), "assignee")
+    _add(core.get("reporter"), "reporter")
+    _add(core.get("creator"), "creator")
+    for comment in comments:
+        _add(comment.get("author"), "commenter")
+
+    return list(seen.values())

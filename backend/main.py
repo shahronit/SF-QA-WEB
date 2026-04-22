@@ -37,13 +37,14 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 # API routes
 # ---------------------------------------------------------------------------
-from routers import auth, agents, projects, history, jira, salesforce, knowledge, exports, llm, stlc_pack  # noqa: E402
+from routers import auth, agents, projects, history, jira, salesforce, knowledge, exports, llm, stlc_pack, gdrive  # noqa: E402
 
 app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 app.include_router(agents.router, prefix="/api/agents", tags=["agents"])
 app.include_router(projects.router, prefix="/api/projects", tags=["projects"])
 app.include_router(history.router, prefix="/api/history", tags=["history"])
 app.include_router(jira.router, prefix="/api/jira", tags=["jira"])
+app.include_router(gdrive.router, prefix="/api/gdrive", tags=["gdrive"])
 app.include_router(salesforce.router, prefix="/api/sf", tags=["salesforce"])
 app.include_router(knowledge.router, prefix="/api/kb", tags=["knowledge"])
 app.include_router(exports.router, prefix="/api/exports", tags=["exports"])

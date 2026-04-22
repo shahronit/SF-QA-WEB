@@ -209,6 +209,37 @@ async def get_jira_issue(issue_key: str, user=Depends(get_current_user)):
         raise HTTPException(400, str(e))
 
 
+@router.get("/issue/{issue_key}/full")
+async def get_jira_issue_full(issue_key: str, user=Depends(get_current_user)):
+    """Fetch all available detail categories for a Jira issue in parallel.
+
+    Runs up to 8 concurrent category fetches (comments, changelog, worklogs,
+    remote links, watchers, votes, transitions) plus derived categories
+    (participants, attachments, linked issues, subtasks, sprint, epic).
+    Partial failures are isolated — a 403 on watchers does not abort the rest.
+
+    Returns a structured payload with ``fetch_metadata``, all category results,
+    and an ``errors`` list for any categories that could not be fetched.
+    """
+    client = _get_client(user["username"])
+
+    # If the user has connected Google Drive, automatically fetch any
+    # Drive files referenced anywhere in the issue. Missing/failed GDrive
+    # auth is silent — the response still includes the detected URLs so
+    # the UI can prompt the user to connect.
+    gdrive_client = None
+    try:
+        from routers.gdrive import try_get_client_optional
+        gdrive_client = try_get_client_optional(user["username"])
+    except Exception:
+        gdrive_client = None
+
+    try:
+        return client.get_full_issue(issue_key, gdrive_client=gdrive_client)
+    except ConnectionError as e:
+        raise HTTPException(400, str(e))
+
+
 @router.post("/resolve")
 async def resolve_jira_text(body: JiraResolveRequest, user=Depends(get_current_user)):
     """Detect a Jira issue key/URL in *text* and return the fetched issue.
