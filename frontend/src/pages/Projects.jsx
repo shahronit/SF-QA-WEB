@@ -6,6 +6,8 @@ import PageHeader from '../components/PageHeader'
 import ToonCard from '../components/ToonCard'
 import { useAuth } from '../context/AuthContext'
 
+const ACCEPT = '.pdf,.docx,.doc,.csv,.txt,.xlsx,.json,.md'
+
 export default function Projects() {
   const { user } = useAuth()
   const [projects, setProjects] = useState([])
@@ -14,11 +16,30 @@ export default function Projects() {
   const [newDesc, setNewDesc] = useState('')
   const [openShare, setOpenShare] = useState({})
   const [shareTarget, setShareTarget] = useState({})
+  // Per-project re-index state: 'idle' | 'indexing' | 'done' | 'error'.
+  const [indexStatus, setIndexStatus] = useState({})
 
+  // Load the visible projects and hydrate each with its document list +
+  // indexed flag in parallel so every card can render its docs immediately.
   const load = async () => {
     try {
       const { data } = await api.get('/projects/')
-      setProjects(data.projects || [])
+      const list = data.projects || []
+      const detailed = await Promise.all(
+        list.map(async (p) => {
+          try {
+            const { data: detail } = await api.get(`/projects/${p.slug}`)
+            return {
+              ...p,
+              documents: Array.isArray(detail.documents) ? detail.documents : [],
+              indexed: !!detail.indexed,
+            }
+          } catch {
+            return { ...p, documents: [], indexed: false }
+          }
+        }),
+      )
+      setProjects(detailed)
       window.dispatchEvent(new CustomEvent('qa:projects-updated'))
     } catch { /* ignore */ }
   }
@@ -42,30 +63,59 @@ export default function Projects() {
     } catch (err) { toast.error(err.response?.data?.detail || 'Failed') }
   }
 
-  const uploadFiles = async (slug) => {
+  const triggerReindex = async (slug) => {
+    setIndexStatus((prev) => ({ ...prev, [slug]: 'indexing' }))
+    try {
+      const { data } = await api.post(`/projects/${slug}/build-index`)
+      setIndexStatus((prev) => ({ ...prev, [slug]: 'done' }))
+      const chunks = typeof data?.chunks === 'number' ? data.chunks : null
+      toast.success(chunks != null ? `Indexed ${chunks} chunks` : 'Project re-indexed')
+    } catch (err) {
+      setIndexStatus((prev) => ({ ...prev, [slug]: 'error' }))
+      toast.error(err?.response?.data?.detail || 'Re-indexing failed')
+    }
+  }
+
+  const uploadFiles = (slug) => {
     const input = document.createElement('input')
     input.type = 'file'
     input.multiple = true
-    input.accept = '.pdf,.docx,.doc,.csv,.txt,.xlsx,.json,.md'
+    input.accept = ACCEPT
     input.onchange = async () => {
+      const files = Array.from(input.files || [])
+      if (!files.length) return
       const formData = new FormData()
-      Array.from(input.files).forEach(f => formData.append('files', f))
+      files.forEach((f) => formData.append('files', f))
+      const tid = toast.loading(`Uploading ${files.length} file${files.length > 1 ? 's' : ''}…`)
       try {
-        await api.post(`/projects/${slug}/upload`, formData, { headers: { 'Content-Type': 'multipart/form-data' } })
-        toast.success('Files uploaded!')
-        load()
-      } catch { toast.error('Upload failed') }
+        await api.post(`/projects/${slug}/upload`, formData, {
+          headers: { 'Content-Type': 'multipart/form-data' },
+        })
+        toast.success(`Uploaded ${files.length} file${files.length > 1 ? 's' : ''}`, { id: tid })
+        await load()
+        // Auto re-index so RAG reflects the new docs without a manual click.
+        triggerReindex(slug)
+      } catch (err) {
+        toast.error(err?.response?.data?.detail || 'Upload failed', { id: tid })
+      }
     }
     input.click()
   }
 
-  const buildIndex = async (slug) => {
+  const removeDocument = async (slug, filename) => {
+    if (!window.confirm(`Remove "${filename}" from this project?`)) return
+    const tid = toast.loading(`Removing ${filename}…`)
     try {
-      const { data } = await api.post(`/projects/${slug}/build-index`)
-      toast.success(`Indexed ${data.chunks} chunks`)
-      load()
-    } catch { toast.error('Indexing failed') }
+      await api.delete(`/projects/${slug}/documents/${encodeURIComponent(filename)}`)
+      toast.success(`Removed ${filename}`, { id: tid })
+      await load()
+      triggerReindex(slug)
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || 'Delete failed', { id: tid })
+    }
   }
+
+  const buildIndex = (slug) => triggerReindex(slug)
 
   const deleteProject = async (slug) => {
     if (!confirm('Delete this project?')) return
@@ -149,6 +199,8 @@ export default function Projects() {
           const candidates = allUsers.filter(u =>
             u !== p.owner && u !== user?.username && !shared.includes(u)
           )
+          const docs = Array.isArray(p.documents) ? p.documents : []
+          const status = indexStatus[p.slug] || 'idle'
           return (
             <ToonCard key={p.slug} delay={i * 0.05}>
               <div className="flex items-center justify-between mb-3">
@@ -175,9 +227,8 @@ export default function Projects() {
                   )}
                 </div>
               </div>
+
               <div className="flex flex-wrap gap-2">
-                <button onClick={() => uploadFiles(p.slug)} className="toon-btn toon-btn-mint text-sm py-2 px-4">📎 Upload Docs</button>
-                <button onClick={() => buildIndex(p.slug)} className="toon-btn toon-btn-blue text-sm py-2 px-4">🔨 Build Index</button>
                 {owner && (
                   <button
                     onClick={() => setOpenShare(prev => ({ ...prev, [p.slug]: !prev[p.slug] }))}
@@ -188,6 +239,92 @@ export default function Projects() {
                 )}
                 {owner && (
                   <button onClick={() => deleteProject(p.slug)} className="toon-btn toon-btn-coral text-sm py-2 px-4">🗑️ Delete</button>
+                )}
+              </div>
+
+              {/* Documents panel — visible inline so users can see and curate
+                  attached files for this project without leaving the page. */}
+              <div className="mt-4 border-t border-gray-100 pt-3">
+                <div className="flex items-center justify-between gap-2 mb-2 flex-wrap">
+                  <h4 className="text-sm font-bold text-toon-navy flex items-center gap-2">
+                    <span>📁 Documents</span>
+                    <span className="text-gray-400 font-normal">({docs.length})</span>
+                    {status === 'indexing' && (
+                      <span className="text-[10px] uppercase tracking-wider font-bold px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700">
+                        Re-indexing…
+                      </span>
+                    )}
+                    {status === 'done' && (
+                      <span className="text-[10px] uppercase tracking-wider font-bold px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700">
+                        Index up to date
+                      </span>
+                    )}
+                    {status === 'error' && (
+                      <span className="text-[10px] uppercase tracking-wider font-bold px-1.5 py-0.5 rounded-full bg-red-100 text-red-700">
+                        Index failed
+                      </span>
+                    )}
+                    {status === 'idle' && p.indexed && (
+                      <span className="text-[10px] uppercase tracking-wider font-bold px-1.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700">
+                        Indexed
+                      </span>
+                    )}
+                    {status === 'idle' && !p.indexed && docs.length > 0 && (
+                      <span className="text-[10px] uppercase tracking-wider font-bold px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500">
+                        Not indexed
+                      </span>
+                    )}
+                  </h4>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      onClick={() => uploadFiles(p.slug)}
+                      className="toon-btn toon-btn-mint text-xs py-1.5 px-3"
+                    >
+                      + Add documents
+                    </button>
+                    <button
+                      onClick={() => buildIndex(p.slug)}
+                      disabled={status === 'indexing'}
+                      className="toon-btn bg-gray-100 text-gray-700 hover:bg-gray-200 text-xs py-1.5 px-3 disabled:opacity-50"
+                    >
+                      🔨 Re-index
+                    </button>
+                  </div>
+                </div>
+
+                <div className="text-[11px] text-gray-500 mb-2">
+                  Files added here are auto re-indexed so RAG reflects them on the next agent run.
+                </div>
+
+                {docs.length === 0 ? (
+                  <p className="text-xs text-gray-400 py-2">
+                    No documents yet — click <span className="font-bold">+ Add documents</span> to ground this project's RAG.
+                  </p>
+                ) : (
+                  <ul className="max-h-56 overflow-auto divide-y divide-gray-200 bg-white rounded-xl border border-gray-200">
+                    {docs.map((name) => (
+                      <li
+                        key={name}
+                        className="flex items-center justify-between gap-2 px-3 py-1.5 text-xs"
+                      >
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span aria-hidden="true">📄</span>
+                          <span className="truncate text-toon-navy" title={name}>
+                            {name}
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => removeDocument(p.slug, name)}
+                          title="Remove from project"
+                          aria-label={`Remove ${name}`}
+                          className="text-gray-400 hover:text-toon-coral text-base leading-none px-1.5"
+                        >
+                          ×
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
                 )}
               </div>
 

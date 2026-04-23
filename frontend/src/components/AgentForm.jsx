@@ -11,6 +11,7 @@ import { useAgentResults, AGENT_LABELS } from '../context/AgentResultsContext'
 import { useJira } from '../context/JiraContext'
 import JiraIssuePicker from './JiraIssuePicker'
 import CustomPromptEditor from './CustomPromptEditor'
+import ProjectContextPicker from './ProjectContextPicker'
 import { Stagger, StaggerItem } from './motion/Stagger'
 import Confetti from './motion/Confetti'
 import GeneratingScene from './motion/GeneratingScene'
@@ -776,27 +777,23 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
       <div className={agentName === 'requirement' ? '' : 'grid grid-cols-1 lg:grid-cols-2 gap-4 items-stretch'}>
         {/* Project selector */}
         <div className="toon-card !p-4 h-full">
-          <div className="flex items-center gap-3">
-            <span className="w-9 h-9 rounded-xl bg-gradient-to-br from-sky-400 to-toon-blue flex items-center justify-center text-white text-sm shadow-toon">
+          <div className="flex items-start gap-3">
+            <span className="w-9 h-9 rounded-xl bg-gradient-to-br from-sky-400 to-toon-blue flex items-center justify-center text-white text-sm shadow-toon flex-shrink-0">
               📂
             </span>
-            <div className="flex-1">
+            <div className="flex-1 min-w-0">
               <label className="block text-sm font-bold text-toon-navy mb-1.5">
                 Project Context
                 <span className="font-normal text-gray-400 ml-2">(optional — RAG over project docs)</span>
               </label>
-              <select
-                className="toon-input !py-2"
+              <ProjectContextPicker
+                projects={projects}
                 value={selectedProject}
-                onChange={e => setSelectedProject(e.target.value)}
-              >
-                <option value="">— No project (global knowledge only) —</option>
-                {projects.map(p => (
-                  <option key={p.slug} value={p.slug}>
-                    {p.name}{p.docs ? ` (${p.docs} docs)` : ''}
-                  </option>
-                ))}
-              </select>
+                onChange={setSelectedProject}
+                onProjectsChanged={fetchProjects}
+                variant="full"
+                disabled={loading}
+              />
             </div>
           </div>
           {activeProject && (

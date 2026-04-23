@@ -855,8 +855,9 @@ class JiraClient:
         self,
         project_key: str,
         summary: str,
-        description_markdown: str,
+        description_markdown: str = "",
         issuetype: str = "Test",
+        description_adf: dict | None = None,
     ) -> dict[str, str]:
         """Create an issue of *issuetype* (default ``Test``) and return {key, url}.
 
@@ -865,13 +866,20 @@ class JiraClient:
         cleanly when the project does not have the requested issue type — the
         Jira REST API returns a 400 with a descriptive message that the caller
         surfaces to the UI.
+
+        If *description_adf* is provided it is used verbatim as the issue
+        description (must be a valid ADF document); otherwise the
+        *description_markdown* string is converted via the lossy
+        :func:`_markdown_to_adf`. Callers that need rich formatting (bold,
+        headings, ordered lists, code marks) should build ADF themselves and
+        pass it via *description_adf*.
         """
         payload = {
             "fields": {
                 "project": {"key": project_key},
                 "summary": summary,
                 "issuetype": {"name": issuetype},
-                "description": _markdown_to_adf(description_markdown),
+                "description": description_adf if description_adf is not None else _markdown_to_adf(description_markdown),
             }
         }
         result = self._request("POST", "/issue", payload)

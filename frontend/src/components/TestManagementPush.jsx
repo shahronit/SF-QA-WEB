@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import toast from 'react-hot-toast'
 import { useTestManagement } from '../context/TestManagementContext'
@@ -252,13 +253,18 @@ export default function TestManagementPush({ markdown, agentName }) {
         📤 Push to Test Management
       </button>
 
-      <AnimatePresence>
+      {/* Portal the modal to <body> so it escapes any ancestor stacking
+          context (e.g. framer-motion ToonCards in History.jsx whose
+          `transform` traps `position: fixed` inside a local context). */}
+      {createPortal(
+        <AnimatePresence>
         {open && (
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+            style={{ zIndex: 9999 }}
+            className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4"
             onClick={closeModal}
           >
             <motion.div
@@ -369,7 +375,11 @@ export default function TestManagementPush({ markdown, agentName }) {
                           ))}
                         </datalist>
                         <p className="text-[11px] text-gray-400 mt-1">
-                          Appended to each pushed test case description as <code>Linked story: {userStoryKey || '<KEY>'}</code>.
+                          {target === 'native_jira' ? (
+                            <>Created as a real Jira issue link of type <strong>Test</strong> (new Test <em>tests</em> {userStoryKey || '&lt;KEY&gt;'}). Falls back to <em>Relates</em> if the project lacks the Test link type.</>
+                          ) : (
+                            <>Appended to each pushed test case description as <code>Linked story: {userStoryKey || '<KEY>'}</code>.</>
+                          )}
                         </p>
                       </div>
                     </div>
@@ -433,23 +443,48 @@ export default function TestManagementPush({ markdown, agentName }) {
                           <div className="border border-gray-200 rounded-2xl p-3 bg-gray-50">
                             <div className="text-xs font-bold text-toon-navy mb-2">
                               Push results — {results.succeeded} succeeded, {results.failed} failed
+                              {typeof results.links_succeeded === 'number' && (results.links_succeeded > 0 || results.links_failed > 0) && (
+                                <span className="ml-2 text-gray-500 font-normal">
+                                  · links: {results.links_succeeded} ok{results.links_failed > 0 ? `, ${results.links_failed} failed` : ''}
+                                </span>
+                              )}
                             </div>
                             <ul className="space-y-1 text-xs">
                               {results.results.map((r, i) => (
-                                <li key={i} className="flex items-center gap-2">
+                                <li key={i} className="flex flex-wrap items-center gap-2">
                                   {r.error ? (
                                     <span className="text-toon-coral">✗ {r.title} — {r.error}</span>
                                   ) : (
-                                    <span className="text-emerald-600">
-                                      ✓ {r.title} —{' '}
-                                      {r.url ? (
-                                        <a href={r.url} target="_blank" rel="noreferrer" className="underline">
-                                          {r.key}
-                                        </a>
-                                      ) : (
-                                        r.key
+                                    <>
+                                      <span className="text-emerald-600">
+                                        ✓ {r.title} —{' '}
+                                        {r.url ? (
+                                          <a href={r.url} target="_blank" rel="noreferrer" className="underline">
+                                            {r.key}
+                                          </a>
+                                        ) : (
+                                          r.key
+                                        )}
+                                      </span>
+                                      {r.link_to && !r.link_error && (
+                                        <span
+                                          className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
+                                            r.link_warning ? 'bg-amber-100 text-amber-700' : 'bg-sky-100 text-sky-700'
+                                          }`}
+                                          title={r.link_warning || `Link type: ${r.link_type}`}
+                                        >
+                                          🔗 {r.link_type || 'link'} → {r.link_to}
+                                        </span>
                                       )}
-                                    </span>
+                                      {r.link_error && (
+                                        <span
+                                          className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-red-100 text-red-700"
+                                          title={r.link_error}
+                                        >
+                                          ⚠ link failed → {r.link_to}
+                                        </span>
+                                      )}
+                                    </>
                                   )}
                                 </li>
                               ))}
@@ -477,7 +512,9 @@ export default function TestManagementPush({ markdown, agentName }) {
             </motion.div>
           </motion.div>
         )}
-      </AnimatePresence>
+        </AnimatePresence>,
+        document.body,
+      )}
     </>
   )
 }

@@ -25,6 +25,7 @@ import ExecutionReport from './pages/ExecutionReport'
 import RCA from './pages/RCA'
 import ClosureReport from './pages/ClosureReport'
 import StlcPack from './pages/StlcPack'
+import ResultView from './pages/ResultView'
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth()
@@ -42,6 +43,10 @@ export default function App() {
           <Toaster position="top-right" toastOptions={{ duration: 3000, style: { borderRadius: '16px', fontFamily: 'Nunito' } }} />
           <Routes>
           <Route path="/login" element={<Login />} />
+          {/* Standalone, chrome-less result viewer opened from History in a
+              new tab. Sits outside <Layout> so the new window has no sidebar
+              or header — just the report. Still gated by ProtectedRoute. */}
+          <Route path="/result/view" element={<ProtectedRoute><ResultView /></ProtectedRoute>} />
           <Route path="/" element={<ProtectedRoute><Layout /></ProtectedRoute>}>
             <Route index element={<Hub />} />
             <Route path="requirements" element={<Requirements />} />

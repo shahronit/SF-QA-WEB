@@ -8,6 +8,9 @@ import api from '../api/client'
 import toast from 'react-hot-toast'
 import PageHeader from '../components/PageHeader'
 import ToonCard from '../components/ToonCard'
+import TestManagementPush from '../components/TestManagementPush'
+
+const PUSH_AGENTS = new Set(['testcase', 'smoke', 'regression'])
 
 const AGENT_LABELS = {
   requirement: '📝 Requirements',
@@ -49,6 +52,66 @@ export default function History() {
     setRecords([])
   }
 
+  // Mirror ReportPanel.download(): hit POST /api/exports/{format} with the
+  // raw markdown and stream the resulting blob into a hidden <a> click.
+  const downloadExport = async (format, content, agentName) => {
+    if (!content) {
+      toast.error('No output to export')
+      return
+    }
+    const tid = toast.loading(`Generating ${format.toUpperCase()}…`)
+    try {
+      const resp = await api.post(
+        `/exports/${format}`,
+        { content, agent_name: agentName },
+        { responseType: 'blob' },
+      )
+      const ext = format === 'excel' ? 'xlsx'
+        : format === 'markdown' ? 'md'
+        : format === 'pdf' ? 'pdf'
+        : 'csv'
+      const url = URL.createObjectURL(resp.data)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `QA_${agentName || 'agent'}_${Date.now()}.${ext}`
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      URL.revokeObjectURL(url)
+      toast.success(`Downloaded ${format.toUpperCase()}!`, { id: tid })
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || `${format.toUpperCase()} export failed`, { id: tid })
+    }
+  }
+
+  // Stash the record payload in sessionStorage and open a standalone viewer
+  // in a new tab. We avoid `noopener` so sessionStorage transfers reliably
+  // across browsers — the new tab is read-only and same-origin, so there's
+  // no security gain from isolating its window.opener here.
+  const openInNewWindow = (rec) => {
+    const md = rec.output || rec.output_preview || ''
+    if (!md) {
+      toast.error('No output to display')
+      return
+    }
+    const key = (typeof crypto !== 'undefined' && crypto.randomUUID)
+      ? crypto.randomUUID()
+      : `r${Date.now()}-${Math.random().toString(36).slice(2)}`
+    const payload = {
+      markdown: md,
+      agentName: rec.agent || '',
+      project: rec.project || '',
+      ts: rec.ts || '',
+    }
+    try {
+      sessionStorage.setItem(`qaResult:${key}`, JSON.stringify(payload))
+    } catch {
+      toast.error('Could not stash result for new window')
+      return
+    }
+    window.open(`/result/view?key=${encodeURIComponent(key)}`, '_blank')
+  }
+
   return (
     <div>
       <PageHeader icon="📜" title="History" subtitle="Browse past agent runs" gradient="from-violet-500 to-purple-400" />
@@ -77,15 +140,56 @@ export default function History() {
                 </div>
                 <span className="text-xs text-gray-400">{ts}</span>
               </div>
-              {isOpen && (
-                <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} className="mt-4">
-                  <div className="bg-gray-50 rounded-2xl p-4 max-h-96 overflow-auto">
-                    <div className="markdown-body">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]} components={{ td: MarkdownTableCell }}>{rec.output || rec.output_preview || 'No output'}</ReactMarkdown>
+              {isOpen && (() => {
+                const md = rec.output || rec.output_preview || ''
+                const hasOutput = !!md
+                return (
+                  <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} className="mt-4">
+                    {hasOutput && (
+                      <div className="flex flex-wrap justify-end gap-2 mb-3" onClick={(e) => e.stopPropagation()}>
+                        <button
+                          onClick={() => downloadExport('excel', md, rec.agent)}
+                          className="toon-btn toon-btn-mint text-sm py-2 px-4"
+                        >
+                          📊 Excel
+                        </button>
+                        <button
+                          onClick={() => downloadExport('csv', md, rec.agent)}
+                          className="toon-btn toon-btn-blue text-sm py-2 px-4"
+                        >
+                          📋 CSV
+                        </button>
+                        <button
+                          onClick={() => downloadExport('pdf', md, rec.agent)}
+                          className="toon-btn toon-btn-coral text-sm py-2 px-4"
+                        >
+                          📄 PDF
+                        </button>
+                        <button
+                          onClick={() => downloadExport('markdown', md, rec.agent)}
+                          className="toon-btn toon-btn-purple text-sm py-2 px-4"
+                        >
+                          📝 Markdown
+                        </button>
+                        <button
+                          onClick={() => openInNewWindow(rec)}
+                          className="toon-btn bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white text-sm py-2 px-4 hover:opacity-90"
+                        >
+                          🪟 Open in new window
+                        </button>
+                        {PUSH_AGENTS.has(rec.agent) && (
+                          <TestManagementPush markdown={md} agentName={rec.agent} />
+                        )}
+                      </div>
+                    )}
+                    <div className="bg-gray-50 rounded-2xl p-4 max-h-96 overflow-auto">
+                      <div className="markdown-body">
+                        <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]} components={{ td: MarkdownTableCell }}>{md || 'No output'}</ReactMarkdown>
+                      </div>
                     </div>
-                  </div>
-                </motion.div>
-              )}
+                  </motion.div>
+                )
+              })()}
             </ToonCard>
           )
         })}
