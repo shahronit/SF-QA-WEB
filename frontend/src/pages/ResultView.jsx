@@ -6,8 +6,10 @@ const AGENT_LABELS = {
   requirement: '📝 Requirements',
   testcase: '🧪 Test Cases',
   bug_report: '🐛 Bug Reports',
-  smoke: '💨 Smoke Tests',
-  regression: '🔄 Regression',
+  smoke: '💨 Smoke Test Plan - Checklist',
+  regression: '🔄 Regression Test Plan - Checklist',
+  exec_report: '📈 Test Execution Report',
+  closure_report: '🏁 Test Closure Report',
   estimation: '📊 Estimation',
 }
 

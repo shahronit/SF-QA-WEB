@@ -84,8 +84,22 @@ async def delete_document(slug: str, filename: str, user=Depends(get_current_use
 @router.post("/{slug}/build-index")
 async def build_index(slug: str, user=Depends(get_current_user)):
     """Ingest project documents into a ChromaDB vector store."""
-    count = pm.build_project_index(slug)
+    # Drop any in-memory Chroma client and close file handles *before* we
+    # shutil.rmtree the on-disk project store. On Windows an open Chroma
+    # sqlite/segment lock otherwise causes PermissionError and re-index
+    # always fails.
     orch = get_orchestrator()
+    orch.reload_project_rag(slug)
+    try:
+        count = pm.build_project_index(slug)
+    except Exception as exc:
+        orch.reload_project_rag(slug)
+        raise HTTPException(
+            500,
+            detail=f"Re-index failed: {exc!s}. "
+            "Set OPENAI_API_KEY in .env to use OpenAI embeddings, or run Ollama with "
+            "`ollama pull nomic-embed-text` for local embeddings.",
+        ) from exc
     orch.reload_project_rag(slug)
     return {"chunks": count}
 

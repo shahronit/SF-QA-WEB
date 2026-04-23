@@ -100,6 +100,12 @@ class JiraResolveRequest(BaseModel):
     text: str
 
 
+class JiraAddCommentRequest(BaseModel):
+    """Add a comment to an existing Jira issue (session credentials)."""
+    issue_key: str
+    body: str
+
+
 class JiraCreateBugRequest(BaseModel):
     """Payload for creating a Jira bug issue using the session credentials."""
     project_key: str
@@ -305,6 +311,20 @@ async def search_jira(body: JiraSearchRequest, user=Depends(get_current_user)):
     except ConnectionError as e:
         raise HTTPException(400, str(e))
     return {"issues": issues}
+
+
+# ---------------------------------------------------------------------------
+# Issue comment (session only)
+# ---------------------------------------------------------------------------
+
+@router.post("/comment")
+async def add_issue_comment(body: JiraAddCommentRequest, user=Depends(get_current_user)):
+    """Post a comment on a Jira issue; body is rendered from markdown to ADF."""
+    client = _get_client(user["username"])
+    try:
+        return client.add_comment(body.issue_key.strip(), body.body)
+    except ConnectionError as e:
+        raise HTTPException(400, str(e))
 
 
 # ---------------------------------------------------------------------------

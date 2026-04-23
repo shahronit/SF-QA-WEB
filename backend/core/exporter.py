@@ -111,7 +111,7 @@ def export_to_markdown(content: str, agent_name: str) -> bytes:
     """Prefix agent output with a title block for download."""
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     header = (
-        f"# Salesforce QA Agent — {agent_name.title()}\n"
+        f"# SF-QA-WEB — {agent_name.title()}\n"
         f"> Generated: {timestamp}\n\n---\n\n"
     )
     return (header + content).encode("utf-8")
@@ -399,7 +399,7 @@ def export_to_pdf(content: str, agent_name: str) -> bytes:
         output_format="html5",
     )
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    title = f"Salesforce QA Agent — {(agent_name or 'export').replace('_', ' ').title()}"
+    title = f"SF-QA-WEB — {(agent_name or 'export').replace('_', ' ').title()}"
     safe_title = _html.escape(title)
     safe_agent = _html.escape(agent_name or "export")
     safe_ts = _html.escape(timestamp)

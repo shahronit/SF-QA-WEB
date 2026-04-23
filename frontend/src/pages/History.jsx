@@ -4,20 +4,27 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeRaw from 'rehype-raw'
 import MarkdownTableCell from '../components/markdown/MarkdownTableCell'
+import MarkdownTableScroll from '../components/markdown/MarkdownTableScroll'
 import api from '../api/client'
 import toast from 'react-hot-toast'
 import PageHeader from '../components/PageHeader'
 import ToonCard from '../components/ToonCard'
 import TestManagementPush from '../components/TestManagementPush'
+import JiraCommentPush from '../components/JiraCommentPush'
 
 const PUSH_AGENTS = new Set(['testcase', 'smoke', 'regression'])
+const JIRA_COMMENT_AGENTS = new Set(['requirement', 'exec_report', 'closure_report'])
+
+const HISTORY_MD_COMPONENTS = { td: MarkdownTableCell, table: MarkdownTableScroll }
 
 const AGENT_LABELS = {
   requirement: '📝 Requirements',
   testcase: '🧪 Test Cases',
   bug_report: '🐛 Bug Reports',
-  smoke: '💨 Smoke Tests',
-  regression: '🔄 Regression',
+  smoke: '💨 Smoke Test Plan - Checklist',
+  regression: '🔄 Regression Test Plan - Checklist',
+  exec_report: '📈 Test Execution Report',
+  closure_report: '🏁 Test Closure Report',
   estimation: '📊 Estimation',
 }
 
@@ -180,11 +187,14 @@ export default function History() {
                         {PUSH_AGENTS.has(rec.agent) && (
                           <TestManagementPush markdown={md} agentName={rec.agent} />
                         )}
+                        {JIRA_COMMENT_AGENTS.has(rec.agent) && (
+                          <JiraCommentPush markdown={md} agentName={rec.agent} defaultIssueKey="" />
+                        )}
                       </div>
                     )}
-                    <div className="bg-gray-50 rounded-2xl p-4 max-h-96 overflow-auto">
+                    <div className="bg-gray-50 rounded-2xl p-4 max-h-96 overflow-y-auto overflow-x-hidden">
                       <div className="markdown-body">
-                        <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]} components={{ td: MarkdownTableCell }}>{md || 'No output'}</ReactMarkdown>
+                        <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]} components={HISTORY_MD_COMPONENTS}>{md || 'No output'}</ReactMarkdown>
                       </div>
                     </div>
                   </motion.div>

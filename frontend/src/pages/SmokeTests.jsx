@@ -62,7 +62,7 @@ export default function SmokeTests() {
       {qaMode === 'salesforce' && <SFOrgLogin onMetadata={setOrgMetadata} />}
       <AgentForm
         agentName="smoke"
-        sheetTitle="Smoke"
+        sheetTitle="Smoke Test Plan - Checklist"
         fields={fields}
         extraInput={orgMetadata && qaMode === 'salesforce' ? { org_metadata: orgMetadata } : {}}
       />
