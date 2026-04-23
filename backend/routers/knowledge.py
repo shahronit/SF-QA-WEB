@@ -14,13 +14,15 @@ router = APIRouter()
 @router.post("/build")
 async def build_kb(user=Depends(get_current_user)):
     """Ingest knowledge base documents and build the global vector store."""
+    # Release the global Chroma client before replacing files on disk (Windows locks).
+    orch = get_orchestrator()
+    orch.reload_rag()
     ingestor = SalesforceKnowledgeIngestor()
     docs = ingestor.load_all()
     if not docs:
         return {"chunks": 0, "message": "No documents found"}
     vs = SalesforceVectorStore()
     vs.build(docs)
-    orch = get_orchestrator()
     orch.reload_rag()
     return {"chunks": len(docs), "message": f"Indexed {len(docs)} chunks"}
 

@@ -60,7 +60,7 @@ export default function Regression() {
       {qaMode === 'salesforce' && <SFOrgLogin onMetadata={setOrgMetadata} />}
       <AgentForm
         agentName="regression"
-        sheetTitle="Regression"
+        sheetTitle="Regression Test Plan - Checklist"
         fields={fields}
         extraInput={orgMetadata && qaMode === 'salesforce' ? { org_metadata: orgMetadata } : {}}
       />

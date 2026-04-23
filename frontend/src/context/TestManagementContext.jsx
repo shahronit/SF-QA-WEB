@@ -1,11 +1,19 @@
 import { createContext, useContext, useState, useEffect, useCallback } from 'react'
 import api from '../api/client'
+import { useAuth } from './AuthContext'
 
 const TestManagementContext = createContext(null)
 
+const EMPTY_STATUS = { jira: false, xray: false, zephyr: false }
+
 export function TestManagementProvider({ children }) {
-  const [status, setStatus] = useState({ jira: false, xray: false, zephyr: false })
+  const { user, token } = useAuth()
+  const [status, setStatus] = useState(EMPTY_STATUS)
   const [loading, setLoading] = useState(false)
+
+  const reset = useCallback(() => {
+    setStatus(EMPTY_STATUS)
+  }, [])
 
   const refreshStatus = useCallback(async () => {
     try {
@@ -17,14 +25,21 @@ export function TestManagementProvider({ children }) {
       })
       return data
     } catch {
-      setStatus({ jira: false, xray: false, zephyr: false })
-      return { jira: false, xray: false, zephyr: false }
+      setStatus(EMPTY_STATUS)
+      return EMPTY_STATUS
     }
   }, [])
 
+  // Re-sync Xray/Zephyr/native-Jira indicators whenever the authenticated
+  // user changes so a different account never sees the previous user's
+  // connection state.
   useEffect(() => {
-    if (localStorage.getItem('token')) refreshStatus()
-  }, [refreshStatus])
+    if (token && user) {
+      refreshStatus()
+    } else {
+      reset()
+    }
+  }, [user?.username, token, refreshStatus, reset])
 
   const connectXray = useCallback(async ({ client_id, client_secret }) => {
     setLoading(true)

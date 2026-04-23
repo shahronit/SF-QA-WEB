@@ -4,11 +4,13 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeRaw from 'rehype-raw'
 import MarkdownTableCell from './markdown/MarkdownTableCell'
+import MarkdownTableScroll from './markdown/MarkdownTableScroll'
 import api from '../api/client'
 import toast from 'react-hot-toast'
 import { getAgent } from '../config/agentMeta'
 import Sparkline from './motion/Sparkline'
 import TestManagementPush from './TestManagementPush'
+import JiraCommentPush from './JiraCommentPush'
 import JiraBugPush from './JiraBugPush'
 import ExecutionBars from './insights/ExecutionBars'
 import CoverageDonut from './insights/CoverageDonut'
@@ -23,6 +25,8 @@ import {
   parseDataPreview,
   buildSparklineFromText,
 } from './insights/parsers'
+
+const MD_COMPONENTS = { td: MarkdownTableCell, table: MarkdownTableScroll }
 
 function useInsightAvailable(agentName, content) {
   return useMemo(() => {
@@ -74,10 +78,17 @@ function Typewriter({ text, enabled = true, max = 600, duration = 600 }) {
     return () => cancelAnimationFrame(rafRef.current)
   }, [text, enabled, max, duration, reduce])
 
-  return <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]} components={{ td: MarkdownTableCell }}>{shown || text}</ReactMarkdown>
+  return <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]} components={MD_COMPONENTS}>{shown || text}</ReactMarkdown>
 }
 
-export default function ReportPanel({ content, agentName, sheetTitle, stamp, loading = false }) {
+export default function ReportPanel({
+  content,
+  agentName,
+  sheetTitle,
+  stamp,
+  loading = false,
+  jiraContextKey = '',
+}) {
   const [tab, setTab] = useState('formatted')
   const meta = getAgent(agentName)
   const { available: insightsAvailable, visual } = useInsightAvailable(agentName, content)
@@ -168,7 +179,7 @@ export default function ReportPanel({ content, agentName, sheetTitle, stamp, loa
         ))}
       </div>
 
-      <div className="bg-gray-50 rounded-2xl p-5 mb-4 overflow-auto" style={{ maxHeight: '70vh' }}>
+      <div className="bg-gray-50 rounded-2xl p-5 mb-4 overflow-y-auto overflow-x-hidden" style={{ maxHeight: '70vh' }}>
         {/* While streaming we render plain (no AnimatePresence / no
             Typewriter) so each new token only appends — there is no
             unmount, no re-typing animation, and therefore no flicker.
@@ -177,8 +188,8 @@ export default function ReportPanel({ content, agentName, sheetTitle, stamp, loa
             user just sees the content settle. Tab switches still
             animate via the outer state change. */}
         {loading ? (
-          <div className="markdown-body table-wrap">
-            <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]} components={{ td: MarkdownTableCell }}>{content}</ReactMarkdown>
+          <div className="markdown-body">
+            <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]} components={MD_COMPONENTS}>{content}</ReactMarkdown>
             <div className="mt-3 inline-flex items-center gap-2 text-xs text-gray-500">
               <span className="inline-flex items-center gap-1">
                 {[0, 1, 2].map(i => (
@@ -202,9 +213,9 @@ export default function ReportPanel({ content, agentName, sheetTitle, stamp, loa
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -8 }}
                 transition={{ duration: 0.2 }}
-                className="markdown-body table-wrap"
+                className="markdown-body"
               >
-                <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]} components={{ td: MarkdownTableCell }}>{content}</ReactMarkdown>
+                <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]} components={MD_COMPONENTS}>{content}</ReactMarkdown>
               </motion.div>
             )}
             {tab === 'insights' && insightsAvailable && (
@@ -251,6 +262,7 @@ export default function ReportPanel({ content, agentName, sheetTitle, stamp, loa
         <button onClick={() => download('markdown')} className="toon-btn toon-btn-purple text-sm py-2 px-4">📝 Markdown</button>
         <button onClick={copyText} className="toon-btn bg-gray-400 hover:bg-gray-500 text-sm py-2 px-4">📑 Copy</button>
         <TestManagementPush markdown={content} agentName={agentName} />
+        <JiraCommentPush markdown={content} agentName={agentName} defaultIssueKey={jiraContextKey} />
         <JiraBugPush markdown={content} agentName={agentName} />
       </div>
     </motion.div>

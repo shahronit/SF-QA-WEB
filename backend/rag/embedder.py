@@ -1,12 +1,39 @@
-"""LangChain Chroma vector store with Ollama embeddings (nomic-embed-text)."""
+"""LangChain Chroma: prefer OpenAI embeddings when configured, else Ollama."""
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
-from langchain_community.embeddings import OllamaEmbeddings
+from langchain_community.embeddings import OllamaEmbeddings, OpenAIEmbeddings
 from langchain_community.vectorstores import Chroma
 from langchain_core.documents import Document
+
+from config import settings
+
+log = logging.getLogger(__name__)
+
+# Small / cheap; matches typical ChatGPT API setups (same key as the LLM).
+_RAG_OPENAI_EMBED_MODEL = "text-embedding-3-small"
+_ollama_fallback_logged = False
+
+
+def _make_embeddings():
+    """Use OpenAI embeddings when *OPENAI_API_KEY* is set; otherwise Ollama."""
+    global _ollama_fallback_logged
+    key = (settings.OPENAI_API_KEY or "").strip()
+    if key:
+        return OpenAIEmbeddings(
+            model=_RAG_OPENAI_EMBED_MODEL,
+            openai_api_key=key,
+        )
+    if not _ollama_fallback_logged:
+        _ollama_fallback_logged = True
+        log.warning(
+            "RAG: OPENAI_API_KEY not set; using Ollama (nomic-embed-text) for embeddings. "
+            "Set OPENAI_API_KEY in .env to re-index without a local Ollama server."
+        )
+    return OllamaEmbeddings(model="nomic-embed-text")
 
 
 class SalesforceVectorStore:
@@ -16,7 +43,7 @@ class SalesforceVectorStore:
         root = Path(__file__).resolve().parents[1]
         self.persist_dir = Path(persist_dir) if persist_dir else root / "rag" / "vector_store"
         self.persist_dir.mkdir(parents=True, exist_ok=True)
-        self.embeddings = OllamaEmbeddings(model="nomic-embed-text")
+        self.embeddings = _make_embeddings()
         self.db: Chroma | None = None
 
     def build(self, documents: list[Document]) -> None:

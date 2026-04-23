@@ -4,12 +4,14 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeRaw from 'rehype-raw'
 import MarkdownTableCell from './markdown/MarkdownTableCell'
+import MarkdownTableScroll from './markdown/MarkdownTableScroll'
 import toast from 'react-hot-toast'
 import api from '../api/client'
 import ReportPanel from './ReportPanel'
 import { useAgentResults, AGENT_LABELS } from '../context/AgentResultsContext'
 import { useJira } from '../context/JiraContext'
 import JiraIssuePicker from './JiraIssuePicker'
+import JiraTicketCard from './JiraTicketCard'
 import CustomPromptEditor from './CustomPromptEditor'
 import ProjectContextPicker from './ProjectContextPicker'
 import { Stagger, StaggerItem } from './motion/Stagger'
@@ -17,6 +19,8 @@ import Confetti from './motion/Confetti'
 import GeneratingScene from './motion/GeneratingScene'
 import { extractJiraKey } from '../utils/jiraDetect'
 import { useQaMode, QA_MODE_OPTIONS } from '../hooks/useQaMode'
+
+const LINK_PREVIEW_MD_COMPONENTS = { td: MarkdownTableCell, table: MarkdownTableScroll }
 
 // Agents whose scope can legitimately span multiple Jira tickets — they
 // generate test artifacts that derive from one or more user stories /
@@ -341,6 +345,15 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
   const [historicalRuns, setHistoricalRuns] = useState([])
   const [shakeKeys, setShakeKeys] = useState({})
   const [confettiTrigger, setConfettiTrigger] = useState(0)
+  const [jiraContextKey, setJiraContextKey] = useState('')
+  // Rich payload(s) of the most recent Jira import. Rendered below the picker
+  // as a confirmation card via `<JiraTicketCard />` so the user keeps full
+  // visibility of what was pulled in even after closing the picker.
+  // Single-import sets `importedJira` and clears `importedJiraList`; multi-
+  // import / sprint-scope does the opposite. `Remove` on a card clears the
+  // corresponding entry without touching textarea contents.
+  const [importedJira, setImportedJira] = useState(null)
+  const [importedJiraList, setImportedJiraList] = useState([])
   const [qaMode, setQaMode] = useQaMode()
 
   const { saveResult, getAvailableResults } = useAgentResults()
@@ -546,6 +559,7 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
     setLinkedAgent('')
     setShowLinkedPreview(false)
     setShakeKeys({})
+    setJiraContextKey('')
   }, [])
 
   const handleTextareaBlur = useCallback(async (fieldKey, currentValue) => {
@@ -578,6 +592,7 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
         const next = existing ? `${existing}\n\n${marker}\n${text}` : `${marker}\n${text}`
         return { ...prev, [fieldKey]: next }
       })
+      setJiraContextKey(resp.key)
       setAutoFetchedNotice(prev => ({ ...prev, [fieldKey]: { key: resp.key, stamp: Date.now() } }))
       setTimeout(() => {
         setAutoFetchedNotice(prev => {
@@ -597,6 +612,15 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
 
   const handleJiraImport = useCallback((issue) => {
     if (!issue) return
+    // Picker now passes the rich `/full` payload, where the headline fields
+    // live under `core.*`. Fall back to the flat shape for back-compat.
+    const core = issue.core || issue
+    const issueKey = core.key || ''
+    const issueSummary = core.summary || ''
+    const issueUrl = core.url || issue.url || ''
+    if (issueKey) setJiraContextKey(issueKey)
+    setImportedJira(issue)
+    setImportedJiraList([])
     const text = jiraIssueToText(issue)
     setValues(prev => {
       const next = { ...prev }
@@ -606,7 +630,7 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
         /title|summary|name/i.test(f.key)
       )
       if (titleField && !next[titleField.key]?.trim?.()) {
-        next[titleField.key] = `${issue.key}: ${issue.summary || ''}`.trim()
+        next[titleField.key] = `${issueKey}: ${issueSummary}`.trim()
       }
       const primaryArea =
         textareaFields.find(f => /requirement|story|description|scope|test_cases|test_cases_or_scope/i.test(f.key)) ||
@@ -618,7 +642,7 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
       const ctxArea = textareaFields.find(f => /additional_context|context/i.test(f.key))
       if (ctxArea && primaryArea && ctxArea.key !== primaryArea.key) {
         const ex = next[ctxArea.key]?.trim?.() || ''
-        const note = `Imported from Jira ${issue.key} (${issue.url || ''})`
+        const note = `Imported from Jira ${issueKey} (${issueUrl})`
         next[ctxArea.key] = ex ? `${ex}\n${note}` : note
       }
       return next
@@ -664,7 +688,7 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
       lines.push(jiraIssueToText(payload))
       lines.push('')
     }
-    return { block: lines.join('\n').trimEnd(), count: ok.length }
+    return { block: lines.join('\n').trimEnd(), count: ok.length, payloads: ok }
   }, [jiraGetFullIssue, jiraGetIssue])
 
   // Write a consolidated scope block into the primary textarea
@@ -683,11 +707,13 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
     if (!issuesList?.length) return
     const t = toast.loading(`Importing ${issuesList.length} ticket${issuesList.length === 1 ? '' : 's'}…`)
     try {
-      const { block, count } = await fetchAndFormatScope(
+      const { block, count, payloads } = await fetchAndFormatScope(
         issuesList.map(it => it.key),
         null,
       )
       writeScopeBlock(block)
+      setImportedJira(null)
+      setImportedJiraList(payloads || [])
       toast.success(`Loaded ${count} ticket${count === 1 ? '' : 's'} into scope`, { id: t })
     } catch (err) {
       toast.error(err?.response?.data?.detail || 'Failed to import tickets', { id: t })
@@ -707,11 +733,13 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
         return
       }
       const header = `Sprint scope: ${sprintName} (project ${projectKey}) — ${list.length} ticket${list.length === 1 ? '' : 's'}`
-      const { block, count } = await fetchAndFormatScope(
+      const { block, count, payloads } = await fetchAndFormatScope(
         list.map(it => it.key),
         header,
       )
       writeScopeBlock(block)
+      setImportedJira(null)
+      setImportedJiraList(payloads || [])
       toast.success(`Loaded ${count} ticket${count === 1 ? '' : 's'} from "${sprintName}" — click Generate`, { id: t })
     } catch (err) {
       toast.error(err?.response?.data?.detail || 'Failed to load sprint', { id: t })
@@ -888,8 +916,8 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
                       exit={{ height: 0, opacity: 0 }}
                       className="overflow-hidden"
                     >
-                      <div className="mt-2 p-3 bg-gray-50 rounded-xl text-xs max-h-60 overflow-auto border border-gray-200 markdown-body table-wrap">
-                        <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]} components={{ td: MarkdownTableCell }}>
+                      <div className="mt-2 p-3 bg-gray-50 rounded-xl text-xs max-h-60 overflow-y-auto overflow-x-hidden border border-gray-200 markdown-body">
+                        <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]} components={LINK_PREVIEW_MD_COMPONENTS}>
                           {selectedLinked.content.length > 2000
                             ? `${selectedLinked.content.slice(0, 2000)}\n\n_… (truncated)_`
                             : selectedLinked.content}
@@ -914,6 +942,72 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
           onImportMany={allowMultiPick ? handleJiraImportMany : undefined}
           onUseSprintScope={allowMultiPick ? handleSprintScope : undefined}
         />
+      )}
+
+      {/* Confirmation card(s) for whatever was just imported from Jira.
+          Mirrors the picker's right-hand preview so the user keeps full
+          visibility (Assignee/Reporter/Priority/Created/Updated/Description,
+          plus subtasks/comments/custom fields) even after the picker is
+          collapsed. Removing a card clears the imported payload only — the
+          textarea content the user may have already edited is preserved. */}
+      {(importedJira || importedJiraList.length > 0) && (
+        <div className="toon-card !p-4">
+          <div className="flex items-center gap-3 mb-3">
+            <span className="w-9 h-9 rounded-xl bg-gradient-to-br from-emerald-400 to-emerald-600 flex items-center justify-center text-white text-sm shadow-toon">
+              ✓
+            </span>
+            <div className="flex-1">
+              <h3 className="text-sm font-bold text-toon-navy">
+                Imported from Jira
+                <span className="font-normal text-gray-400 ml-2">
+                  {importedJira
+                    ? `(${importedJira.core?.key || importedJira.key || ''})`
+                    : `(${importedJiraList.length} ticket${importedJiraList.length === 1 ? '' : 's'})`}
+                </span>
+              </h3>
+              <div className="text-[11px] text-gray-500">
+                Form fields below have been pre-filled. Edit anything before generating.
+              </div>
+            </div>
+            {importedJiraList.length > 1 && (
+              <button
+                type="button"
+                onClick={() => setImportedJiraList([])}
+                className="text-[11px] text-toon-coral hover:underline font-semibold"
+              >
+                Clear all
+              </button>
+            )}
+          </div>
+          {importedJira && (
+            <div className="ml-12">
+              <JiraTicketCard
+                detail={importedJira}
+                onRemove={() => { setImportedJira(null); setJiraContextKey('') }}
+              />
+            </div>
+          )}
+          {importedJiraList.length > 0 && (
+            <div className="ml-12 space-y-3">
+              {importedJiraList.map((d) => {
+                const k = d.core?.key || d.key || ''
+                return (
+                  <div key={k} className="border border-gray-200 rounded-xl p-3 bg-white">
+                    <JiraTicketCard
+                      detail={d}
+                      compact
+                      onRemove={() =>
+                        setImportedJiraList(list =>
+                          list.filter(x => (x.core?.key || x.key || '') !== k),
+                        )
+                      }
+                    />
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </div>
       )}
 
       {/* Test Case Development users can override the system prompt for
@@ -1042,6 +1136,7 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
           sheetTitle={sheetTitle}
           stamp={resultStamp}
           loading={loading}
+          jiraContextKey={jiraContextKey}
         />
       )}
 

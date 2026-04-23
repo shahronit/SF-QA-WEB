@@ -825,6 +825,23 @@ class JiraClient:
             "url": f"{self.base_url}/browse/{issue_key}",
         }
 
+    def add_comment(self, issue_key: str, body_markdown: str) -> dict[str, Any]:
+        """Post a comment on an issue. Body is converted to ADF like descriptions."""
+        key = (issue_key or "").strip()
+        if not key:
+            raise ConnectionError("issue key is required.")
+        text = (body_markdown or "").strip()
+        if not text:
+            raise ConnectionError("comment body is empty.")
+        payload = {"body": _markdown_to_adf(text)}
+        safe_key = urllib.parse.quote(key, safe="")
+        result = self._request("POST", f"/issue/{safe_key}/comment", payload)
+        return {
+            "id": str(result.get("id", "")),
+            "self": result.get("self", ""),
+            "issue_key": key,
+        }
+
     def create_issue_link(
         self,
         link_type: str,

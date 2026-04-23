@@ -117,7 +117,7 @@ export const AGENT_META = {
     visual: 'sparkline',
   },
   smoke: {
-    label: 'Smoke Test Execution',
+    label: 'Smoke Test Plan - Checklist',
     phaseId: 'P4',
     icon: '💨',
     gradient: 'from-orange-400 to-toon-yellow',
@@ -129,7 +129,7 @@ export const AGENT_META = {
     visual: 'sparkline',
   },
   regression: {
-    label: 'Regression Testing',
+    label: 'Regression Test Plan - Checklist',
     phaseId: 'P4',
     icon: '🔄',
     gradient: 'from-toon-navy to-blue-700',

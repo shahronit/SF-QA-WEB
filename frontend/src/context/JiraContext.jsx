@@ -1,14 +1,23 @@
 import { createContext, useContext, useState, useEffect, useCallback } from 'react'
 import api from '../api/client'
+import { useAuth } from './AuthContext'
 
 const JiraContext = createContext(null)
 
 export function JiraProvider({ children }) {
+  const { user, token } = useAuth()
   const [connected, setConnected] = useState(false)
   const [jiraUrl, setJiraUrl] = useState('')
   const [email, setEmail] = useState('')
   const [projects, setProjects] = useState([])
   const [loading, setLoading] = useState(false)
+
+  const reset = useCallback(() => {
+    setConnected(false)
+    setJiraUrl('')
+    setEmail('')
+    setProjects([])
+  }, [])
 
   const refreshStatus = useCallback(async () => {
     try {
@@ -24,9 +33,18 @@ export function JiraProvider({ children }) {
     }
   }, [])
 
+  // Re-sync Jira state whenever the authenticated user changes. On logout
+  // (token/user cleared) we drop any cached Jira credentials from the UI so
+  // the next account sees a clean Connect form. On login we refetch the
+  // backend session for the new user — backend already keys sessions by
+  // username, so a brand-new account gets {connected:false}.
   useEffect(() => {
-    if (localStorage.getItem('token')) refreshStatus()
-  }, [refreshStatus])
+    if (token && user) {
+      refreshStatus()
+    } else {
+      reset()
+    }
+  }, [user?.username, token, refreshStatus, reset])
 
   const connect = useCallback(async ({ jira_url, email, api_token }) => {
     setLoading(true)
