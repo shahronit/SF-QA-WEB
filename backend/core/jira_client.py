@@ -541,22 +541,44 @@ class JiraClient:
     # Private category fetchers
     # ------------------------------------------------------------------
 
+    # System fields we already extract / surface explicitly above. Everything
+    # else returned by Jira (including any future-added system field) flows
+    # into ``custom_fields`` keyed by its display name when ``names`` lookup
+    # succeeds, so nothing on the ticket is silently dropped.
+    _CORE_KNOWN_SYSTEM_FIELDS = frozenset({
+        "summary", "description", "issuetype", "status", "priority", "resolution",
+        "assignee", "reporter", "creator", "project", "components", "labels",
+        "fixVersions", "versions", "environment", "created", "updated", "duedate",
+        "resolutiondate", "timeoriginalestimate", "timeestimate", "timespent",
+        "aggregatetimespent", "votes", "watches", "subtasks", "attachment",
+        "issuelinks", "parent", "security",
+        # Already pulled into structured outputs by get_full_issue extractors:
+        "comment", "worklog", "issuetype", "progress", "aggregateprogress",
+        "workratio", "timetracking", "lastViewed", "statuscategorychangedate",
+    })
+
     def _fetch_core(self, issue_key: str) -> dict[str, Any]:
-        """Fetch enriched core issue fields using expand."""
-        field_list = (
-            "summary,description,issuetype,status,priority,resolution,"
-            "assignee,reporter,creator,project,components,labels,"
-            "fixVersions,versions,environment,created,updated,duedate,"
-            "resolutiondate,timeoriginalestimate,timeestimate,timespent,"
-            "aggregatetimespent,votes,watches,subtasks,attachment,"
-            "issuelinks,parent,customfield_10014,customfield_10016,"
-            "customfield_10020,security"
-        )
+        """Fetch enriched core issue fields with ``fields=*all``.
+
+        Using ``*all`` makes Jira return every system AND custom field
+        configured on the ticket — including tenant-specific custom fields
+        like Acceptance Criteria, custom Story Points pickers, team-defined
+        text fields, etc. We then label each ``customfield_XXXXX`` (and any
+        unknown system field) via the top-level ``names`` map returned by
+        ``expand=names`` and surface the labelled bag as ``custom_fields``
+        on the returned core dict.
+
+        The hard-coded Cloud-default IDs for sprint / epic / story points
+        (10014/10016/10020) are kept as a fallback so the structured
+        ``epic`` / ``sprint`` outputs in ``get_full_issue`` keep working
+        on tenants that match those defaults.
+        """
         data = self._request(
             "GET",
-            f"/issue/{issue_key}?expand=renderedFields,names&fields={field_list}",
+            f"/issue/{issue_key}?expand=renderedFields,names,schema&fields=*all",
         )
         fields = data.get("fields", {}) or {}
+        names: dict[str, str] = data.get("names", {}) or {}
         description = fields.get("description")
         description_text = _adf_to_text(description) if isinstance(description, dict) else (description or "")
 
@@ -567,6 +589,19 @@ class JiraClient:
                 "key": parent.get("key", ""),
                 "summary": ((parent.get("fields") or {}).get("summary") or ""),
             }
+
+        # Collect everything we did NOT explicitly extract above into a
+        # labelled custom_fields map. This catches all `customfield_*` IDs
+        # plus any system field we don't recognise, so the UI / LLM seed
+        # see every value the ticket actually carries.
+        custom_fields: dict[str, Any] = {}
+        for fkey, fval in fields.items():
+            if fkey in self._CORE_KNOWN_SYSTEM_FIELDS:
+                continue
+            if fval is None or fval == "" or fval == [] or fval == {}:
+                continue
+            label = names.get(fkey) or fkey
+            custom_fields[label] = _flatten_field_value(fval)
 
         return {
             "key": data.get("key", issue_key),
@@ -600,6 +635,7 @@ class JiraClient:
             "story_points": fields.get("customfield_10016"),
             "epic_link": fields.get("customfield_10014"),
             "parent": parent_info,
+            "custom_fields": custom_fields,
             "url": f"{self.base_url}/browse/{data.get('key', issue_key)}",
             # Kept for extraction helpers in get_full_issue(); stripped before returning
             "_raw_fields": fields,
@@ -927,6 +963,49 @@ def _person(raw: Any) -> dict[str, str] | None:
         "email": raw.get("emailAddress", ""),
         "avatar_url": (raw.get("avatarUrls") or {}).get("48x48", ""),
     }
+
+
+def _flatten_field_value(val: Any) -> Any:
+    """Flatten an arbitrary Jira field value for the ``custom_fields`` map.
+
+    Jira returns custom-field values in a wide variety of shapes:
+
+    * Primitives (str/int/float/bool) — passed through unchanged.
+    * ADF documents (``{"type": "doc", "content": [...]}``) — flattened to
+      plain text via ``_adf_to_text`` so downstream LLM seeds and the UI
+      detail panel get readable content instead of nested JSON.
+    * Single options (``{"value": "X"}``, ``{"name": "Y"}``) — reduced to
+      the human-visible label.
+    * User objects — reduced to ``displayName`` so person-typed custom
+      fields don't dump avatar URLs and account IDs into the prompt.
+    * Lists — flattened element-wise; if every element reduces to a string
+      we join them with ``, `` for compact rendering, otherwise we keep
+      the list of dicts intact for the UI to render.
+    * Anything else — returned as-is so the caller can decide.
+    """
+    if val is None:
+        return None
+    if isinstance(val, (str, int, float, bool)):
+        return val
+    if isinstance(val, dict):
+        # ADF document
+        if val.get("type") == "doc":
+            return _adf_to_text(val)
+        # Option-ish shape (single-select, radio, version, component, ...)
+        for k in ("value", "name", "displayName"):
+            if isinstance(val.get(k), str) and val.get(k):
+                return val[k]
+        # User object
+        if val.get("accountId") and val.get("displayName"):
+            return val.get("displayName")
+        # Fall back to the raw dict so the UI can still render it
+        return val
+    if isinstance(val, list):
+        flat = [_flatten_field_value(v) for v in val]
+        if all(isinstance(x, (str, int, float, bool)) or x is None for x in flat):
+            return ", ".join(str(x) for x in flat if x not in (None, ""))
+        return flat
+    return val
 
 
 # ---------------------------------------------------------------------------

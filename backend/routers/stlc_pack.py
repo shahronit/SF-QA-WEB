@@ -61,10 +61,175 @@ class StlcRunRequest(BaseModel):
 # Seed building
 # ---------------------------------------------------------------------------
 
-def _format_jira_seed(issue: dict[str, Any]) -> str:
-    """Render a fetched Jira issue as plain text seed input for the pack."""
-    if not issue:
+def _person_name(p: Any) -> str:
+    """Reduce a Jira person object (or plain string) to a display name."""
+    if not p:
         return ""
+    if isinstance(p, str):
+        return p
+    if isinstance(p, dict):
+        return p.get("display_name") or p.get("displayName") or p.get("name") or ""
+    return ""
+
+
+def _format_jira_seed(payload: dict[str, Any]) -> str:
+    """Render a fetched Jira issue as plain text seed input for the pack.
+
+    Accepts EITHER:
+    * the rich envelope from ``JiraClient.get_full_issue`` (keys: ``core``,
+      ``comments``, ``subtasks``, ``linked_issues``, ``attachments``,
+      ``sprint``, ``epic``, …), OR
+    * the lite shape from ``JiraClient.get_issue`` (flat dict).
+
+    The rich shape is auto-detected via the ``core`` / ``fetch_metadata``
+    envelope keys; otherwise we fall back to the lite renderer.
+    """
+    if not payload:
+        return ""
+    is_rich = bool(payload.get("core") or payload.get("fetch_metadata"))
+    if not is_rich:
+        return _format_jira_seed_lite(payload)
+
+    core: dict[str, Any] = payload.get("core") or {}
+    lines: list[str] = []
+    lines.append(
+        f"Jira {core.get('issuetype') or 'Issue'} {core.get('key', '')}: {core.get('summary', '')}".strip()
+    )
+
+    status_bits: list[str] = []
+    if core.get("status"):
+        sc = core.get("status_category")
+        status_bits.append(f"Status: {core['status']}" + (f" ({sc})" if sc else ""))
+    if core.get("resolution"):
+        status_bits.append(f"Resolution: {core['resolution']}")
+    if core.get("priority"):
+        status_bits.append(f"Priority: {core['priority']}")
+    if status_bits:
+        lines.append(" | ".join(status_bits))
+
+    people: list[str] = []
+    a = _person_name(core.get("assignee"))
+    r = _person_name(core.get("reporter"))
+    cr = _person_name(core.get("creator"))
+    if a:
+        people.append(f"Assignee: {a}")
+    if r:
+        people.append(f"Reporter: {r}")
+    if cr and cr != r:
+        people.append(f"Creator: {cr}")
+    if people:
+        lines.append(" | ".join(people))
+
+    proj = core.get("project") or {}
+    if proj.get("key"):
+        lines.append(f"Project: {proj['key']}" + (f" — {proj['name']}" if proj.get("name") else ""))
+    parent = core.get("parent") or {}
+    if parent.get("key"):
+        lines.append(f"Parent: {parent['key']}" + (f" — {parent['summary']}" if parent.get("summary") else ""))
+
+    sprint = payload.get("sprint") or {}
+    if sprint.get("name"):
+        lines.append(f"Sprint: {sprint['name']}" + (f" [{sprint['state']}]" if sprint.get("state") else ""))
+    epic = payload.get("epic") or {}
+    if epic.get("key"):
+        lines.append(f"Epic: {epic['key']}" + (f" — {epic['summary']}" if epic.get("summary") else ""))
+    if core.get("story_points") is not None:
+        lines.append(f"Story Points: {core['story_points']}")
+
+    dates: list[str] = []
+    for label, key in (("Created", "created"), ("Updated", "updated"), ("Due", "due_date"), ("Resolved", "resolution_date")):
+        if core.get(key):
+            dates.append(f"{label}: {core[key]}")
+    if dates:
+        lines.append(" | ".join(dates))
+
+    if core.get("fix_versions"):
+        lines.append("Fix Versions: " + ", ".join(core["fix_versions"]))
+    if core.get("affects_versions"):
+        lines.append("Affects Versions: " + ", ".join(core["affects_versions"]))
+    if core.get("components"):
+        lines.append("Components: " + ", ".join(core["components"]))
+    if core.get("labels"):
+        lines.append("Labels: " + ", ".join(core["labels"]))
+    if core.get("environment"):
+        lines.append(f"Environment: {core['environment']}")
+
+    lines.append("")
+    lines.append("Description:")
+    lines.append((core.get("description") or "(no description)").strip())
+
+    subtasks = payload.get("subtasks") or []
+    if subtasks:
+        lines.append("")
+        lines.append("Sub-tasks:")
+        for s in subtasks:
+            bits = [s.get("key", ""), f"[{s.get('status', '')}]" if s.get("status") else "", s.get("summary", "")]
+            lines.append("- " + " ".join(b for b in bits if b))
+
+    linked = payload.get("linked_issues") or []
+    if linked:
+        lines.append("")
+        lines.append("Linked issues:")
+        for l in linked:
+            rel = l.get("label") or l.get("type") or "related to"
+            tgt = l.get("key", "")
+            lines.append(f"- {rel}: {tgt}" + (f" — {l['summary']}" if l.get("summary") else ""))
+
+    attachments = payload.get("attachments") or []
+    if attachments:
+        lines.append("")
+        lines.append(f"Attachments ({len(attachments)}):")
+        for a in attachments:
+            size_kb = f" ({round(a['size'] / 1024)} KB)" if a.get("size") else ""
+            url_part = f" — {a['url']}" if a.get("url") else ""
+            lines.append(f"- {a.get('filename') or a.get('name') or 'file'}{size_kb}{url_part}")
+
+    comments = payload.get("comments") or []
+    if comments:
+        recent = comments[-5:]
+        lines.append("")
+        lines.append(f"Comments (showing {len(recent)} of {len(comments)}):")
+        for cm in recent:
+            who = _person_name(cm.get("author")) or "unknown"
+            when = cm.get("created", "")
+            lines.append(f"- {who}" + (f" @ {when}" if when else "") + ":")
+            body = (cm.get("body") or "").strip()
+            if body:
+                lines.append(f"  {body[:600]}…" if len(body) > 600 else f"  {body}")
+
+    custom_fields = core.get("custom_fields") or {}
+    cf_items = [(k, v) for k, v in custom_fields.items() if v not in (None, "", [], {})]
+    if cf_items:
+        lines.append("")
+        lines.append("Custom fields:")
+        for label, val in cf_items:
+            lines.append(f"- {label}: {_format_cf(val)}")
+
+    if core.get("url"):
+        lines.append("")
+        lines.append(f"Source: {core['url']}")
+
+    return "\n".join(line for line in lines if line is not None)
+
+
+def _format_cf(val: Any) -> str:
+    """Compact, human-readable rendering of a custom-field value."""
+    if val is None:
+        return ""
+    if isinstance(val, (str, int, float, bool)):
+        return str(val)
+    if isinstance(val, list):
+        return ", ".join(_format_cf(v) for v in val if v not in (None, ""))
+    if isinstance(val, dict):
+        for k in ("value", "name", "displayName", "key"):
+            if isinstance(val.get(k), str) and val.get(k):
+                return val[k]
+        return json.dumps(val, ensure_ascii=False)
+    return str(val)
+
+
+def _format_jira_seed_lite(issue: dict[str, Any]) -> str:
+    """Legacy formatter for the trimmed ``JiraClient.get_issue`` shape."""
     lines = [
         f"Jira {issue.get('issuetype') or 'Issue'} {issue.get('key', '')}: {issue.get('summary', '')}",
     ]
@@ -114,10 +279,19 @@ def _build_seed(username: str, body: StlcRunRequest) -> tuple[str, str | None]:
                 "Connect Jira from the Hub or supply user_story instead.",
             )
         client = JiraClient(session["jira_url"], session["email"], session["api_token"])
+        # Prefer the rich /full payload so the pack seed includes comments,
+        # sub-tasks, linked issues, attachments, sprint/epic, AND any
+        # tenant-specific custom fields (Acceptance Criteria, etc.). Fall
+        # back to the trimmed get_issue shape if the full pipeline fails
+        # entirely so a partial Jira outage doesn't block the pack.
+        issue: dict[str, Any]
         try:
-            issue = client.get_issue(jira_key)
+            issue = client.get_full_issue(jira_key)
         except ConnectionError as exc:
-            raise HTTPException(400, f"Could not fetch Jira issue {jira_key}: {exc}")
+            try:
+                issue = client.get_issue(jira_key)
+            except ConnectionError as exc2:
+                raise HTTPException(400, f"Could not fetch Jira issue {jira_key}: {exc2}") from exc
         parts.append(_format_jira_seed(issue))
 
     if body.user_story and body.user_story.strip():
