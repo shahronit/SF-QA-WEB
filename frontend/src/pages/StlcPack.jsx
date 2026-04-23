@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeRaw from 'rehype-raw'
+import MarkdownTableCell from '../components/markdown/MarkdownTableCell'
 import toast from 'react-hot-toast'
 import api from '../api/client'
 import PageHeader from '../components/PageHeader'
@@ -75,7 +76,7 @@ function PhaseStep({ agent, index, total, status, content, expanded, onToggle })
             transition={{ duration: 0.25 }}
             className="mt-3 max-h-72 overflow-auto bg-gray-50 rounded-xl p-3 border border-gray-200 markdown-body table-wrap text-sm"
           >
-            <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}>
+            <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]} components={{ td: MarkdownTableCell }}>
               {content.length > 4000
                 ? content.slice(0, 4000) + '\n\n_…(truncated, full report below)_'
                 : content}

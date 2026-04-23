@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeRaw from 'rehype-raw'
+import MarkdownTableCell from './markdown/MarkdownTableCell'
 import toast from 'react-hot-toast'
 import api from '../api/client'
 import ReportPanel from './ReportPanel'
@@ -891,7 +892,7 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
                       className="overflow-hidden"
                     >
                       <div className="mt-2 p-3 bg-gray-50 rounded-xl text-xs max-h-60 overflow-auto border border-gray-200 markdown-body table-wrap">
-                        <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}>
+                        <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]} components={{ td: MarkdownTableCell }}>
                           {selectedLinked.content.length > 2000
                             ? `${selectedLinked.content.slice(0, 2000)}\n\n_… (truncated)_`
                             : selectedLinked.content}

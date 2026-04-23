@@ -20,6 +20,20 @@ SF_HEADER_HEX = "#0070D2"
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*#*\s*$")
 _FENCE_RE = re.compile(r"^\s*(```|~~~)")
 
+# Match the "<br>" line-break sentinel agents emit inside Markdown table cells,
+# whether raw (`<br>`, `<br/>`, `<br />`) or HTML-entity escaped
+# (`&lt;br&gt;`, `&lt;br/&gt;`). Used to convert those sentinels to real
+# newlines before writing into Excel/CSV cells (where `wrap_text=True` will
+# stack them) or to real `<br/>` tags before PDF rendering.
+_BR_SENTINEL_RE = re.compile(r"(?:&lt;|<)\s*br\s*/?\s*(?:&gt;|>)", re.IGNORECASE)
+
+
+def _normalize_cell(value: Any) -> Any:
+    """Convert <br>-style sentinels in a cell value to real newlines."""
+    if not isinstance(value, str):
+        return value
+    return _BR_SENTINEL_RE.sub("\n", value)
+
 
 def export_markdown(content: str, path: str | Path) -> Path:
     """Write raw markdown content to a file and return its path."""
@@ -60,7 +74,7 @@ def export_workbook_bytes(sheets: dict[str, list[dict[str, Any]]]) -> bytes:
         _style_header_row(ws, len(headers))
         for r, row in enumerate(rows, start=2):
             for c, h in enumerate(headers, start=1):
-                val = row.get(h, "")
+                val = _normalize_cell(row.get(h, ""))
                 cell = ws.cell(row=r, column=c, value=val)
                 cell.alignment = Alignment(wrap_text=True, vertical="top")
         for c in range(1, len(headers) + 1):
@@ -75,8 +89,8 @@ def export_text_sheet_bytes(title: str, body: str, sheet_name: str = "Export") -
     wb = Workbook()
     ws = wb.active
     ws.title = sheet_name[:31]
-    ws.cell(row=1, column=1, value=title)
-    ws.cell(row=2, column=1, value=body)
+    ws.cell(row=1, column=1, value=_normalize_cell(title))
+    ws.cell(row=2, column=1, value=_normalize_cell(body))
     ws.cell(row=1, column=1).font = Font(bold=True, color="FFFFFF")
     hdr = PatternFill(start_color=SF_HEADER_FILL, end_color=SF_HEADER_FILL, fill_type="solid")
     ws.cell(row=1, column=1).fill = hdr
@@ -255,7 +269,10 @@ def export_to_csv(content: str) -> bytes:
             rows = [{"Section Title": "(Empty)", "Markdown Content": ""}]
         writer.writerow(["Section Title", "Markdown Content"])
         for row in rows:
-            writer.writerow([row.get("Section Title", ""), row.get("Markdown Content", "")])
+            writer.writerow([
+                _normalize_cell(row.get("Section Title", "")),
+                _normalize_cell(row.get("Markdown Content", "")),
+            ])
         return buf.getvalue().encode("utf-8")
 
     for idx, tbl in enumerate(tables):
@@ -265,10 +282,9 @@ def export_to_csv(content: str) -> bytes:
             writer.writerow([f"# Section: {tbl['heading']}"])
         writer.writerow(tbl["headers"])
         for row in tbl["rows"]:
-            # Pad/trim row to match header count
             ncols = len(tbl["headers"])
             padded = (row + [""] * ncols)[:ncols]
-            writer.writerow(padded)
+            writer.writerow([_normalize_cell(v) for v in padded])
 
     return buf.getvalue().encode("utf-8")
 
@@ -321,7 +337,7 @@ def export_to_excel(content: str, agent_name: str) -> bytes:
         for r, row_cells in enumerate(tbl["rows"], start=2):
             padded = (row_cells + [""] * ncols)[:ncols]
             for c, val in enumerate(padded, start=1):
-                cell = ws.cell(row=r, column=c, value=val)
+                cell = ws.cell(row=r, column=c, value=_normalize_cell(val))
                 cell.alignment = Alignment(wrap_text=True, vertical="top")
 
         # Auto-size columns (capped at 60)
@@ -372,8 +388,13 @@ def export_to_pdf(content: str, agent_name: str) -> bytes:
     import markdown as md
     from xhtml2pdf import pisa
 
+    # Normalize all <br>-style sentinels (raw or HTML-entity escaped) to a
+    # single canonical <br/> tag so xhtml2pdf renders them as real line breaks
+    # inside table cells.
+    normalized_content = _BR_SENTINEL_RE.sub("<br/>", content or "")
+
     html_body = md.markdown(
-        content or "",
+        normalized_content,
         extensions=["tables", "fenced_code", "sane_lists", "toc"],
         output_format="html5",
     )

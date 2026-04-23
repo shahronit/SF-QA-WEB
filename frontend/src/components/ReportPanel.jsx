@@ -3,6 +3,7 @@ import { motion, AnimatePresence, useReducedMotion } from 'framer-motion'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeRaw from 'rehype-raw'
+import MarkdownTableCell from './markdown/MarkdownTableCell'
 import api from '../api/client'
 import toast from 'react-hot-toast'
 import { getAgent } from '../config/agentMeta'
@@ -73,7 +74,7 @@ function Typewriter({ text, enabled = true, max = 600, duration = 600 }) {
     return () => cancelAnimationFrame(rafRef.current)
   }, [text, enabled, max, duration, reduce])
 
-  return <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}>{shown || text}</ReactMarkdown>
+  return <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]} components={{ td: MarkdownTableCell }}>{shown || text}</ReactMarkdown>
 }
 
 export default function ReportPanel({ content, agentName, sheetTitle, stamp, loading = false }) {
@@ -177,7 +178,7 @@ export default function ReportPanel({ content, agentName, sheetTitle, stamp, loa
             animate via the outer state change. */}
         {loading ? (
           <div className="markdown-body table-wrap">
-            <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}>{content}</ReactMarkdown>
+            <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]} components={{ td: MarkdownTableCell }}>{content}</ReactMarkdown>
             <div className="mt-3 inline-flex items-center gap-2 text-xs text-gray-500">
               <span className="inline-flex items-center gap-1">
                 {[0, 1, 2].map(i => (
@@ -203,7 +204,7 @@ export default function ReportPanel({ content, agentName, sheetTitle, stamp, loa
                 transition={{ duration: 0.2 }}
                 className="markdown-body table-wrap"
               >
-                <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}>{content}</ReactMarkdown>
+                <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]} components={{ td: MarkdownTableCell }}>{content}</ReactMarkdown>
               </motion.div>
             )}
             {tab === 'insights' && insightsAvailable && (
