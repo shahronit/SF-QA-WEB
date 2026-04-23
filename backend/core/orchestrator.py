@@ -14,7 +14,12 @@ from pathlib import Path
 from typing import Any
 
 from core import firestore_db
-from core.prompts.prompts import PROMPTS, _PROJECT_SCOPE, _SCOPE_ONLY
+from core.prompts.prompts import (
+    PROMPTS_GEN,
+    PROMPTS_SF,
+    _PROJECT_SCOPE,
+    _SCOPE_ONLY,
+)
 from rag.retriever import RAGRetriever
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -326,19 +331,17 @@ class SFQAOrchestrator:
                 "to what the user already stated. Output Markdown only — no HTML tags."
             )
 
+        # Mode-specific affirmations are kept short — the prompt body is now
+        # mode-specific (PROMPTS_SF vs PROMPTS_GEN), so we only need a one-line
+        # reminder in the user block, not the dual-mode instruction wall we used
+        # to inject when there was a single conditional prompt per agent.
         if qa_mode == "salesforce":
-            scope_instructions += (
-                " Salesforce QA mode is active — apply all Salesforce conventions "
-                "(Apex, SOQL, governor limits, profiles, sharing rules, Experience / "
-                "Commerce Cloud, sandbox vs production, `__c` suffix, etc.)."
-            )
+            scope_instructions += " Salesforce QA mode is active."
         else:
             scope_instructions += (
-                " General QA mode is active — DO NOT use any Salesforce-specific "
-                "terminology, objects, or libraries. Use product-agnostic language "
-                "(entities, roles, business rules, REST/GraphQL APIs, test vs "
-                "production environments). Step 1 of any test case is "
-                "\"Navigate to the application under test.\""
+                " General QA mode is active — produce product-agnostic artefacts; "
+                "never mention Salesforce, Apex, SOQL, Lightning, Copado, or any "
+                "Salesforce cloud names."
             )
 
         override = (system_prompt_override or "").strip()
@@ -349,7 +352,12 @@ class SFQAOrchestrator:
                 )
             system_prompt = override
         else:
-            system_prompt = PROMPTS[agent_name]
+            prompts_dict = PROMPTS_GEN if qa_mode == "general" else PROMPTS_SF
+            if agent_name not in prompts_dict:
+                raise KeyError(
+                    f"Unknown agent '{agent_name}' for qa_mode='{qa_mode}'."
+                )
+            system_prompt = prompts_dict[agent_name]
         if self._active_project:
             system_prompt = system_prompt.replace(_SCOPE_ONLY, _PROJECT_SCOPE)
 
@@ -418,8 +426,8 @@ class SFQAOrchestrator:
         system_prompt_override: str | None = None,
     ) -> str:
         """Run one agent end-to-end: RAG query from flattened input, then LLM."""
-        if agent_name not in PROMPTS:
-            raise KeyError(f"Unknown agent: {agent_name}. Valid: {list(PROMPTS)}")
+        if agent_name not in PROMPTS_SF:
+            raise KeyError(f"Unknown agent: {agent_name}. Valid: {list(PROMPTS_SF)}")
 
         if not self._providers:
             return (
@@ -460,7 +468,7 @@ class SFQAOrchestrator:
         system_prompt_override: str | None = None,
     ) -> Iterator[str]:
         """Stream decoded tokens; logs the joined result when the stream completes."""
-        if agent_name not in PROMPTS:
+        if agent_name not in PROMPTS_SF:
             yield f"Unknown agent: {agent_name}"
             return
         if not self._providers:

@@ -149,11 +149,64 @@ class JiraClient:
     # ------------------------------------------------------------------
 
     def list_projects(self) -> list[dict[str, str]]:
-        """Return simplified project list: [{key, name}, ...]."""
-        data = self._request("GET", "/project")
-        if isinstance(data, list):
-            return [{"key": p["key"], "name": p.get("name", p["key"])} for p in data]
-        return []
+        """Return simplified project list: [{key, name}, ...].
+
+        Uses the paginated ``GET /rest/api/3/project/search`` endpoint.
+        Atlassian deprecated the legacy ``GET /project`` endpoint — on
+        many Cloud tenants it now silently returns an empty array
+        instead of the projects visible to the user (same pattern as
+        the ``/search`` → ``/search/jql`` deprecation handled below).
+
+        We page through ``startAt`` until ``isLast`` is true (or, for
+        very old responses without ``isLast``, until ``values`` is
+        empty). Falls back to the legacy ``GET /project`` only if
+        ``/project/search`` returns 404 — that endpoint does not exist
+        on very old self-hosted Jira Server installations.
+        """
+        projects: list[dict[str, str]] = []
+        seen_keys: set[str] = set()
+        start_at = 0
+        page_size = 50
+        max_pages = 50  # 50 * 50 = 2500 projects, plenty for any tenant
+        for _ in range(max_pages):
+            path = f"/project/search?startAt={start_at}&maxResults={page_size}"
+            try:
+                data = self._request("GET", path)
+            except ConnectionError as exc:
+                # Only fall back to the legacy endpoint on a clean 404
+                # (older Jira Server). Any other failure (auth, timeout,
+                # SSO redirect) should bubble up as-is so the UI can show
+                # a useful error.
+                if "returned 404" in str(exc):
+                    log.info(
+                        "Jira /project/search returned 404; falling back "
+                        "to legacy /project endpoint."
+                    )
+                    legacy = self._request("GET", "/project")
+                    if isinstance(legacy, list):
+                        return [
+                            {"key": p["key"], "name": p.get("name", p["key"])}
+                            for p in legacy
+                        ]
+                    return []
+                raise
+            if not isinstance(data, dict):
+                break
+            values = data.get("values") or []
+            for p in values:
+                key = p.get("key")
+                if not key or key in seen_keys:
+                    continue
+                seen_keys.add(key)
+                projects.append({"key": key, "name": p.get("name", key)})
+            # Stop when the API tells us we're done, or when the page
+            # came back empty (defensive — covers responses that omit
+            # the ``isLast`` field).
+            if data.get("isLast", True) or not values:
+                break
+            start_at += len(values)
+        log.info("Jira list_projects returned %d project(s).", len(projects))
+        return projects
 
     # ------------------------------------------------------------------
     # Issue search / browse

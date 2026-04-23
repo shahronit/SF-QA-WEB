@@ -42,18 +42,29 @@ class AgentRequest(BaseModel):
 
 
 @router.get("/{agent_name}/prompt")
-async def get_agent_prompt(agent_name: str, user=Depends(get_current_user)):
-    """Return the raw default system prompt for *agent_name*.
+async def get_agent_prompt(
+    agent_name: str,
+    qa_mode: str = "salesforce",
+    user=Depends(get_current_user),
+):
+    """Return the raw default system prompt for *agent_name* in the given QA mode.
 
     The frontend uses this so it can show the user the default prompt
     (read-only) and pre-fill the customise textarea. We deliberately
     return the raw string with no project-scope substitution so the
     user sees exactly what ships with the app.
+
+    ``qa_mode`` accepts ``"salesforce"`` (default) or ``"general"`` and
+    selects between ``PROMPTS_SF`` and ``PROMPTS_GEN`` so each mode can
+    be customised independently in the UI.
     """
-    from core.prompts.prompts import PROMPTS
-    if agent_name not in PROMPTS:
+    from core.prompts.prompts import PROMPTS_GEN, PROMPTS_SF
+
+    mode = "general" if str(qa_mode).strip().lower() == "general" else "salesforce"
+    src = PROMPTS_GEN if mode == "general" else PROMPTS_SF
+    if agent_name not in src:
         raise HTTPException(404, f"Unknown agent: {agent_name}")
-    return {"agent": agent_name, "prompt": PROMPTS[agent_name]}
+    return {"agent": agent_name, "qa_mode": mode, "prompt": src[agent_name]}
 
 
 @router.post("/{agent_name}/run")

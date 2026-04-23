@@ -15,10 +15,29 @@ export default function SmokeTests() {
   }, [qaMode, orgMetadata])
 
   const fields = [
-    { key: 'deployment_scope', label: 'What shipped? (components, stories, tickets)', type: 'textarea', rows: 5, placeholder: 'Describe the deployment scope...' },
+    {
+      key: 'deployment_scope',
+      labelByMode: {
+        salesforce: 'What shipped this release? (objects, flows, profiles, components)',
+        general: 'What shipped this release? (features, screens, APIs, components)',
+      },
+      hint:
+        'AI generates production-ready smoke test cases from this scope — be specific. Every case will trace back here.',
+      type: 'textarea',
+      rows: 5,
+      placeholderByMode: {
+        salesforce:
+          'e.g. New custom object Order__c, validation rule on Account.Industry, profile change for Sales Rep, LWC component on Opportunity record page…',
+        general:
+          'e.g. New /checkout page, updated cart API, role change for Standard User, password-reset flow…',
+      },
+    },
     {
       key: 'org_type',
-      label: 'Where are you verifying?',
+      labelByMode: {
+        salesforce: 'Where are you verifying?',
+        general: 'Where are you verifying?',
+      },
       type: 'select',
       optionsByMode: {
         salesforce: ['Full Sandbox', 'UAT', 'Staging', 'Production', 'Developer Sandbox'],
@@ -27,7 +46,14 @@ export default function SmokeTests() {
       required: false,
       advanced: true,
     },
-    { key: 'release_date', label: 'Release date', type: 'text', placeholder: 'YYYY-MM-DD', required: false, advanced: true },
+    {
+      key: 'release_date',
+      label: 'Release date',
+      type: 'text',
+      placeholder: 'YYYY-MM-DD',
+      required: false,
+      advanced: true,
+    },
   ]
 
   return (
