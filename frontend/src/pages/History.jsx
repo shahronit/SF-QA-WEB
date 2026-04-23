@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { motion } from 'framer-motion'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import rehypeRaw from 'rehype-raw'
 import api from '../api/client'
 import toast from 'react-hot-toast'
 import PageHeader from '../components/PageHeader'
@@ -79,7 +80,7 @@ export default function History() {
                 <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} className="mt-4">
                   <div className="bg-gray-50 rounded-2xl p-4 max-h-96 overflow-auto">
                     <div className="markdown-body">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{rec.output || rec.output_preview || 'No output'}</ReactMarkdown>
+                      <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}>{rec.output || rec.output_preview || 'No output'}</ReactMarkdown>
                     </div>
                   </div>
                 </motion.div>
