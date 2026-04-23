@@ -15,8 +15,43 @@ export default function Regression() {
   }, [qaMode, orgMetadata])
 
   const fields = [
-    { key: 'changed_features', label: 'What changed in this release?', type: 'textarea', rows: 4, placeholder: 'Describe what was changed...' },
-    { key: 'impacted_areas', label: 'What else might break?', hint: 'leave blank — AI infers impact from what changed', type: 'textarea', rows: 3, placeholder: 'List impacted areas...', required: false, advanced: true },
+    {
+      key: 'changed_features',
+      labelByMode: {
+        salesforce: 'What changed in this release? (objects, flows, validations, profiles)',
+        general: 'What changed in this release? (features, APIs, business rules, roles)',
+      },
+      hint:
+        'AI generates regression test cases tied 1:1 to what changed. Be specific so the suite stays focused.',
+      type: 'textarea',
+      rows: 4,
+      placeholderByMode: {
+        salesforce:
+          'e.g. Updated Opportunity_Stage validation rule, refactored Account merge flow, new Apex trigger on Case…',
+        general:
+          'e.g. Updated checkout total calculation, refactored notification webhook, new role permission for Read-Only…',
+      },
+    },
+    {
+      key: 'impacted_areas',
+      labelByMode: {
+        salesforce:
+          'Which other Salesforce areas might break? (related objects, flows, integrations)',
+        general:
+          'Which other product areas might break? (related entities, jobs, integrations)',
+      },
+      hint: 'leave blank — AI infers impact from what changed',
+      type: 'textarea',
+      rows: 3,
+      placeholderByMode: {
+        salesforce:
+          'e.g. Account roll-up summary, Order trigger, integration to ERP, Sales Rep profile…',
+        general:
+          'e.g. Cart total calculation, fulfilment job, ERP webhook, Standard User permission…',
+      },
+      required: false,
+      advanced: true,
+    },
   ]
 
   return (

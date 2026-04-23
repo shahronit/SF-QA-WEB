@@ -126,10 +126,19 @@ def parse_testcases_markdown(md: str) -> list[TestCase]:
 
         header_cells = _split_row(rows[0])
         column_map: dict[int, str] = {}
+        # Keep only the FIRST column that maps to each canonical field. This
+        # matters for the testcase / smoke / regression schemas where multiple
+        # headers can share an alias (e.g. "Expected Result" + "Actual Result"
+        # both contain the substring "result"; "Priority" + "Severity" both
+        # appear in the General-mode 15-column shape). Without this, the
+        # later column would silently overwrite the earlier one and TM push
+        # would receive the wrong cell content.
+        seen_canonicals: set[str] = set()
         for idx, h in enumerate(header_cells):
             canonical = _canonical_field(h)
-            if canonical:
+            if canonical and canonical not in seen_canonicals:
                 column_map[idx] = canonical
+                seen_canonicals.add(canonical)
 
         if not all(req in column_map.values() for req in _REQUIRED_FIELDS):
             continue
