@@ -105,6 +105,18 @@ export function JiraProvider({ children }) {
     return data
   }, [])
 
+  // Rich detail fetch — pulls every category (core fields with fields=*all,
+  // comments, changelog, worklogs, remote_links, watchers, votes,
+  // transitions, attachments, linked_issues, subtasks, sprint, epic, plus
+  // any custom fields the tenant defines like Acceptance Criteria) from
+  // /jira/issue/{key}/full. Use this anywhere we need the full ticket
+  // context — picker detail panel, single-import seed, multi-import scope,
+  // on-blur auto-import.
+  const getFullIssue = useCallback(async (issueKey) => {
+    const { data } = await api.get(`/jira/issue/${issueKey}/full`)
+    return data
+  }, [])
+
   const resolveFromText = useCallback(async (text) => {
     if (!text || typeof text !== 'string') return { key: null }
     try {
@@ -129,6 +141,7 @@ export function JiraProvider({ children }) {
         listIssues,
         listSprints,
         getIssue,
+        getFullIssue,
         resolveFromText,
       }}
     >

@@ -16,13 +16,195 @@ import GeneratingScene from './motion/GeneratingScene'
 import { extractJiraKey } from '../utils/jiraDetect'
 import { useQaMode, QA_MODE_OPTIONS } from '../hooks/useQaMode'
 
+// Agents whose scope can legitimately span multiple Jira tickets — they
+// generate test artifacts that derive from one or more user stories /
+// requirements. Other agents (Bug Reports, RCA, Exec Report, Closure
+// Report, Copado Script) are about a single ticket / single incident, so
+// they stay single-select to keep the picker semantics honest.
+const MULTI_SELECT_AGENTS = new Set([
+  'testcase',
+  'smoke',
+  'regression',
+  'test_plan',
+  'requirement',
+  'uat_plan',
+  'automation_plan',
+  'rtm',
+  'test_data',
+  'estimation',
+])
+
+// Format a Jira issue payload as plain text for an LLM seed.
+//
+// Accepts EITHER:
+//   - the legacy "lite" shape from GET /jira/issue/{key} (flat fields like
+//     `key`, `summary`, `description`, `status`, `priority`, `subtasks`), OR
+//   - the rich shape from GET /jira/issue/{key}/full (a structured envelope
+//     with `core`, `comments`, `linked_issues`, `attachments`, `sprint`,
+//     `epic`, `subtasks`, `worklogs`, `remote_links`, `participants`,
+//     `gdrive_files`, etc.).
+//
+// We auto-detect the rich shape via `issue.core` / `issue.fetch_metadata` and
+// fall back to the lite renderer for back-compat with any legacy caller.
 function jiraIssueToText(issue) {
+  if (!issue) return ''
+  const isRich = !!(issue.core || issue.fetch_metadata)
+  if (!isRich) return jiraIssueLiteToText(issue)
+
+  const c = issue.core || {}
+  const lines = []
+  lines.push(`Jira ${c.issuetype || 'Issue'} ${c.key || ''}: ${c.summary || ''}`.trim())
+
+  // ---- Status / classification block ---------------------------------------
+  const statusBits = []
+  if (c.status) statusBits.push(`Status: ${c.status}${c.status_category ? ` (${c.status_category})` : ''}`)
+  if (c.resolution) statusBits.push(`Resolution: ${c.resolution}`)
+  if (c.priority) statusBits.push(`Priority: ${c.priority}`)
+  if (statusBits.length) lines.push(statusBits.join(' | '))
+
+  // ---- People --------------------------------------------------------------
+  const assigneeName = personName(c.assignee)
+  const reporterName = personName(c.reporter)
+  const creatorName = personName(c.creator)
+  const people = []
+  if (assigneeName) people.push(`Assignee: ${assigneeName}`)
+  if (reporterName) people.push(`Reporter: ${reporterName}`)
+  if (creatorName && creatorName !== reporterName) people.push(`Creator: ${creatorName}`)
+  if (people.length) lines.push(people.join(' | '))
+
+  // ---- Project / classification --------------------------------------------
+  const projectLabel = c.project?.key
+    ? `${c.project.key}${c.project.name ? ` — ${c.project.name}` : ''}`
+    : (typeof c.project === 'string' ? c.project : '')
+  if (projectLabel) lines.push(`Project: ${projectLabel}`)
+  if (c.parent?.key) lines.push(`Parent: ${c.parent.key}${c.parent.summary ? ` — ${c.parent.summary}` : ''}`)
+
+  // ---- Sprint / epic / story points ---------------------------------------
+  if (issue.sprint?.name) {
+    const sp = issue.sprint
+    lines.push(`Sprint: ${sp.name}${sp.state ? ` [${sp.state}]` : ''}`)
+  }
+  if (issue.epic?.key) {
+    lines.push(`Epic: ${issue.epic.key}${issue.epic.summary ? ` — ${issue.epic.summary}` : ''}`)
+  }
+  if (c.story_points != null) lines.push(`Story Points: ${c.story_points}`)
+
+  // ---- Dates ---------------------------------------------------------------
+  const dates = []
+  if (c.created) dates.push(`Created: ${c.created}`)
+  if (c.updated) dates.push(`Updated: ${c.updated}`)
+  if (c.due_date) dates.push(`Due: ${c.due_date}`)
+  if (c.resolution_date) dates.push(`Resolved: ${c.resolution_date}`)
+  if (dates.length) lines.push(dates.join(' | '))
+
+  // ---- Versions / components / labels --------------------------------------
+  if (c.fix_versions?.length) lines.push(`Fix Versions: ${c.fix_versions.join(', ')}`)
+  if (c.affects_versions?.length) lines.push(`Affects Versions: ${c.affects_versions.join(', ')}`)
+  if (c.components?.length) lines.push(`Components: ${c.components.join(', ')}`)
+  if (c.labels?.length) lines.push(`Labels: ${c.labels.join(', ')}`)
+  if (c.environment) lines.push(`Environment: ${c.environment}`)
+
+  // ---- Description ---------------------------------------------------------
+  lines.push('', 'Description:', (c.description || '(no description)').trim())
+
+  // ---- Sub-tasks -----------------------------------------------------------
+  if (issue.subtasks?.length) {
+    lines.push('', 'Sub-tasks:')
+    for (const s of issue.subtasks) {
+      const bits = [s.key, s.status ? `[${s.status}]` : '', s.summary].filter(Boolean)
+      lines.push(`- ${bits.join(' ')}`)
+    }
+  }
+
+  // ---- Linked issues -------------------------------------------------------
+  if (issue.linked_issues?.length) {
+    lines.push('', 'Linked issues:')
+    for (const l of issue.linked_issues) {
+      const rel = l.label || l.type || 'related to'
+      const tgt = l.key || ''
+      lines.push(`- ${rel}: ${tgt}${l.summary ? ` — ${l.summary}` : ''}`)
+    }
+  }
+
+  // ---- Attachments ---------------------------------------------------------
+  if (issue.attachments?.length) {
+    lines.push('', `Attachments (${issue.attachments.length}):`)
+    for (const a of issue.attachments) {
+      const sizeKb = a.size ? ` (${Math.round(a.size / 1024)} KB)` : ''
+      lines.push(`- ${a.filename || a.name || 'file'}${sizeKb}${a.url ? ` — ${a.url}` : ''}`)
+    }
+  }
+
+  // ---- Recent comments (cap at 5 most recent) ------------------------------
+  if (issue.comments?.length) {
+    const recent = issue.comments.slice(-5)
+    lines.push('', `Comments (showing ${recent.length} of ${issue.comments.length}):`)
+    for (const cm of recent) {
+      const who = personName(cm.author) || 'unknown'
+      const when = cm.created || ''
+      lines.push(`- ${who}${when ? ` @ ${when}` : ''}:`)
+      const body = (cm.body || '').trim()
+      if (body) lines.push(body.length > 600 ? `  ${body.slice(0, 600)}…` : `  ${body}`)
+    }
+  }
+
+  // ---- Custom fields (e.g. Acceptance Criteria, custom Story Points) ------
+  if (c.custom_fields && typeof c.custom_fields === 'object') {
+    const entries = Object.entries(c.custom_fields)
+      .filter(([, v]) => v != null && v !== '' && !(Array.isArray(v) && v.length === 0))
+    if (entries.length) {
+      lines.push('', 'Custom fields:')
+      for (const [label, val] of entries) {
+        lines.push(`- ${label}: ${formatCustomFieldValue(val)}`)
+      }
+    }
+  }
+
+  // ---- Source --------------------------------------------------------------
+  const url = c.url || issue.url
+  if (url) lines.push('', `Source: ${url}`)
+  return lines.filter(l => l !== undefined && l !== null).join('\n')
+}
+
+// Pull a human name out of either the rich {display_name,...} person
+// object returned by /full or the plain string returned by the legacy
+// /issue endpoint.
+function personName(p) {
+  if (!p) return ''
+  if (typeof p === 'string') return p
+  if (typeof p === 'object') return p.display_name || p.displayName || p.name || ''
+  return ''
+}
+
+// Render a custom-field value (which may be a primitive, string, list of
+// option objects, single option, or already-flattened ADF text) compactly.
+function formatCustomFieldValue(v) {
+  if (v == null) return ''
+  if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') {
+    return String(v)
+  }
+  if (Array.isArray(v)) {
+    return v.map(formatCustomFieldValue).filter(Boolean).join(', ')
+  }
+  if (typeof v === 'object') {
+    if (v.value) return String(v.value)
+    if (v.name) return String(v.name)
+    if (v.displayName) return String(v.displayName)
+    if (v.key) return String(v.key)
+    try { return JSON.stringify(v) } catch { return '[object]' }
+  }
+  return String(v)
+}
+
+// Legacy "lite" shape — single-issue payload from GET /jira/issue/{key}.
+function jiraIssueLiteToText(issue) {
   if (!issue) return ''
   const lines = [
     `Jira ${issue.issuetype || 'Issue'} ${issue.key}: ${issue.summary || ''}`,
     issue.status ? `Status: ${issue.status}` : '',
     issue.priority ? `Priority: ${issue.priority}` : '',
     issue.assignee ? `Assignee: ${issue.assignee}` : '',
+    issue.reporter ? `Reporter: ${issue.reporter}` : '',
     issue.labels?.length ? `Labels: ${issue.labels.join(', ')}` : '',
     issue.components?.length ? `Components: ${issue.components.join(', ')}` : '',
     '',
@@ -161,11 +343,19 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
 
   const { saveResult, getAvailableResults } = useAgentResults()
   const availableResults = getAvailableResults(agentName)
-  const { connected: jiraConnected, resolveFromText, getIssue: jiraGetIssue, listIssues: jiraListIssues } = useJira()
+  const {
+    connected: jiraConnected,
+    resolveFromText,
+    getIssue: jiraGetIssue,
+    getFullIssue: jiraGetFullIssue,
+    listIssues: jiraListIssues,
+  } = useJira()
 
-  // Multi-select + sprint-scope CTAs are only meaningful on the
-  // Test Plan & Strategy agent — every other agent stays single-select.
-  const allowMultiPick = agentName === 'test_plan'
+  // Multi-select + sprint-scope CTAs are enabled on the artifact-generation
+  // agents that benefit from multi-ticket scope. Single-select agents
+  // (Bug Reports, RCA, Exec Report, Closure Report, Copado Script) are
+  // conceptually about a single ticket so they stay focused on one.
+  const allowMultiPick = MULTI_SELECT_AGENTS.has(agentName)
 
   // Per-field set of Jira keys we have already auto-imported, so on-blur
   // doesn't re-fetch the same ticket every time the user clicks elsewhere.
@@ -363,9 +553,20 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
     const seen = importedKeysRef.current[fieldKey] || new Set()
     if (seen.has(key)) return
     try {
+      // Resolve the textual reference to a real issue key first (catches
+      // both raw keys and full Jira URLs), then upgrade to the rich /full
+      // payload so the auto-imported seed includes comments, sub-tasks,
+      // links, attachments, sprint/epic, and any custom fields.
       const resp = await resolveFromText(currentValue)
-      if (!resp?.issue || !resp.key) return
-      const text = jiraIssueToText(resp.issue)
+      if (!resp?.key) return
+      let payload = null
+      try {
+        payload = await jiraGetFullIssue(resp.key)
+      } catch {
+        payload = resp.issue || null  // graceful degradation to lite shape
+      }
+      if (!payload) return
+      const text = jiraIssueToText(payload)
       seen.add(resp.key)
       importedKeysRef.current = { ...importedKeysRef.current, [fieldKey]: seen }
       setValues(prev => {
@@ -390,7 +591,7 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
     } catch {
       // best-effort — ignore network failures
     }
-  }, [jiraConnected, resolveFromText])
+  }, [jiraConnected, resolveFromText, jiraGetFullIssue])
 
   const handleJiraImport = useCallback((issue) => {
     if (!issue) return
@@ -425,6 +626,11 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
   // Fetch full detail for a list of issues with bounded concurrency, then
   // format the consolidated scope block. Used by both `handleJiraImportMany`
   // (user checked rows) and `handleSprintScope` (Use entire sprint CTA).
+  //
+  // We pull the rich /full payload per ticket so the consolidated block
+  // includes sub-tasks, linked issues, attachments, sprint/epic, comments
+  // preview, and tenant custom fields (Acceptance Criteria etc.) for each
+  // ticket — not just the trimmed lite summary.
   const fetchAndFormatScope = useCallback(async (issueKeys, headerLine) => {
     const concurrency = 5
     const results = new Array(issueKeys.length)
@@ -433,9 +639,15 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
       while (cursor < issueKeys.length) {
         const i = cursor++
         try {
-          results[i] = await jiraGetIssue(issueKeys[i])
+          results[i] = await jiraGetFullIssue(issueKeys[i])
         } catch {
-          results[i] = null
+          // Fall back to the lite endpoint so a single 403/timeout on /full
+          // doesn't drop the ticket from the consolidated scope.
+          try {
+            results[i] = await jiraGetIssue(issueKeys[i])
+          } catch {
+            results[i] = null
+          }
         }
       }
     }
@@ -444,24 +656,14 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
     const lines = []
     if (headerLine) lines.push(headerLine, '')
     lines.push(`Tickets in scope (${ok.length}):`, '')
-    for (const issue of ok) {
-      lines.push(`### ${issue.key} — ${issue.summary || '(no summary)'}`)
-      const meta = []
-      if (issue.status) meta.push(`Status: ${issue.status}`)
-      if (issue.issuetype) meta.push(`Type: ${issue.issuetype}`)
-      if (issue.priority) meta.push(`Priority: ${issue.priority}`)
-      if (meta.length) lines.push(meta.join(' | '))
-      const desc = (issue.description || '').trim()
-      if (desc) {
-        lines.push('Description:')
-        lines.push(desc.length > 800 ? `${desc.slice(0, 800)}…` : desc)
-      } else {
-        lines.push('Description: (none)')
-      }
+    for (const payload of ok) {
+      const c = payload.core || payload  // works for both rich and lite shapes
+      lines.push(`### ${c.key || ''} — ${c.summary || '(no summary)'}`)
+      lines.push(jiraIssueToText(payload))
       lines.push('')
     }
     return { block: lines.join('\n').trimEnd(), count: ok.length }
-  }, [jiraGetIssue])
+  }, [jiraGetFullIssue, jiraGetIssue])
 
   // Write a consolidated scope block into the primary textarea
   // (replacing whatever was there — multi-import is a "set scope" gesture,
