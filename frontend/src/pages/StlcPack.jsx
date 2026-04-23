@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -8,6 +8,7 @@ import toast from 'react-hot-toast'
 import api from '../api/client'
 import PageHeader from '../components/PageHeader'
 import ReportPanel from '../components/ReportPanel'
+import ProjectContextPicker from '../components/ProjectContextPicker'
 import { useJira } from '../context/JiraContext'
 import { useAgentResults } from '../context/AgentResultsContext'
 import { STLC_PACK_AGENTS, getAgent } from '../config/agentMeta'
@@ -137,9 +138,21 @@ export default function StlcPack() {
   const [qaMode, setQaMode] = useQaMode()
   const abortRef = useRef(null)
 
-  useEffect(() => {
+  const fetchProjects = useCallback(() => {
     api.get('/projects/').then(({ data }) => setProjects(data.projects || [])).catch(() => {})
   }, [])
+
+  useEffect(() => {
+    fetchProjects()
+    const onProjectsUpdated = () => fetchProjects()
+    const onFocus = () => fetchProjects()
+    window.addEventListener('qa:projects-updated', onProjectsUpdated)
+    window.addEventListener('focus', onFocus)
+    return () => {
+      window.removeEventListener('qa:projects-updated', onProjectsUpdated)
+      window.removeEventListener('focus', onFocus)
+    }
+  }, [fetchProjects])
 
   const detectedKey = useMemo(() => extractJiraKey(jiraInput), [jiraInput])
   const canRun = !running && (jiraInput.trim().length > 0 || userStory.trim().length > 0)
@@ -314,16 +327,14 @@ export default function StlcPack() {
             <label className="text-sm font-bold text-toon-navy mb-1.5 block">
               Project (for RAG context)
             </label>
-            <select
-              className="toon-input"
+            <ProjectContextPicker
+              projects={projects}
               value={selectedProject}
-              onChange={(e) => setSelectedProject(e.target.value)}
-            >
-              <option value="">Global knowledge only</option>
-              {projects.map(p => (
-                <option key={p.slug} value={p.slug}>{p.name}</option>
-              ))}
-            </select>
+              onChange={setSelectedProject}
+              onProjectsChanged={fetchProjects}
+              variant="compact"
+              disabled={running}
+            />
           </div>
           <div>
             <label className="text-sm font-bold text-toon-navy mb-1.5 block">

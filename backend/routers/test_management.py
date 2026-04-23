@@ -235,12 +235,13 @@ async def push(body: PushRequest, user=Depends(get_current_user)) -> dict[str, A
     if not body.project_key:
         raise HTTPException(400, "project_key is required.")
 
-    # Append "Linked story: <KEY>" to every test case's preconditions so the
-    # link surfaces on every target's description / objective field. We do not
-    # call Jira's issue-link API — per product decision the story key is just
-    # textual context for traceability.
+    # For native_jira we now create a real Jira issue link (type "Test") so
+    # the textual "Linked story:" tag is no longer needed there. Xray and
+    # Zephyr Scale clients don't have a generic link API in this codebase, so
+    # for those targets we still inject the textual tag into preconditions
+    # (it surfaces in their description / objective field for traceability).
     story_key = (body.user_story_key or "").strip()
-    if story_key:
+    if story_key and body.target != "native_jira":
         for dto in body.testcases:
             tag = f"Linked story: {story_key}"
             dto.preconditions = (
@@ -302,7 +303,13 @@ async def push(body: PushRequest, user=Depends(get_current_user)) -> dict[str, A
         for dto in body.testcases:
             tc = _dto_to_testcase(dto)
             try:
-                created = push_native(client, body.project_key, tc, issuetype=issuetype)
+                created = push_native(
+                    client,
+                    body.project_key,
+                    tc,
+                    issuetype=issuetype,
+                    user_story_key=story_key or None,
+                )
                 results.append({"title": tc.title, **created})
             except ConnectionError as exc:
                 results.append({"title": tc.title, "error": str(exc)})
@@ -311,10 +318,14 @@ async def push(body: PushRequest, user=Depends(get_current_user)) -> dict[str, A
         raise HTTPException(400, f"Unknown target: {target}")
 
     successes = sum(1 for r in results if r.get("key") and not r.get("error"))
+    links_succeeded = sum(1 for r in results if r.get("link_to") and not r.get("link_error"))
+    links_failed = sum(1 for r in results if r.get("link_error"))
     return {
         "target": target,
         "total": len(results),
         "succeeded": successes,
         "failed": len(results) - successes,
+        "links_succeeded": links_succeeded,
+        "links_failed": links_failed,
         "results": results,
     }
