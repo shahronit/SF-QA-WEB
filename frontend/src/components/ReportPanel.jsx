@@ -12,6 +12,7 @@ import Sparkline from './motion/Sparkline'
 import TestManagementPush from './TestManagementPush'
 import JiraCommentPush from './JiraCommentPush'
 import JiraBugPush from './JiraBugPush'
+import ExportColumnPicker, { detectMarkdownTables } from './ExportColumnPicker'
 import ExecutionBars from './insights/ExecutionBars'
 import CoverageDonut from './insights/CoverageDonut'
 import TechniqueCompare from './insights/TechniqueCompare'
@@ -98,9 +99,19 @@ export default function ReportPanel({
     if (tab === 'insights' && !insightsAvailable) setTab('formatted')
   }, [insightsAvailable, tab])
 
-  const download = async (format) => {
+  // Pending export = the format the user clicked while the column picker
+  // is open. We detect tables once per click rather than memoizing on
+  // `content` so streaming reports don't constantly re-open the modal.
+  const [pickerFormat, setPickerFormat] = useState(null)
+  const [pickerTables, setPickerTables] = useState([])
+
+  const performDownload = async (format, selectedColumns) => {
     try {
-      const resp = await api.post(`/exports/${format}`, { content, agent_name: agentName }, { responseType: 'blob' })
+      const payload = { content, agent_name: agentName }
+      if (selectedColumns && Object.keys(selectedColumns).length > 0) {
+        payload.selected_columns = selectedColumns
+      }
+      const resp = await api.post(`/exports/${format}`, payload, { responseType: 'blob' })
       const ext = format === 'excel' ? 'xlsx'
         : format === 'markdown' ? 'md'
         : format === 'pdf' ? 'pdf'
@@ -112,9 +123,41 @@ export default function ReportPanel({
       a.click()
       URL.revokeObjectURL(url)
       toast.success(`Downloaded ${format} file!`)
-    } catch {
-      toast.error('Download failed')
+    } catch (err) {
+      // The request used responseType:'blob', so error bodies arrive as a
+      // Blob instead of parsed JSON. Read it back to surface the real
+      // server-side reason ("Excel export failed: Invalid character …")
+      // instead of an opaque "Download failed" toast.
+      let message = `Download failed (${format})`
+      try {
+        const blob = err?.response?.data
+        if (blob && typeof blob.text === 'function') {
+          const text = await blob.text()
+          try {
+            const parsed = JSON.parse(text)
+            if (parsed?.detail) message = parsed.detail
+          } catch {
+            if (text) message = text.slice(0, 240)
+          }
+        } else if (err?.message) {
+          message = err.message
+        }
+      } catch {
+        /* ignore decode failures — fall back to default message */
+      }
+      toast.error(message)
     }
+  }
+
+  const download = (format) => {
+    const tables = detectMarkdownTables(content)
+    if (tables.length === 0) {
+      // No tables — keep the original one-click behavior intact so prose
+      // exports (e.g. test plans, summaries) don't suddenly grow a modal.
+      return performDownload(format, null)
+    }
+    setPickerTables(tables)
+    setPickerFormat(format)
   }
 
   const copyText = () => {
@@ -179,7 +222,7 @@ export default function ReportPanel({
         ))}
       </div>
 
-      <div className="bg-gray-50 rounded-2xl p-5 mb-4 overflow-y-auto overflow-x-hidden" style={{ maxHeight: '70vh' }}>
+      <div className="bg-gray-50 rounded-2xl p-5 mb-4 overflow-y-auto overflow-x-clip" style={{ maxHeight: '70vh' }}>
         {/* While streaming we render plain (no AnimatePresence / no
             Typewriter) so each new token only appends — there is no
             unmount, no re-typing animation, and therefore no flicker.
@@ -265,6 +308,17 @@ export default function ReportPanel({
         <JiraCommentPush markdown={content} agentName={agentName} defaultIssueKey={jiraContextKey} />
         <JiraBugPush markdown={content} agentName={agentName} />
       </div>
+      <ExportColumnPicker
+        open={!!pickerFormat}
+        tables={pickerTables}
+        format={pickerFormat}
+        onCancel={() => setPickerFormat(null)}
+        onConfirm={(selected) => {
+          const fmt = pickerFormat
+          setPickerFormat(null)
+          if (fmt) performDownload(fmt, selected)
+        }}
+      />
     </motion.div>
   )
 }

@@ -128,6 +128,69 @@ export default function TestManagementPush({ markdown, agentName }) {
   const [stories, setStories] = useState([])
   const [storiesLoading, setStoriesLoading] = useState(false)
   const [results, setResults] = useState(null)
+  // Tracks the keys we've handed to /test-case-editor windows so the
+  // postMessage handler can correlate replies back to the right row and
+  // ignore stale events fired after a window is closed and re-opened.
+  const [editKeys, setEditKeys] = useState({}) // { [rowIdx]: editKey }
+
+  // Listen for save events from the pop-out editor. Same-origin only —
+  // we ignore any cross-origin postMessage so a malicious site embedding
+  // us can't inject crafted test cases. The editor cleans up its own
+  // sessionStorage entry; we drop our key->row mapping here.
+  useEffect(() => {
+    const onMessage = (event) => {
+      if (event.origin !== window.location.origin) return
+      const data = event.data
+      if (!data || data.type !== 'tc-edit-result' || !data.key || !data.testcase) return
+      let rowIdx = -1
+      setEditKeys((prev) => {
+        const entry = Object.entries(prev).find(([, k]) => k === data.key)
+        if (!entry) return prev
+        rowIdx = Number(entry[0])
+        const next = { ...prev }
+        delete next[entry[0]]
+        return next
+      })
+      if (rowIdx < 0) return
+      setCases((prev) => prev.map((tc, i) => (i === rowIdx ? { ...tc, ...data.testcase } : tc)))
+      setTitleEdits((prev) => ({ ...prev, [rowIdx]: data.testcase.title || prev[rowIdx] }))
+      toast.success('Test case updated')
+    }
+    window.addEventListener('message', onMessage)
+    return () => window.removeEventListener('message', onMessage)
+  }, [])
+
+  const openRowEditor = (idx) => {
+    const tc = cases[idx]
+    if (!tc) return
+    // Inline title edits override the parsed title until the user pushes,
+    // so reflect that in the popup so the user doesn't see a stale name.
+    const payload = { ...tc, title: titleEdits[idx] ?? tc.title ?? '' }
+    const key = (typeof crypto !== 'undefined' && crypto.randomUUID)
+      ? crypto.randomUUID()
+      : `tc-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    try {
+      sessionStorage.setItem(`tc-edit:${key}`, JSON.stringify(payload))
+    } catch {
+      toast.error('Could not stash test case for editor window')
+      return
+    }
+    setEditKeys((prev) => ({ ...prev, [idx]: key }))
+    const win = window.open(
+      `/test-case-editor?key=${encodeURIComponent(key)}`,
+      `tc-editor-${key}`,
+      'width=900,height=800,resizable=yes,scrollbars=yes',
+    )
+    if (!win) {
+      toast.error('Pop-up blocked. Allow pop-ups for this site to edit test cases.')
+      try { sessionStorage.removeItem(`tc-edit:${key}`) } catch { /* ignore */ }
+      setEditKeys((prev) => {
+        const next = { ...prev }
+        delete next[idx]
+        return next
+      })
+    }
+  }
 
   const targetConnected = useMemo(() => {
     if (target === 'xray') return status.xray
@@ -402,13 +465,14 @@ export default function TestManagementPush({ markdown, agentName }) {
                           <span>{selectedCount} of {cases.length} selected</span>
                         </div>
                         <div className="border border-gray-200 rounded-2xl overflow-x-auto">
-                          <table className="w-full min-w-[640px] text-sm">
+                          <table className="w-full min-w-[680px] text-sm">
                             <thead className="bg-gray-50 text-xs text-gray-500 uppercase">
                               <tr>
                                 <th className="p-2 w-10"></th>
                                 <th className="p-2 text-left">Title</th>
                                 <th className="p-2 text-left w-24">Priority</th>
                                 <th className="p-2 text-left w-16">Steps</th>
+                                <th className="p-2 text-left w-20">Actions</th>
                               </tr>
                             </thead>
                             <tbody>
@@ -433,6 +497,17 @@ export default function TestManagementPush({ markdown, agentName }) {
                                   </td>
                                   <td className="p-2 text-gray-500">{tc.priority || '—'}</td>
                                   <td className="p-2 text-gray-500">{tc.steps?.length || 0}</td>
+                                  <td className="p-2">
+                                    <button
+                                      type="button"
+                                      onClick={() => openRowEditor(idx)}
+                                      className="text-[11px] font-bold text-toon-blue hover:underline disabled:text-gray-400 disabled:no-underline"
+                                      disabled={!!editKeys[idx]}
+                                      title={editKeys[idx] ? 'Editor window open — finish or close it first' : 'Open full editor in a new window'}
+                                    >
+                                      {editKeys[idx] ? '✎ open…' : '✎ Edit'}
+                                    </button>
+                                  </td>
                                 </tr>
                               ))}
                             </tbody>
