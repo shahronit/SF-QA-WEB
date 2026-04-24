@@ -11,6 +11,7 @@ import PageHeader from '../components/PageHeader'
 import ToonCard from '../components/ToonCard'
 import TestManagementPush from '../components/TestManagementPush'
 import JiraCommentPush from '../components/JiraCommentPush'
+import ExportColumnPicker, { detectMarkdownTables } from '../components/ExportColumnPicker'
 
 const PUSH_AGENTS = new Set(['testcase', 'smoke', 'regression'])
 const JIRA_COMMENT_AGENTS = new Set(['requirement', 'exec_report', 'closure_report'])
@@ -59,18 +60,27 @@ export default function History() {
     setRecords([])
   }
 
+  // Cross-record column-picker state. We stash the in-flight format +
+  // markdown + agent so the picker is shared across all expanded rows
+  // (you can only have one open at a time anyway).
+  const [picker, setPicker] = useState(null)  // { format, content, agentName, tables }
+
   // Mirror ReportPanel.download(): hit POST /api/exports/{format} with the
   // raw markdown and stream the resulting blob into a hidden <a> click.
-  const downloadExport = async (format, content, agentName) => {
+  const performDownloadExport = async (format, content, agentName, selectedColumns) => {
     if (!content) {
       toast.error('No output to export')
       return
     }
     const tid = toast.loading(`Generating ${format.toUpperCase()}…`)
     try {
+      const payload = { content, agent_name: agentName }
+      if (selectedColumns && Object.keys(selectedColumns).length > 0) {
+        payload.selected_columns = selectedColumns
+      }
       const resp = await api.post(
         `/exports/${format}`,
-        { content, agent_name: agentName },
+        payload,
         { responseType: 'blob' },
       )
       const ext = format === 'excel' ? 'xlsx'
@@ -87,8 +97,41 @@ export default function History() {
       URL.revokeObjectURL(url)
       toast.success(`Downloaded ${format.toUpperCase()}!`, { id: tid })
     } catch (err) {
-      toast.error(err?.response?.data?.detail || `${format.toUpperCase()} export failed`, { id: tid })
+      // responseType:'blob' means the error body is a Blob; parse it to
+      // recover the backend's `detail` string instead of showing a
+      // generic "export failed" toast.
+      let message = `${format.toUpperCase()} export failed`
+      try {
+        const blob = err?.response?.data
+        if (blob && typeof blob.text === 'function') {
+          const text = await blob.text()
+          try {
+            const parsed = JSON.parse(text)
+            if (parsed?.detail) message = parsed.detail
+          } catch {
+            if (text) message = text.slice(0, 240)
+          }
+        } else if (err?.message) {
+          message = err.message
+        }
+      } catch {
+        /* fall through to default message */
+      }
+      toast.error(message, { id: tid })
     }
+  }
+
+  const downloadExport = (format, content, agentName) => {
+    if (!content) {
+      toast.error('No output to export')
+      return
+    }
+    const tables = detectMarkdownTables(content)
+    if (tables.length === 0) {
+      // No tables in the run — preserve the original instant-download UX.
+      return performDownloadExport(format, content, agentName, null)
+    }
+    setPicker({ format, content, agentName, tables })
   }
 
   // Stash the record payload in sessionStorage and open a standalone viewer
@@ -192,7 +235,7 @@ export default function History() {
                         )}
                       </div>
                     )}
-                    <div className="bg-gray-50 rounded-2xl p-4 max-h-96 overflow-y-auto overflow-x-hidden">
+                    <div className="bg-gray-50 rounded-2xl p-4 max-h-96 overflow-y-auto overflow-x-clip">
                       <div className="markdown-body">
                         <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]} components={HISTORY_MD_COMPONENTS}>{md || 'No output'}</ReactMarkdown>
                       </div>
@@ -205,6 +248,17 @@ export default function History() {
         })}
         {records.length === 0 && <p className="text-center text-gray-400 py-8">No history yet. Run an agent to see results here.</p>}
       </div>
+      <ExportColumnPicker
+        open={!!picker}
+        tables={picker?.tables || []}
+        format={picker?.format}
+        onCancel={() => setPicker(null)}
+        onConfirm={(selected) => {
+          const p = picker
+          setPicker(null)
+          if (p) performDownloadExport(p.format, p.content, p.agentName, selected)
+        }}
+      />
     </div>
   )
 }

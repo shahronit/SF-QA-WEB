@@ -122,10 +122,36 @@
   white-space: nowrap;
 }
 
-/* Wrap tables in a scrollable container */
+/* Wrap tables in a scrollable container.
+   The wrap owns BOTH axes and is height-capped so the horizontal scrollbar
+   stays inside the visible viewport even when an ancestor (ReportPanel,
+   History) provides its own vertical scrolling. Without this cap the
+   horizontal bar lands at the bottom of the *document*, far below the
+   visible area, and the user has no way to pan a wide table. */
 .table-wrap {
-  @apply overflow-x-auto mb-4;
+  @apply mb-4;
+  max-height: 60vh;
+  overflow: auto;
   -webkit-overflow-scrolling: touch;
+  scrollbar-gutter: stable;
+}
+
+/* Top-of-table scroll bar that mirrors the underlying horizontal scrollbar.
+   `MarkdownTableScroll` injects a sibling div whose width matches the table;
+   a small JS sync keeps both scrollbars in lockstep. We make the proxy
+   sticky so it stays glued to the top of the viewport while the user pans
+   tall tables vertically. */
+.table-wrap-top {
+  position: sticky;
+  top: 0;
+  height: 14px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  z-index: 1;
+  background: transparent;
+}
+.table-wrap-top > div {
+  height: 1px;
 }
 
 /* Shimmer for skeleton loaders */

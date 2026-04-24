@@ -1,17 +1,20 @@
-"""Master coordinator: RAG retrieval + LLM (Gemini or OpenAI) for all agents.
+"""Master coordinator: RAG retrieval + Google Gemini LLM for all agents.
 
-Supports runtime switching between Google Gemini and OpenAI ChatGPT,
-with automatic retry, exponential backoff, and model fallback chains.
+Calls Gemini via the google-genai SDK with automatic retry, exponential
+backoff, and a model fallback chain (e.g. 2.5-pro -> 2.5-flash -> 2.0-flash).
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import time
 from collections.abc import Iterator
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from core import firestore_db
 from core.prompts.prompts import (
@@ -134,67 +137,17 @@ class _GeminiProvider:
                 yield piece
 
 
-class _OpenAIProvider:
-    """Adapter for OpenAI ChatGPT (openai SDK)."""
-
-    name = "openai"
-
-    def __init__(self, api_key: str) -> None:
-        from openai import OpenAI
-        self._client = OpenAI(api_key=api_key)
-
-    def generate(
-        self, model: str, system_prompt: str, user_content: str,
-        temperature: float, max_tokens: int,
-    ) -> str:
-        """Synchronous generation — returns full text."""
-        resp = self._client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_content},
-            ],
-            temperature=temperature,
-            max_tokens=max_tokens,
-        )
-        return (resp.choices[0].message.content or "").strip()
-
-    def stream(
-        self, model: str, system_prompt: str, user_content: str,
-        temperature: float, max_tokens: int,
-    ) -> Iterator[str]:
-        """Streaming generation — yields text chunks."""
-        stream = self._client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_content},
-            ],
-            temperature=temperature,
-            max_tokens=max_tokens,
-            stream=True,
-        )
-        for chunk in stream:
-            delta = chunk.choices[0].delta.content or ""
-            if delta:
-                yield delta
-
-
 # ---------------------------------------------------------------------------
 # Orchestrator
 # ---------------------------------------------------------------------------
 
 class SFQAOrchestrator:
-    """Retrieve Salesforce KB context, then call the configured LLM provider."""
+    """Retrieve Salesforce KB context, then call Google Gemini for generation."""
 
     def __init__(
         self,
         *,
-        provider: str = "openai",
-        openai_api_key: str = "",
-        openai_model: str = "gpt-4o",
-        openai_fallbacks: list[str] | None = None,
-        openai_max_retries: int = 3,
+        provider: str = "gemini",
         gemini_api_key: str = "",
         gemini_model: str = "gemini-2.5-pro",
         gemini_fallbacks: list[str] | None = None,
@@ -209,17 +162,9 @@ class SFQAOrchestrator:
         self.temperature = temperature
         self._active_project: str | None = None
 
-        self._providers: dict[str, _GeminiProvider | _OpenAIProvider] = {}
+        self._providers: dict[str, _GeminiProvider] = {}
         self._model_chains: dict[str, list[str]] = {}
         self._max_retries_map: dict[str, int] = {}
-
-        # NOTE: OpenAI / ChatGPT is intentionally not registered as a
-        # selectable provider. The class and config plumbing remain so it
-        # can be re-enabled later by un-commenting the block below.
-        # if openai_api_key:
-        #     self._providers["openai"] = _OpenAIProvider(openai_api_key)
-        #     self._model_chains["openai"] = [openai_model] + (openai_fallbacks or [])
-        #     self._max_retries_map["openai"] = openai_max_retries
 
         if gemini_api_key:
             self._providers["gemini"] = _GeminiProvider(gemini_api_key)
@@ -246,11 +191,11 @@ class SFQAOrchestrator:
     def available_providers(self) -> list[dict[str, Any]]:
         """Return list of configured providers with their models."""
         result = []
-        for name, prov in self._providers.items():
+        for name, _prov in self._providers.items():
             chain = self._model_chains.get(name, [])
             result.append({
                 "provider": name,
-                "label": "Google Gemini" if name == "gemini" else "OpenAI ChatGPT",
+                "label": "Google Gemini",
                 "model": chain[0] if chain else "",
                 "fallbacks": chain[1:] if len(chain) > 1 else [],
                 "active": name == self._active_provider,
@@ -270,13 +215,13 @@ class SFQAOrchestrator:
 
     # -- internal --
 
-    def _get_provider(self) -> _GeminiProvider | _OpenAIProvider:
+    def _get_provider(self) -> _GeminiProvider:
         """Return the active provider instance."""
         prov = self._providers.get(self._active_provider)
         if not prov:
             raise RuntimeError(
                 f"LLM provider '{self._active_provider}' is not configured. "
-                f"Set the API key in backend/.env."
+                f"Set GEMINI_API_KEY in backend/.env."
             )
         return prov
 
@@ -315,6 +260,38 @@ class SFQAOrchestrator:
                 global_k=max(1, self.rag_top_k - 1),
                 project_k=self.rag_top_k,
             )
+            # MCP servers configured on this project augment the local RAG
+            # context with whatever resources external tools (GitHub,
+            # Confluence, custom MCP servers, …) expose. Failures must
+            # NOT block the agent — a flaky external server should at
+            # worst leave us with the existing local Chroma context.
+            try:
+                from rag.mcp_source import MCPSource
+                mcp_docs = MCPSource(self._active_project).fetch(
+                    query or agent_name,
+                    k=self.rag_top_k,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "MCP context fetch failed for project %s: %s",
+                    self._active_project, exc,
+                )
+                mcp_docs = []
+            if mcp_docs:
+                # Group by server so the LLM can attribute claims back to
+                # the originating MCP source. We label each block once so
+                # the prompt stays compact even if a single server
+                # returned several chunks.
+                by_server: dict[str, list[str]] = {}
+                for d in mcp_docs:
+                    srv = d.metadata.get("mcp_server", "MCP")
+                    by_server.setdefault(srv, []).append(d.page_content.strip())
+                blocks: list[str] = []
+                for srv, parts in by_server.items():
+                    blocks.append(
+                        f"### MCP CONTEXT (from {srv})\n" + "\n\n---\n\n".join(parts)
+                    )
+                context = (context or "").rstrip() + "\n\n" + "\n\n".join(blocks)
             scope_instructions = (
                 "Instructions: You are in PROJECT MODE. "
                 "Project documents are authoritative scope — derive artifacts from them. "
@@ -432,7 +409,7 @@ class SFQAOrchestrator:
         if not self._providers:
             return (
                 "**Error:** No LLM provider is configured. "
-                "Set `GEMINI_API_KEY` or `OPENAI_API_KEY` in `backend/.env`."
+                "Set `GEMINI_API_KEY` in `backend/.env`."
             )
 
         system_prompt, user_block = self._build_messages(
@@ -442,9 +419,8 @@ class SFQAOrchestrator:
         try:
             content = self._call_with_retry(system_prompt, user_block)
         except Exception as exc:  # noqa: BLE001
-            provider_label = "Gemini" if self._active_provider == "gemini" else "OpenAI"
             content = (
-                f"**Error calling {provider_label}:** `{exc}`\n\n"
+                f"**Error calling Gemini:** `{exc}`\n\n"
                 "The model may be temporarily overloaded. "
                 "Please wait a moment and try again."
             )
@@ -472,7 +448,7 @@ class SFQAOrchestrator:
             yield f"Unknown agent: {agent_name}"
             return
         if not self._providers:
-            yield "**Error:** No LLM provider is configured. Set API keys in `backend/.env`."
+            yield "**Error:** No LLM provider is configured. Set `GEMINI_API_KEY` in `backend/.env`."
             return
 
         try:
@@ -488,9 +464,8 @@ class SFQAOrchestrator:
                 collected.append(piece)
                 yield piece
         except Exception as exc:  # noqa: BLE001
-            provider_label = "Gemini" if self._active_provider == "gemini" else "OpenAI"
             err = (
-                f"**Error calling {provider_label}:** `{exc}`\n\n"
+                f"**Error calling Gemini:** `{exc}`\n\n"
                 "The model may be temporarily overloaded. "
                 "Please wait a moment and try again."
             )

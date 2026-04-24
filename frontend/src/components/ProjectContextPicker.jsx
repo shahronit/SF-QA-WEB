@@ -3,8 +3,17 @@ import { createPortal } from 'react-dom'
 import { AnimatePresence, motion } from 'framer-motion'
 import toast from 'react-hot-toast'
 import api from '../api/client'
+import {
+  putMany as docStorePutMany,
+  listFiles as docStoreList,
+  deleteFile as docStoreDelete,
+  projectScope,
+} from '../utils/docStore'
 
-const ACCEPT = '.pdf,.docx,.doc,.csv,.txt,.xlsx,.json,.md'
+// Match Projects.jsx — accept anything; the ingestor falls back to
+// plain-text loading for unknown extensions so nothing is rejected at
+// upload time.
+const ACCEPT = '*/*'
 
 function formatBytes(n) {
   if (typeof n !== 'number' || !Number.isFinite(n) || n < 0) return ''
@@ -17,14 +26,58 @@ function normalizeDocs(raw) {
   if (!Array.isArray(raw)) return []
   return raw
     .map((d) => {
-      if (typeof d === 'string') return { name: d, size: null }
+      if (typeof d === 'string') return { name: d, size: null, uploadedBy: '', uploadedAt: '', localOnly: false }
       if (d && typeof d === 'object') {
         const name = d.name || d.filename || ''
-        return name ? { name, size: typeof d.size === 'number' ? d.size : null } : null
+        if (!name) return null
+        return {
+          name,
+          size: typeof d.size === 'number' ? d.size : null,
+          uploadedBy: d.uploaded_by || d.uploadedBy || '',
+          uploadedAt: d.uploaded_at || d.uploadedAt || '',
+          localOnly: false,
+        }
       }
       return null
     })
     .filter(Boolean)
+}
+
+// Union backend docs with the browser's IndexedDB sidecar, tagging
+// browser-only entries so the UI can badge them. Backend entries win on
+// metadata (size / uploadedAt) when both stores know about a file.
+async function mergeWithLocal(slug, backendDocs) {
+  const merged = normalizeDocs(backendDocs)
+  if (!slug) return merged
+  let local = []
+  try {
+    local = await docStoreList(projectScope(slug))
+  } catch { return merged }
+  const known = new Set(merged.map((d) => d.name))
+  for (const l of local) {
+    if (known.has(l.name)) continue
+    merged.push({
+      name: l.name,
+      size: typeof l.size === 'number' ? l.size : null,
+      uploadedBy: l.uploadedBy || '',
+      uploadedAt: l.uploadedAt || l.addedAt || '',
+      localOnly: true,
+    })
+  }
+  return merged
+}
+
+function fmtUploaded(iso) {
+  if (!iso) return ''
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ''
+  return d.toLocaleString(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
 }
 
 export default function ProjectContextPicker({
@@ -104,17 +157,22 @@ export default function ProjectContextPicker({
     setDocState((prev) => ({ ...prev, loading: true, error: '' }))
     try {
       const { data } = await api.get(`/projects/${slug}`)
+      const docs = await mergeWithLocal(slug, data?.documents)
       setDocState({
         loading: false,
         error: '',
-        docs: normalizeDocs(data?.documents),
+        docs,
         indexed: !!data?.indexed,
       })
     } catch (err) {
+      // Even when the backend lookup fails we still surface whatever the
+      // browser sidecar has cached so the user never feels their docs
+      // disappeared.
+      const docs = await mergeWithLocal(slug, [])
       setDocState({
         loading: false,
-        error: err?.response?.data?.detail || 'Failed to load documents',
-        docs: [],
+        error: docs.length ? '' : (err?.response?.data?.detail || 'Failed to load documents'),
+        docs,
         indexed: false,
       })
     }
@@ -199,6 +257,15 @@ export default function ProjectContextPicker({
     const files = Array.from(e.target.files || [])
     e.target.value = ''
     if (!files.length || !value) return
+    // Mirror to browser sidecar first so the file persists in IndexedDB
+    // even if the network upload fails. The user only loses it when
+    // they click the explicit × button.
+    try {
+      await docStorePutMany(projectScope(value), files, {
+        uploadedAt: new Date().toISOString(),
+      })
+    } catch { /* IndexedDB unavailable */ }
+
     const formData = new FormData()
     files.forEach((f) => formData.append('files', f))
     const tid = toast.loading(`Uploading ${files.length} file${files.length > 1 ? 's' : ''}…`)
@@ -210,7 +277,11 @@ export default function ProjectContextPicker({
       await fetchDocs(value)
       triggerReindex(value)
     } catch (err) {
-      toast.error(err?.response?.data?.detail || 'Upload failed', { id: tid })
+      toast.error(
+        `${err?.response?.data?.detail || 'Server upload failed'} — kept on this device`,
+        { id: tid },
+      )
+      await fetchDocs(value)
     }
   }
 
@@ -218,14 +289,21 @@ export default function ProjectContextPicker({
     if (!value) return
     if (!window.confirm(`Remove "${filename}" from this project?`)) return
     const tid = toast.loading(`Removing ${filename}…`)
+    let backendOk = true
     try {
       await api.delete(`/projects/${value}/documents/${encodeURIComponent(filename)}`)
-      toast.success(`Removed ${filename}`, { id: tid })
-      await fetchDocs(value)
-      triggerReindex(value)
     } catch (err) {
-      toast.error(err?.response?.data?.detail || 'Delete failed', { id: tid })
+      backendOk = false
+      const status = err?.response?.status
+      if (status && status !== 404) {
+        toast.error(err?.response?.data?.detail || 'Server delete failed', { id: tid })
+      }
     }
+    try { await docStoreDelete(projectScope(value), filename) } catch { /* ignore */ }
+    if (backendOk) toast.success(`Removed ${filename}`, { id: tid })
+    else toast.success(`Removed ${filename} from this device`, { id: tid })
+    await fetchDocs(value)
+    if (backendOk) triggerReindex(value)
   }
 
   const docCount = docState.docs.length
@@ -449,34 +527,51 @@ export default function ProjectContextPicker({
             </div>
           ) : (
             <ul className="max-h-48 overflow-auto divide-y divide-gray-200 bg-white rounded-xl border border-gray-200">
-              {docState.docs.map((d) => (
-                <li
-                  key={d.name}
-                  className="flex items-center justify-between gap-2 px-3 py-1.5 text-xs"
-                >
-                  <div className="flex items-center gap-2 min-w-0">
-                    <span aria-hidden="true">📄</span>
-                    <span className="truncate text-toon-navy" title={d.name}>
-                      {d.name}
-                    </span>
-                    {d.size != null && (
-                      <span className="text-[10px] text-gray-400 flex-shrink-0">
-                        {formatBytes(d.size)}
-                      </span>
-                    )}
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => handleDelete(d.name)}
-                    disabled={disabled}
-                    title="Remove from project"
-                    aria-label={`Remove ${d.name}`}
-                    className="text-gray-400 hover:text-toon-coral text-base leading-none px-1.5 disabled:opacity-40"
+              {docState.docs.map((d) => {
+                const meta = []
+                if (d.size != null) meta.push(formatBytes(d.size))
+                if (d.uploadedBy) meta.push(`by ${d.uploadedBy}`)
+                const when = fmtUploaded(d.uploadedAt)
+                if (when) meta.push(when)
+                return (
+                  <li
+                    key={d.name}
+                    className="flex items-center justify-between gap-2 px-3 py-1.5 text-xs"
                   >
-                    ×
-                  </button>
-                </li>
-              ))}
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span aria-hidden="true">📄</span>
+                      <div className="min-w-0">
+                        <div className="truncate text-toon-navy flex items-center gap-1.5" title={d.name}>
+                          <span className="truncate">{d.name}</span>
+                          {d.localOnly && (
+                            <span
+                              className="text-[9px] uppercase tracking-wider font-bold px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 flex-shrink-0"
+                              title="Stored only in this browser. Will not be removed unless you click ×."
+                            >
+                              💾 device
+                            </span>
+                          )}
+                        </div>
+                        {meta.length > 0 && (
+                          <div className="text-[10px] text-gray-400 truncate">
+                            {meta.join(' • ')}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleDelete(d.name)}
+                      disabled={disabled}
+                      title="Remove from project"
+                      aria-label={`Remove ${d.name}`}
+                      className="text-gray-400 hover:text-toon-coral text-base leading-none px-1.5 disabled:opacity-40"
+                    >
+                      ×
+                    </button>
+                  </li>
+                )
+              })}
             </ul>
           )}
         </div>

@@ -1,11 +1,10 @@
-"""LangChain Chroma: prefer OpenAI embeddings when configured, else Ollama."""
+"""LangChain Chroma vector store backed by Google Gemini embeddings."""
 
 from __future__ import annotations
 
 import logging
 from pathlib import Path
 
-from langchain_community.embeddings import OllamaEmbeddings, OpenAIEmbeddings
 from langchain_community.vectorstores import Chroma
 from langchain_core.documents import Document
 
@@ -13,27 +12,30 @@ from config import settings
 
 log = logging.getLogger(__name__)
 
-# Small / cheap; matches typical ChatGPT API setups (same key as the LLM).
-_RAG_OPENAI_EMBED_MODEL = "text-embedding-3-small"
-_ollama_fallback_logged = False
-
 
 def _make_embeddings():
-    """Use OpenAI embeddings when *OPENAI_API_KEY* is set; otherwise Ollama."""
-    global _ollama_fallback_logged
-    key = (settings.OPENAI_API_KEY or "").strip()
-    if key:
-        return OpenAIEmbeddings(
-            model=_RAG_OPENAI_EMBED_MODEL,
-            openai_api_key=key,
+    """Build the Gemini embeddings client used by RAG.
+
+    Hard requirement on GEMINI_API_KEY — no silent fallback to OpenAI/Ollama,
+    by design. We surface a clear error so the operator knows exactly what
+    to set in backend/.env.
+    """
+    key = (settings.GEMINI_API_KEY or "").strip()
+    if not key:
+        raise RuntimeError(
+            "GEMINI_API_KEY is required for RAG embeddings. "
+            "Set it in backend/.env and restart the server."
         )
-    if not _ollama_fallback_logged:
-        _ollama_fallback_logged = True
-        log.warning(
-            "RAG: OPENAI_API_KEY not set; using Ollama (nomic-embed-text) for embeddings. "
-            "Set OPENAI_API_KEY in .env to re-index without a local Ollama server."
-        )
-    return OllamaEmbeddings(model="nomic-embed-text")
+    try:
+        from langchain_google_genai import GoogleGenerativeAIEmbeddings
+    except ImportError as exc:
+        raise RuntimeError(
+            "langchain-google-genai is not installed. "
+            "Run `pip install langchain-google-genai` (or "
+            "`pip install -r backend/requirements.txt`) and restart."
+        ) from exc
+    model = (settings.GEMINI_EMBED_MODEL or "models/text-embedding-004").strip()
+    return GoogleGenerativeAIEmbeddings(model=model, google_api_key=key)
 
 
 class SalesforceVectorStore:

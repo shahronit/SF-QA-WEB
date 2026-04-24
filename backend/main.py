@@ -37,11 +37,14 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 # API routes
 # ---------------------------------------------------------------------------
-from routers import auth, agents, projects, history, jira, salesforce, knowledge, exports, llm, stlc_pack, gdrive, test_management  # noqa: E402
+from routers import auth, agents, projects, history, jira, salesforce, knowledge, exports, llm, stlc_pack, gdrive, test_management, mcp  # noqa: E402
 
 app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 app.include_router(agents.router, prefix="/api/agents", tags=["agents"])
 app.include_router(projects.router, prefix="/api/projects", tags=["projects"])
+# MCP routes share the projects/{slug} URL space — mounted alongside so
+# the path is /api/projects/{slug}/mcp/servers, matching the plan.
+app.include_router(mcp.router, prefix="/api/projects", tags=["mcp"])
 app.include_router(history.router, prefix="/api/history", tags=["history"])
 app.include_router(jira.router, prefix="/api/jira", tags=["jira"])
 app.include_router(gdrive.router, prefix="/api/gdrive", tags=["gdrive"])

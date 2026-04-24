@@ -82,8 +82,15 @@ def get_db() -> Any:
 
     if not firebase_admin._apps:
         cred = _load_credentials()
-        opts = {"projectId": settings.FIREBASE_PROJECT_ID} if settings.FIREBASE_PROJECT_ID else None
-        firebase_admin.initialize_app(cred, opts)
+        # Initialize with both projectId AND storageBucket so the same Admin
+        # app is reusable from `firebase_storage.get_bucket()` without a
+        # second initialize_app call (which would raise).
+        opts: dict[str, Any] = {}
+        if settings.FIREBASE_PROJECT_ID:
+            opts["projectId"] = settings.FIREBASE_PROJECT_ID
+        if settings.FIREBASE_STORAGE_BUCKET:
+            opts["storageBucket"] = settings.FIREBASE_STORAGE_BUCKET
+        firebase_admin.initialize_app(cred, opts or None)
 
     _db = firestore.client()
     return _db
@@ -94,6 +101,12 @@ def get_db() -> Any:
 # ---------------------------------------------------------------------------
 USERS = "users"
 PROJECTS = "projects"
+# Subcollection under projects/{slug}/ holding one doc per uploaded file.
+PROJECT_DOCUMENTS = "documents"
+# Subcollection under projects/{slug}/ holding one doc per configured MCP
+# server. Each doc has shape {id, name, url, headers, enabled, created_by,
+# created_at} — see project_manager.list_mcp_servers / add_mcp_server.
+MCP_SERVERS = "mcp_servers"
 AGENT_RUNS = "agent_runs"
 JIRA_SESSIONS = "jira_sessions"
 GDRIVE_SESSIONS = "gdrive_sessions"

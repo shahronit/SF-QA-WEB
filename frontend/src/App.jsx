@@ -26,6 +26,7 @@ import RCA from './pages/RCA'
 import ClosureReport from './pages/ClosureReport'
 import StlcPack from './pages/StlcPack'
 import ResultView from './pages/ResultView'
+import TestCaseEditor from './pages/TestCaseEditor'
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth()
@@ -47,6 +48,11 @@ export default function App() {
               new tab. Sits outside <Layout> so the new window has no sidebar
               or header — just the report. Still gated by ProtectedRoute. */}
           <Route path="/result/view" element={<ProtectedRoute><ResultView /></ProtectedRoute>} />
+          {/* Pop-out test-case editor opened from TestManagementPush. Lives
+              outside <Layout> so the popup window has no sidebar / header,
+              just the structured form. Communicates back to its opener via
+              window.postMessage on save. */}
+          <Route path="/test-case-editor" element={<ProtectedRoute><TestCaseEditor /></ProtectedRoute>} />
           <Route path="/" element={<ProtectedRoute><Layout /></ProtectedRoute>}>
             <Route index element={<Hub />} />
             <Route path="requirements" element={<Requirements />} />

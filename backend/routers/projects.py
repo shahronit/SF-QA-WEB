@@ -24,6 +24,23 @@ class ShareRequest(BaseModel):
     target_username: str
 
 
+def _require_project_access(slug: str, username: str) -> dict:
+    """Return metadata if *username* may read/edit *slug*, else raise 403/404.
+
+    Documents follow the project, so we treat owner + everyone in
+    `shared_with` as having full add/remove rights. Legacy projects with no
+    `owner` field stay open (back-compat).
+    """
+    meta = pm.get_metadata(slug)
+    if meta is None:
+        raise HTTPException(404, "Project not found")
+    if "owner" not in meta:
+        return meta
+    if meta.get("owner") == username or username in (meta.get("shared_with") or []):
+        return meta
+    raise HTTPException(403, "You do not have access to this project")
+
+
 @router.get("/")
 async def list_projects(user=Depends(get_current_user)):
     """List projects visible to the authenticated user."""
@@ -65,18 +82,26 @@ async def upload_files(
     files: list[UploadFile] = File(...),
     user=Depends(get_current_user),
 ):
-    """Upload one or more documents to a project."""
+    """Upload one or more documents to a project (owner or shared user)."""
+    _require_project_access(slug, user["username"])
     saved = []
     for f in files:
         content = await f.read()
-        pm.save_file(slug, f.filename, content)
-        saved.append(f.filename)
+        meta = pm.save_file(
+            slug,
+            f.filename,
+            content,
+            uploader=user["username"],
+            content_type=f.content_type,
+        )
+        saved.append(meta)
     return {"saved": saved}
 
 
 @router.delete("/{slug}/documents/{filename}")
 async def delete_document(slug: str, filename: str, user=Depends(get_current_user)):
-    """Remove a single document from a project."""
+    """Remove a single document from a project (owner or shared user only)."""
+    _require_project_access(slug, user["username"])
     pm.delete_document(slug, filename)
     return {"deleted": filename}
 
@@ -84,6 +109,7 @@ async def delete_document(slug: str, filename: str, user=Depends(get_current_use
 @router.post("/{slug}/build-index")
 async def build_index(slug: str, user=Depends(get_current_user)):
     """Ingest project documents into a ChromaDB vector store."""
+    _require_project_access(slug, user["username"])
     # Drop any in-memory Chroma client and close file handles *before* we
     # shutil.rmtree the on-disk project store. On Windows an open Chroma
     # sqlite/segment lock otherwise causes PermissionError and re-index
@@ -96,9 +122,11 @@ async def build_index(slug: str, user=Depends(get_current_user)):
         orch.reload_project_rag(slug)
         raise HTTPException(
             500,
-            detail=f"Re-index failed: {exc!s}. "
-            "Set OPENAI_API_KEY in .env to use OpenAI embeddings, or run Ollama with "
-            "`ollama pull nomic-embed-text` for local embeddings.",
+            detail=(
+                f"Re-index failed: {exc!s}. "
+                "Verify GEMINI_API_KEY is set in backend/.env and that the "
+                "service account can read FIREBASE_STORAGE_BUCKET."
+            ),
         ) from exc
     orch.reload_project_rag(slug)
     return {"chunks": count}

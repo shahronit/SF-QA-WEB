@@ -57,8 +57,11 @@ def export_workbook_bytes(sheets: dict[str, list[dict[str, Any]]]) -> bytes:
     """Build an .xlsx with one sheet per key; each value is a list of row dicts (openpyxl)."""
     wb = Workbook()
     first = True
+    used_names: set[str] = set()
     for sheet_name, rows in sheets.items():
-        name = sheet_name[:31] or "Sheet1"
+        # Sanitize each sheet name so callers can pass raw headings/agent
+        # names without hitting openpyxl's "Invalid character" exception.
+        name = sanitize_sheet_name(sheet_name or "Sheet1", used_names)
         if first:
             ws = wb.active
             ws.title = name
@@ -107,11 +110,56 @@ def sanitize_filename(name: str) -> str:
     return re.sub(r"[^\w\-]", "_", name).lower()
 
 
-def export_to_markdown(content: str, agent_name: str) -> bytes:
-    """Prefix agent output with a title block for download."""
+# Excel forbids these characters in sheet names: : \ / ? * [ ]
+# Also: max 31 chars, can't be blank, can't start/end with a single quote.
+# Without this sanitizer, a heading like "Suite: Authentication" or
+# "Path/to/sub" becomes a colon/slash inside `ws.title` and openpyxl
+# raises ValueError, which surfaces to the user as "Download failed".
+_EXCEL_BAD_SHEET_CHARS_RE = re.compile(r"[:\\/?*\[\]]")
+
+
+def sanitize_sheet_name(name: str, used: set[str] | None = None) -> str:
+    """Return *name* coerced into a valid, unique-within-*used* Excel sheet name.
+
+    The Excel spec disallows ``: \\ / ? * [ ]`` and caps names at 31 chars,
+    so we replace each bad char with ``-``, trim leading/trailing single
+    quotes, and add a numeric suffix if the same base name is already in
+    *used*. Always returns at least one character.
+    """
+    raw = (name or "").strip()
+    cleaned = _EXCEL_BAD_SHEET_CHARS_RE.sub("-", raw)
+    cleaned = cleaned.strip("'").strip()
+    if not cleaned:
+        cleaned = "Sheet"
+    base = cleaned[:31]
+    if used is None:
+        return base
+    candidate = base
+    n = 2
+    while candidate in used:
+        suffix = f" ({n})"
+        # Truncate base so suffix still fits inside the 31-char window.
+        candidate = (base[: 31 - len(suffix)]).rstrip() + suffix
+        n += 1
+    used.add(candidate)
+    return candidate
+
+
+def export_to_markdown(
+    content: str,
+    agent_name: str,
+    selected_columns: dict[str, list[str]] | None = None,
+) -> bytes:
+    """Prefix agent output with a title block for download.
+
+    When *selected_columns* is supplied, GFM tables are filtered via
+    :func:`filter_table_columns` before the title block is prepended so the
+    downloaded `.md` file matches what the user picked in the UI.
+    """
+    content = filter_table_columns(content, selected_columns)
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     header = (
-        f"# SF-QA-WEB — {agent_name.title()}\n"
+        f"# QA Studio Agent — {agent_name.title()}\n"
         f"> Generated: {timestamp}\n\n---\n\n"
     )
     return (header + content).encode("utf-8")
@@ -249,7 +297,131 @@ def parse_all_markdown_tables(content: str) -> list[dict]:
     return tables
 
 
-def export_to_csv(content: str) -> bytes:
+def filter_table_columns(
+    content: str,
+    selected: dict[str, list[str]] | None,
+) -> str:
+    """Return *content* with each GFM pipe table's columns restricted to *selected*.
+
+    *selected* is keyed by the table's 0-based source-order index (as a
+    string) and the value is the list of header labels to KEEP. Tables whose
+    index isn't in *selected* are passed through untouched, so callers can
+    omit tables they don't want to filter.
+
+    Applied as the first step of every serializer (csv/excel/markdown/pdf)
+    so a single source of truth determines which columns ship in any
+    download. Non-table prose, headings, fenced code, and tables outside
+    the *selected* map are preserved byte-for-byte.
+    """
+    if not selected or not content:
+        return content or ""
+
+    _PIPE_ESC = "\x00PIPE\x00"
+
+    def _parse_row(raw: str) -> list[str]:
+        escaped = raw.replace("\\|", _PIPE_ESC)
+        return [c.replace(_PIPE_ESC, "|").strip() for c in escaped.strip("|").split("|")]
+
+    def _is_separator(raw: str) -> bool:
+        stripped = raw.strip()
+        if not stripped or "|" not in stripped:
+            return False
+        inner = stripped.strip("|")
+        return bool(_SEP_RE.match(inner))
+
+    def _is_pipe_row(raw: str) -> bool:
+        stripped = raw.strip()
+        return "|" in stripped and stripped.count("|") >= 1
+
+    def _emit_row(cells: list[str]) -> str:
+        # Re-encode literal pipes so round-trip parsing keeps working.
+        return "| " + " | ".join((c or "").replace("|", "\\|") for c in cells) + " |"
+
+    def _emit_separator(headers: list[str]) -> str:
+        # Use generic left-aligned separators since we're rebuilding the
+        # alignment row anyway. Width matches header label length so the
+        # output stays human-readable in raw markdown form.
+        return "| " + " | ".join("-" * max(3, len(h)) for h in headers) + " |"
+
+    lines = content.splitlines()
+    out: list[str] = []
+    in_fence = False
+    table_idx = 0
+    i = 0
+
+    while i < len(lines):
+        raw = lines[i]
+
+        if _FENCE_RE.match(raw):
+            in_fence = not in_fence
+            out.append(raw)
+            i += 1
+            continue
+
+        if in_fence:
+            out.append(raw)
+            i += 1
+            continue
+
+        if _is_pipe_row(raw) and i + 1 < len(lines) and _is_separator(lines[i + 1]):
+            headers = _parse_row(raw)
+            sep_line = lines[i + 1]
+            j = i + 2
+            data_rows: list[list[str]] = []
+            while j < len(lines):
+                data_line = lines[j]
+                if not _is_pipe_row(data_line) or _is_separator(data_line):
+                    break
+                data_rows.append(_parse_row(data_line))
+                j += 1
+
+            keep = selected.get(str(table_idx))
+            if not keep:
+                # Untouched table — preserve original source bytes so we
+                # don't reflow whitespace or strip cell padding the model
+                # relied on for downstream parsing.
+                out.append(raw)
+                out.append(sep_line)
+                for k in range(i + 2, j):
+                    out.append(lines[k])
+            else:
+                # Resolve selected labels to column indices in source order.
+                # Unknown labels are silently dropped; case-sensitive match
+                # against the parsed header cell text.
+                idx_for: list[int] = []
+                kept_headers: list[str] = []
+                for col_label in keep:
+                    try:
+                        idx = headers.index(col_label)
+                    except ValueError:
+                        continue
+                    idx_for.append(idx)
+                    kept_headers.append(headers[idx])
+                if not kept_headers:
+                    # All asked-for columns were missing — keep table as-is
+                    # rather than emit an empty table that breaks downstream.
+                    out.append(raw)
+                    out.append(sep_line)
+                    for r in data_rows:
+                        out.append(_emit_row(r))
+                else:
+                    out.append(_emit_row(kept_headers))
+                    out.append(_emit_separator(kept_headers))
+                    for r in data_rows:
+                        padded = (r + [""] * len(headers))[:len(headers)]
+                        out.append(_emit_row([padded[k] for k in idx_for]))
+
+            table_idx += 1
+            i = j
+            continue
+
+        out.append(raw)
+        i += 1
+
+    return "\n".join(out)
+
+
+def export_to_csv(content: str, selected_columns: dict[str, list[str]] | None = None) -> bytes:
     """Return CSV bytes built from every GFM pipe table in *content*.
 
     - **One table**: flat CSV — header row = table column names, one data row per record.
@@ -257,7 +429,10 @@ def export_to_csv(content: str) -> bytes:
       comment row and separated by a blank row.
     - **No tables** (prose-only output): falls back to section-dump (``Section Title``,
       ``Markdown Content``) so the file is never empty.
+    - **selected_columns**: optional `{table_index_str: [header, …]}` mapping
+      that drops every other column from the named tables before serialization.
     """
+    content = filter_table_columns(content, selected_columns)
     tables = parse_all_markdown_tables(content)
     buf = io.StringIO()
     writer = csv.writer(buf)
@@ -289,34 +464,38 @@ def export_to_csv(content: str) -> bytes:
     return buf.getvalue().encode("utf-8")
 
 
-def export_to_excel(content: str, agent_name: str) -> bytes:
+def export_to_excel(
+    content: str,
+    agent_name: str,
+    selected_columns: dict[str, list[str]] | None = None,
+) -> bytes:
     """Build an .xlsx from the GFM pipe tables in *content*.
 
     - **Tables found**: one worksheet per table, named after the section heading.
       Row 1 = real column headers (Salesforce-blue); subsequent rows = data rows.
     - **No tables**: falls back to section-dump on a single sheet.
+    - **selected_columns**: optional `{table_index_str: [header, …]}` filter,
+      applied via :func:`filter_table_columns` before parsing.
     """
+    content = filter_table_columns(content, selected_columns)
     tables = parse_all_markdown_tables(content)
 
     if not tables:
         rows = split_markdown_sections(content)
-        sheet = (agent_name or "export")[:31] or "Export"
+        sheet = sanitize_sheet_name(agent_name or "export")
         if not rows:
             rows = [{"Section Title": "(Empty)", "Markdown Content": ""}]
         return export_workbook_bytes({sheet: rows})
 
     wb = Workbook()
     first = True
-    seen_names: dict[str, int] = {}
+    used_names: set[str] = set()
 
     for tbl in tables:
-        # Build a unique, valid sheet name (max 31 chars)
-        raw_name = (tbl["heading"] or "Sheet")[:28].strip()
-        if not raw_name:
-            raw_name = "Sheet"
-        count = seen_names.get(raw_name, 0)
-        seen_names[raw_name] = count + 1
-        sheet_name = raw_name if count == 0 else f"{raw_name[:25]} ({count})"
+        # Strip Excel-illegal characters (: \ / ? * [ ]) and ensure
+        # uniqueness across sheets so two headings like "Section A:" and
+        # "Section A/B" don't both collapse to the same name.
+        sheet_name = sanitize_sheet_name(tbl["heading"] or "Sheet", used_names)
 
         if first:
             ws = wb.active
@@ -378,16 +557,22 @@ hr {{ border: 0; border-top: 0.5pt solid #cfd9e3; margin: 12pt 0; }}
 """
 
 
-def export_to_pdf(content: str, agent_name: str) -> bytes:
+def export_to_pdf(
+    content: str,
+    agent_name: str,
+    selected_columns: dict[str, list[str]] | None = None,
+) -> bytes:
     """Render markdown content to a styled PDF document.
 
     Markdown is converted to HTML (with GitHub-flavoured table support) and
     then rendered with xhtml2pdf/pisa. The output uses Salesforce-blue
-    accents to match the rest of the app.
+    accents to match the rest of the app. *selected_columns* is applied via
+    :func:`filter_table_columns` before rendering.
     """
     import markdown as md
     from xhtml2pdf import pisa
 
+    content = filter_table_columns(content, selected_columns)
     # Normalize all <br>-style sentinels (raw or HTML-entity escaped) to a
     # single canonical <br/> tag so xhtml2pdf renders them as real line breaks
     # inside table cells.
@@ -399,7 +584,7 @@ def export_to_pdf(content: str, agent_name: str) -> bytes:
         output_format="html5",
     )
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    title = f"SF-QA-WEB — {(agent_name or 'export').replace('_', ' ').title()}"
+    title = f"QA Studio Agent — {(agent_name or 'export').replace('_', ' ').title()}"
     safe_title = _html.escape(title)
     safe_agent = _html.escape(agent_name or "export")
     safe_ts = _html.escape(timestamp)
@@ -415,7 +600,41 @@ def export_to_pdf(content: str, agent_name: str) -> bytes:
 </body></html>"""
 
     buf = io.BytesIO()
-    result = pisa.CreatePDF(src=io.StringIO(document), dest=buf, encoding="utf-8")
+    # Capture the human-readable warning log so we can surface a useful
+    # message instead of "PDF generation failed (3 errors)" when pisa
+    # chokes on a particular table cell or unknown CSS property.
+    log_buf = io.StringIO()
+    result = pisa.CreatePDF(
+        src=io.StringIO(document),
+        dest=buf,
+        encoding="utf-8",
+        link_callback=None,
+    )
     if result.err:
-        raise RuntimeError(f"PDF generation failed ({result.err} errors)")
+        # Try once more with tables disabled — by far the most common
+        # pisa failure mode is an irregular table cell. Better to ship a
+        # PDF without rendered tables than fail the whole download.
+        log_buf.write(f"first pass: {result.err} errors\n")
+        fallback_html = md.markdown(
+            normalized_content,
+            extensions=["fenced_code", "sane_lists"],
+            output_format="html5",
+        )
+        fallback_doc = f"""<!DOCTYPE html>
+<html><head><meta charset=\"utf-8\"><style>{_PDF_CSS}</style></head>
+<body>
+<div id=\"footer\" class=\"footer\">QA Studio • {safe_agent} • {safe_ts} • Page <pdf:pagenumber/> of <pdf:pagecount/></div>
+<h1>{safe_title}</h1>
+<div class=\"header-banner\">Generated {safe_ts} • Tables omitted due to renderer error</div>
+<hr/>
+{fallback_html}
+</body></html>"""
+        buf = io.BytesIO()
+        result2 = pisa.CreatePDF(src=io.StringIO(fallback_doc), dest=buf, encoding="utf-8")
+        if result2.err:
+            raise RuntimeError(
+                f"PDF generation failed even after table-fallback "
+                f"(first pass {result.err} errors, fallback {result2.err} errors). "
+                f"Try downloading as Markdown or Excel instead."
+            )
     return buf.getvalue()

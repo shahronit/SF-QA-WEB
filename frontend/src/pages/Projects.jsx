@@ -4,9 +4,23 @@ import api from '../api/client'
 import toast from 'react-hot-toast'
 import PageHeader from '../components/PageHeader'
 import ToonCard from '../components/ToonCard'
+import ProjectMcpPanel from '../components/ProjectMcpPanel'
 import { useAuth } from '../context/AuthContext'
+import {
+  putMany as docStorePutMany,
+  listFiles as docStoreList,
+  deleteFile as docStoreDelete,
+  projectScope,
+} from '../utils/docStore'
 
-const ACCEPT = '.pdf,.docx,.doc,.csv,.txt,.xlsx,.json,.md'
+// Broad accept: any file type can be uploaded. Files with structured
+// loaders (PDF, DOCX, CSV, JSON, XLSX, MD/TXT) are parsed natively;
+// everything else is read as plain text by the ingestor's text fallback,
+// so the file is still indexed (best-effort) instead of being silently
+// dropped at upload time. We keep the list of "rich" extensions in the
+// hint string so users know what gets first-class RAG support.
+const ACCEPT = '*/*'
+const RICH_EXTENSIONS = '.pdf, .docx, .doc, .csv, .txt, .xlsx, .json, .md, .yaml, .xml, .html'
 
 export default function Projects() {
   const { user } = useAuth()
@@ -19,6 +33,31 @@ export default function Projects() {
   // Per-project re-index state: 'idle' | 'indexing' | 'done' | 'error'.
   const [indexStatus, setIndexStatus] = useState({})
 
+  // Merge backend documents with whatever the user has cached in their
+  // browser (IndexedDB sidecar). Files in the local sidecar that the
+  // backend doesn't know about are preserved with `local_only: true` so
+  // they still render — and they only disappear when the user clicks the
+  // remove button. Each entry is normalized to { name, local_only }.
+  const mergeDocs = async (slug, backendDocs) => {
+    const beNames = new Set()
+    const merged = []
+    for (const d of Array.isArray(backendDocs) ? backendDocs : []) {
+      const name = typeof d === 'string' ? d : (d?.name || d?.filename)
+      if (!name) continue
+      beNames.add(name)
+      merged.push({ name, local_only: false })
+    }
+    try {
+      const local = await docStoreList(projectScope(slug))
+      for (const l of local) {
+        if (!beNames.has(l.name)) {
+          merged.push({ name: l.name, local_only: true })
+        }
+      }
+    } catch { /* IndexedDB unavailable — fall back to backend list only */ }
+    return merged
+  }
+
   // Load the visible projects and hydrate each with its document list +
   // indexed flag in parallel so every card can render its docs immediately.
   const load = async () => {
@@ -29,13 +68,15 @@ export default function Projects() {
         list.map(async (p) => {
           try {
             const { data: detail } = await api.get(`/projects/${p.slug}`)
+            const documents = await mergeDocs(p.slug, detail.documents)
             return {
               ...p,
-              documents: Array.isArray(detail.documents) ? detail.documents : [],
+              documents,
               indexed: !!detail.indexed,
             }
           } catch {
-            return { ...p, documents: [], indexed: false }
+            const documents = await mergeDocs(p.slug, [])
+            return { ...p, documents, indexed: false }
           }
         }),
       )
@@ -84,6 +125,17 @@ export default function Projects() {
     input.onchange = async () => {
       const files = Array.from(input.files || [])
       if (!files.length) return
+      // Mirror to the browser sidecar BEFORE the network call, so the
+      // file is preserved even if the backend upload fails. The sidecar
+      // is the user's source of truth — it is only emptied when they
+      // click the explicit remove button.
+      try {
+        await docStorePutMany(projectScope(slug), files, {
+          uploadedBy: user?.username || '',
+          uploadedAt: new Date().toISOString(),
+        })
+      } catch { /* ignore — IndexedDB unavailable, continue with upload */ }
+
       const formData = new FormData()
       files.forEach((f) => formData.append('files', f))
       const tid = toast.loading(`Uploading ${files.length} file${files.length > 1 ? 's' : ''}…`)
@@ -93,10 +145,14 @@ export default function Projects() {
         })
         toast.success(`Uploaded ${files.length} file${files.length > 1 ? 's' : ''}`, { id: tid })
         await load()
-        // Auto re-index so RAG reflects the new docs without a manual click.
         triggerReindex(slug)
       } catch (err) {
-        toast.error(err?.response?.data?.detail || 'Upload failed', { id: tid })
+        toast.error(
+          `${err?.response?.data?.detail || 'Server upload failed'} — kept on this device`,
+          { id: tid },
+        )
+        // Refresh the listing so the local-only copy still shows.
+        await load()
       }
     }
     input.click()
@@ -105,14 +161,26 @@ export default function Projects() {
   const removeDocument = async (slug, filename) => {
     if (!window.confirm(`Remove "${filename}" from this project?`)) return
     const tid = toast.loading(`Removing ${filename}…`)
+    let backendOk = true
     try {
       await api.delete(`/projects/${slug}/documents/${encodeURIComponent(filename)}`)
-      toast.success(`Removed ${filename}`, { id: tid })
-      await load()
-      triggerReindex(slug)
     } catch (err) {
-      toast.error(err?.response?.data?.detail || 'Delete failed', { id: tid })
+      backendOk = false
+      // 404 is fine — file was local-only. Anything else we surface but
+      // still continue to wipe the local copy because the user explicitly
+      // asked to remove it.
+      const status = err?.response?.status
+      if (status && status !== 404) {
+        toast.error(err?.response?.data?.detail || 'Server delete failed', { id: tid })
+      }
     }
+    try {
+      await docStoreDelete(projectScope(slug), filename)
+    } catch { /* ignore */ }
+    if (backendOk) toast.success(`Removed ${filename}`, { id: tid })
+    else toast.success(`Removed ${filename} from this device`, { id: tid })
+    await load()
+    if (backendOk) triggerReindex(slug)
   }
 
   const buildIndex = (slug) => triggerReindex(slug)
@@ -293,7 +361,7 @@ export default function Projects() {
                 </div>
 
                 <div className="text-[11px] text-gray-500 mb-2">
-                  Files added here are auto re-indexed so RAG reflects them on the next agent run.
+                  Any file type accepted. Best parsing for {RICH_EXTENSIONS}; everything else is read as plain text. Auto re-indexed so RAG reflects new docs on the next agent run.
                 </div>
 
                 {docs.length === 0 ? (
@@ -302,31 +370,45 @@ export default function Projects() {
                   </p>
                 ) : (
                   <ul className="max-h-56 overflow-auto divide-y divide-gray-200 bg-white rounded-xl border border-gray-200">
-                    {docs.map((name) => (
-                      <li
-                        key={name}
-                        className="flex items-center justify-between gap-2 px-3 py-1.5 text-xs"
-                      >
-                        <div className="flex items-center gap-2 min-w-0">
-                          <span aria-hidden="true">📄</span>
-                          <span className="truncate text-toon-navy" title={name}>
-                            {name}
-                          </span>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => removeDocument(p.slug, name)}
-                          title="Remove from project"
-                          aria-label={`Remove ${name}`}
-                          className="text-gray-400 hover:text-toon-coral text-base leading-none px-1.5"
+                    {docs.map((d) => {
+                      const name = typeof d === 'string' ? d : d.name
+                      const localOnly = typeof d === 'object' && d.local_only
+                      return (
+                        <li
+                          key={name}
+                          className="flex items-center justify-between gap-2 px-3 py-1.5 text-xs"
                         >
-                          ×
-                        </button>
-                      </li>
-                    ))}
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span aria-hidden="true">📄</span>
+                            <span className="truncate text-toon-navy" title={name}>
+                              {name}
+                            </span>
+                            {localOnly && (
+                              <span
+                                className="text-[9px] uppercase tracking-wider font-bold px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 flex-shrink-0"
+                                title="Stored only in this browser. Will not be removed unless you click ×."
+                              >
+                                💾 device
+                              </span>
+                            )}
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => removeDocument(p.slug, name)}
+                            title="Remove from project"
+                            aria-label={`Remove ${name}`}
+                            className="text-gray-400 hover:text-toon-coral text-base leading-none px-1.5"
+                          >
+                            ×
+                          </button>
+                        </li>
+                      )
+                    })}
                   </ul>
                 )}
               </div>
+
+              <ProjectMcpPanel slug={p.slug} />
 
               <AnimatePresence>
                 {owner && openShare[p.slug] && (

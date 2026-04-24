@@ -916,7 +916,7 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
                       exit={{ height: 0, opacity: 0 }}
                       className="overflow-hidden"
                     >
-                      <div className="mt-2 p-3 bg-gray-50 rounded-xl text-xs max-h-60 overflow-y-auto overflow-x-hidden border border-gray-200 markdown-body">
+                      <div className="mt-2 p-3 bg-gray-50 rounded-xl text-xs max-h-60 overflow-y-auto overflow-x-clip border border-gray-200 markdown-body">
                         <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]} components={LINK_PREVIEW_MD_COMPONENTS}>
                           {selectedLinked.content.length > 2000
                             ? `${selectedLinked.content.slice(0, 2000)}\n\n_… (truncated)_`

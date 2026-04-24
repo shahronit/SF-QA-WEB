@@ -47,8 +47,27 @@ class SalesforceKnowledgeIngestor:
                 docs.extend(self._load_file(path))
         return self.splitter.split_documents(docs)
 
+    # Extensions whose contents are essentially binary; trying to decode
+    # them as UTF-8 produces garbage so the generic text fallback skips
+    # them rather than feeding noise into the embedder.
+    _BINARY_EXTS: frozenset[str] = frozenset({
+        "png", "jpg", "jpeg", "gif", "webp", "bmp", "tiff", "ico", "svgz",
+        "zip", "tar", "gz", "bz2", "xz", "7z", "rar",
+        "mp3", "mp4", "wav", "ogg", "webm", "avi", "mov", "mkv", "flac",
+        "exe", "dll", "so", "dylib", "bin", "iso", "dmg", "pkg",
+        "ttf", "otf", "woff", "woff2",
+        "ppt", "pptx", "key", "pages", "numbers",
+    })
+
     def _load_file(self, path: Path) -> list[Document]:
-        """Load a single file based on its extension."""
+        """Load a single file based on its extension.
+
+        Has a generous fallback chain: known structured formats use the
+        right loader (PDF/DOCX/CSV/JSON/XLSX), and *every other* readable
+        extension is loaded as plain text so the file is still indexed
+        for RAG. Truly binary formats (images, archives, executables,
+        media) are skipped instead of being decoded into garbage.
+        """
         ext = path.suffix.lower().lstrip(".")
         try:
             if ext == "pdf":
@@ -59,14 +78,37 @@ class SalesforceKnowledgeIngestor:
                 return UnstructuredWordDocumentLoader(str(path)).load()
             if ext == "json":
                 return self._load_json(path)
-            if ext in ("md", "txt", "markdown"):
-                text = path.read_text(encoding="utf-8", errors="replace")
-                return [Document(page_content=text, metadata={"source": str(path)})]
             if ext == "xlsx" and load_workbook is not None:
                 return self._load_xlsx(path)
+            if ext in self._BINARY_EXTS:
+                # Skip silently — embedding raw bytes is worse than
+                # nothing and the file is still preserved on storage.
+                return []
+            # Generic text fallback: covers md/txt/markdown PLUS any other
+            # text-shaped extension a user might upload (.yaml, .yml,
+            # .xml, .html, .htm, .log, .sql, .py, .ts, .js, .ini, .toml,
+            # .properties, .env, .rst, .tsv, .conf, …) AND files with no
+            # extension at all.
+            return self._load_as_text(path)
         except Exception as exc:  # noqa: BLE001 — surface in UI/logs
             print(f"Failed to load {path}: {exc}")
         return []
+
+    def _load_as_text(self, path: Path) -> list[Document]:
+        """Read *path* as text and return a single Document.
+
+        Uses ``errors='replace'`` so a stray non-UTF-8 byte doesn't kill
+        the entire ingest. Empty files become empty documents which the
+        splitter will harmlessly drop.
+        """
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except (OSError, UnicodeError) as exc:
+            print(f"Failed to read {path} as text: {exc}")
+            return []
+        if not text.strip():
+            return []
+        return [Document(page_content=text, metadata={"source": str(path)})]
 
     def _load_xlsx(self, path: Path) -> list[Document]:
         """Load text from an Excel .xlsx workbook (all sheets, tab-separated rows)."""

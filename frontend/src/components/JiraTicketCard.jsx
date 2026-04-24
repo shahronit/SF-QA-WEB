@@ -54,17 +54,32 @@ export function fmtBytes(bytes) {
  * tenant custom fields.
  *
  * Props:
- *   - detail   : the issue payload (required). Auto-detects rich vs lite via
- *                `detail.core` / `detail.fetch_metadata`.
- *   - compact  : when true, only the header badges + title + meta grid +
- *                truncated description are shown (used by multi-import lists).
- *   - onRemove : when set, a small "Remove" link appears next to the key in
- *                the header. Use to drop an imported ticket from the form.
+ *   - detail          : the issue payload (required). Auto-detects rich vs
+ *                       lite via `detail.core` / `detail.fetch_metadata`.
+ *   - compact         : when true, the card collapses to a single-row header
+ *                       (key + chips + summary + chevron). Click the chevron
+ *                       (or anywhere on the header strip) to expand into the
+ *                       same full layout used by `compact=false`. Defaults to
+ *                       false. Used by multi-import lists.
+ *   - defaultExpanded : when true and `compact` is set, the card starts in
+ *                       the expanded state. No-op when `compact` is false.
+ *   - onRemove        : when set, a small "Remove" link appears next to the
+ *                       key in the header. Use to drop an imported ticket
+ *                       from the form.
  */
-export default function JiraTicketCard({ detail, compact = false, onRemove }) {
+export default function JiraTicketCard({
+  detail,
+  compact = false,
+  defaultExpanded = false,
+  onRemove,
+}) {
   const [showAllComments, setShowAllComments] = useState(false)
   const [descExpanded, setDescExpanded] = useState(false)
   const [showAllCustom, setShowAllCustom] = useState(false)
+  // Non-compact mode behaves as if always expanded so the rest of the
+  // component reads from a single `showFullBody` boolean.
+  const [expanded, setExpanded] = useState(defaultExpanded || !compact)
+  const showFullBody = !compact || expanded
 
   if (!detail) return null
 
@@ -72,7 +87,9 @@ export default function JiraTicketCard({ detail, compact = false, onRemove }) {
   const c = isRich ? (detail.core || {}) : detail
   const url = c.url || detail.url
   const description = (c.description || '').trim()
-  const descLimit = compact ? 400 : 1200
+  // Compact-but-expanded matches the non-compact description budget so the
+  // card looks pixel-identical to the closure_report preview once unfolded.
+  const descLimit = !showFullBody ? 400 : 1200
   const longDesc = description.length > descLimit
   const visibleDesc = !longDesc || descExpanded ? description : `${description.slice(0, descLimit)}…`
 
@@ -109,12 +126,48 @@ export default function JiraTicketCard({ detail, compact = false, onRemove }) {
     ['Parent', c.parent?.key && `${c.parent.key}${c.parent.summary ? ` — ${c.parent.summary}` : ''}`],
   ].filter(([, v]) => v != null && v !== '' && v !== false)
 
+  // The chevron toggle is *only* meaningful when the card supports
+  // collapsing. Non-compact callers stay clean — no extra chrome.
+  const toggle = compact ? (
+    <button
+      type="button"
+      onClick={(e) => { e.stopPropagation(); setExpanded(v => !v) }}
+      aria-expanded={expanded}
+      aria-label={expanded ? 'Collapse ticket details' : 'Expand ticket details'}
+      title={expanded ? 'Collapse' : 'Expand'}
+      className="text-[11px] text-gray-400 hover:text-toon-blue px-1 leading-none"
+    >
+      <span className={`inline-block transition-transform ${expanded ? 'rotate-90' : ''}`}>▸</span>
+    </button>
+  ) : null
+
   return (
     <div className="space-y-3 text-xs">
-      {/* Header */}
-      <div className="flex items-center gap-2 flex-wrap">
+      {/* Header strip — always visible so a collapsed compact card still
+          shows enough to identify the ticket. Click anywhere on the strip
+          (except the explicit Remove button) to toggle expand in compact
+          mode; the chevron mirrors the same action. */}
+      <div
+        className={`flex items-start gap-2 flex-wrap ${compact ? 'cursor-pointer select-none' : ''}`}
+        onClick={compact ? () => setExpanded(v => !v) : undefined}
+        role={compact ? 'button' : undefined}
+        tabIndex={compact ? 0 : undefined}
+        onKeyDown={compact ? (e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault()
+            setExpanded(v => !v)
+          }
+        } : undefined}
+      >
+        {toggle}
         {url ? (
-          <a href={url} target="_blank" rel="noreferrer" className="text-xs font-bold text-toon-blue hover:underline">
+          <a
+            href={url}
+            target="_blank"
+            rel="noreferrer"
+            onClick={(e) => e.stopPropagation()}
+            className="text-xs font-bold text-toon-blue hover:underline"
+          >
             {c.key} ↗
           </a>
         ) : (
@@ -129,16 +182,28 @@ export default function JiraTicketCard({ detail, compact = false, onRemove }) {
         {c.priority && (
           <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-50 text-amber-700">{c.priority}</span>
         )}
+        {/* Inline summary in collapsed compact mode so users see what's in
+            the row without expanding. The non-compact / expanded path
+            renders the bigger <h4> below. */}
+        {compact && !expanded && c.summary && (
+          <span className="text-[11px] text-toon-navy font-semibold truncate flex-1 min-w-[120px]" title={c.summary}>
+            {c.summary}
+          </span>
+        )}
         {onRemove && (
           <button
             type="button"
-            onClick={onRemove}
+            onClick={(e) => { e.stopPropagation(); onRemove() }}
             className="ml-auto text-[10px] text-toon-coral hover:underline font-semibold"
           >
             Remove
           </button>
         )}
       </div>
+
+      {/* Everything below is hidden in compact-collapsed mode. */}
+      {showFullBody && (
+        <>
       <h4 className="text-sm font-bold text-toon-navy">{c.summary}</h4>
 
       {/* Meta grid */}
@@ -170,8 +235,7 @@ export default function JiraTicketCard({ detail, compact = false, onRemove }) {
         )}
       </div>
 
-      {compact ? null : (
-        <>
+      <>
           {/* Sub-tasks */}
           {subtasks.length > 0 && (
             <details className="border border-gray-100 rounded-lg" open>
@@ -285,6 +349,7 @@ export default function JiraTicketCard({ detail, compact = false, onRemove }) {
               </dl>
             </details>
           )}
+      </>
         </>
       )}
     </div>
