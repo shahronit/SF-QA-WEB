@@ -3,6 +3,7 @@ import { AuthProvider, useAuth } from './context/AuthContext'
 import { AgentResultsProvider } from './context/AgentResultsContext'
 import { JiraProvider } from './context/JiraContext'
 import { TestManagementProvider } from './context/TestManagementContext'
+import { SessionPrefsProvider } from './context/SessionPrefsContext'
 import { Toaster } from 'react-hot-toast'
 import Layout from './components/Layout'
 import Login from './pages/Login'
@@ -38,6 +39,7 @@ function ProtectedRoute({ children }) {
 export default function App() {
   return (
     <AuthProvider>
+      <SessionPrefsProvider>
       <JiraProvider>
         <TestManagementProvider>
           <AgentResultsProvider>
@@ -79,6 +81,7 @@ export default function App() {
           </AgentResultsProvider>
         </TestManagementProvider>
       </JiraProvider>
+      </SessionPrefsProvider>
     </AuthProvider>
   )
 }

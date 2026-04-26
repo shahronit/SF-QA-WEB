@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import toast from 'react-hot-toast'
 import api from '../api/client'
 import { useJira } from '../context/JiraContext'
+import { useSessionPrefs } from '../context/SessionPrefsContext'
 
 // Common Jira issue link types — these are the names every Jira Cloud
 // tenant ships with by default. Custom link types still work because
@@ -28,8 +29,17 @@ function deriveSummary(markdown) {
 
 export default function JiraBugPush({ markdown, agentName }) {
   const { connected: jiraConnected, projects, listIssues } = useJira()
+  const {
+    jiraProjectKey: pinnedProjectKey,
+    setJiraProjectKey,
+    userStoryKey: pinnedStoryKey,
+    setUserStoryKey,
+  } = useSessionPrefs()
   const [open, setOpen] = useState(false)
-  const [projectKey, setProjectKey] = useState('')
+  // Pinned: use the global Jira project pin so opening this dialog
+  // defaults to whatever project the user picked anywhere else.
+  const projectKey = pinnedProjectKey
+  const setProjectKey = setJiraProjectKey
   const [linkedKey, setLinkedKey] = useState('')
   const [linkType, setLinkType] = useState('Relates')
   const [issues, setIssues] = useState([])
@@ -61,7 +71,7 @@ export default function JiraBugPush({ markdown, agentName }) {
   if (agentName !== 'bug_report') return null
 
   const reset = () => {
-    setProjectKey('')
+    // projectKey is a persistent pin (SessionPrefs) — leave it alone.
     setLinkedKey('')
     setLinkType('Relates')
     setIssues([])
@@ -79,6 +89,9 @@ export default function JiraBugPush({ markdown, agentName }) {
       return
     }
     setSummary(derivedSummary)
+    // Default linkedKey to the pinned user story so a bug filed from a
+    // test result auto-links to its parent ticket. User can override.
+    if (!linkedKey && pinnedStoryKey) setLinkedKey(pinnedStoryKey)
     setResult(null)
     setOpen(true)
   }
@@ -188,7 +201,15 @@ export default function JiraBugPush({ markdown, agentName }) {
                           list="jira-bug-link-list"
                           className="toon-input !py-2"
                           value={linkedKey}
-                          onChange={e => setLinkedKey(e.target.value)}
+                          onChange={e => {
+                            const v = e.target.value
+                            setLinkedKey(v)
+                            // Mirror to global user-story pin if it parses as
+                            // a Jira key — keeps Jira-push surfaces in sync.
+                            if (/^[A-Z][A-Z0-9_]*-\d+$/i.test(v.trim())) {
+                              setUserStoryKey(v.trim())
+                            }
+                          }}
                           placeholder={
                             !projectKey
                               ? 'Select a project to load tickets'

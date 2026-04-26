@@ -26,7 +26,7 @@ function normalizeDocs(raw) {
   if (!Array.isArray(raw)) return []
   return raw
     .map((d) => {
-      if (typeof d === 'string') return { name: d, size: null, uploadedBy: '', uploadedAt: '', localOnly: false }
+      if (typeof d === 'string') return { name: d, size: null, uploadedBy: '', uploadedAt: '', localOnly: false, webViewLink: '' }
       if (d && typeof d === 'object') {
         const name = d.name || d.filename || ''
         if (!name) return null
@@ -36,6 +36,7 @@ function normalizeDocs(raw) {
           uploadedBy: d.uploaded_by || d.uploadedBy || '',
           uploadedAt: d.uploaded_at || d.uploadedAt || '',
           localOnly: false,
+          webViewLink: d.web_view_link || d.webViewLink || '',
         }
       }
       return null
@@ -543,6 +544,18 @@ export default function ProjectContextPicker({
                       <div className="min-w-0">
                         <div className="truncate text-toon-navy flex items-center gap-1.5" title={d.name}>
                           <span className="truncate">{d.name}</span>
+                          {d.webViewLink && (
+                            <a
+                              href={d.webViewLink}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-[9px] uppercase tracking-wider font-bold px-1.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 hover:bg-emerald-100 flex-shrink-0"
+                              title="Open this file in Google Drive"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              Drive ↗
+                            </a>
+                          )}
                           {d.localOnly && (
                             <span
                               className="text-[9px] uppercase tracking-wider font-bold px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 flex-shrink-0"

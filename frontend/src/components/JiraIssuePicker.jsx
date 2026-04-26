@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import toast from 'react-hot-toast'
 import { useJira } from '../context/JiraContext'
+import { useSessionPrefs } from '../context/SessionPrefsContext'
 import JiraTicketCard from './JiraTicketCard'
 
 const ISSUE_TYPES = ['', 'Epic', 'Story', 'Task', 'Bug', 'Sub-task']
@@ -48,9 +49,21 @@ export default function JiraIssuePicker({
   onUseSprintScope,
 }) {
   const { connected, projects, listIssues, listSprints, getIssue, getFullIssue } = useJira()
+  const {
+    jiraProjectKey: pinnedProjectKey,
+    setJiraProjectKey,
+    sprintId: pinnedSprintId,
+    sprintName: pinnedSprintName,
+    setSprint,
+    setUserStoryKey,
+  } = useSessionPrefs()
 
   const [open, setOpen] = useState(false)
-  const [projectKey, setProjectKey] = useState('')
+  // projectKey is sourced from the persistent pin so the dropdown
+  // remembers what the user picked across page navigations and dialog
+  // opens. setProjectKey writes back to the same pin.
+  const projectKey = pinnedProjectKey
+  const setProjectKey = setJiraProjectKey
   const [issueType, setIssueType] = useState('')
   const [issues, setIssues] = useState([])
   const [loading, setLoading] = useState(false)
@@ -68,8 +81,10 @@ export default function JiraIssuePicker({
   // Sprint filter state — populated from /jira/sprints whenever the
   // selected project changes. `noSprintBoard` is set when the project
   // has no scrum board (so the dropdown collapses with a hint instead
-  // of showing an empty disabled select).
-  const [sprintId, setSprintId] = useState('')
+  // of showing an empty disabled select). The active selection itself
+  // is persisted in SessionPrefs so closing/reopening the picker (or
+  // jumping pages) doesn't lose the user's sprint choice.
+  const sprintId = pinnedSprintId
   const [sprints, setSprints] = useState([])
   const [sprintsLoading, setSprintsLoading] = useState(false)
   const [boardName, setBoardName] = useState('')
@@ -88,17 +103,20 @@ export default function JiraIssuePicker({
 
   // Reload the sprint list whenever the project changes. Failures
   // (no scrum board, 403, etc.) collapse the dropdown gracefully.
+  // We deliberately do NOT auto-clear the persisted `sprintId` pin
+  // here — the sprint id is global, but the dropdown re-shows
+  // whatever sprint the user actually picked. If the project changes
+  // such that the pinned sprint no longer exists in `sprints`, the
+  // <select> falls back to "All sprints" without flipping the pin.
   useEffect(() => {
     if (!open || !projectKey) {
       setSprints([])
       setBoardName('')
       setNoSprintBoard(false)
-      setSprintId('')
       return
     }
     let cancelled = false
     setSprintsLoading(true)
-    setSprintId('')
     listSprints(projectKey)
       .then(data => {
         if (cancelled) return
@@ -146,12 +164,17 @@ export default function JiraIssuePicker({
   // clears any chosen sprint. This keeps the JQL composition simple
   // (sprint = id OR sprint in openSprints(), never both).
   const handleSprintChange = (val) => {
-    setSprintId(val)
+    if (!val) {
+      setSprint('', '')
+    } else {
+      const match = sprints.find(s => String(s.id) === String(val))
+      setSprint(val, match?.name || '')
+    }
     if (val) setActiveSprintsOnly(false)
   }
   const handleActiveOnlyToggle = (checked) => {
     setActiveSprintsOnly(checked)
-    if (checked) setSprintId('')
+    if (checked) setSprint('', '')
   }
 
   // Lazy-fetch the rich /full payload (comments, sub-tasks, links,
@@ -233,6 +256,15 @@ export default function JiraIssuePicker({
 
   const handleImport = () => {
     if (!detail) return
+    // Pin the project + parent story so every Jira-push surface
+    // (TestManagementPush, JiraCommentPush, JiraBugPush) defaults to
+    // this exact ticket without the user re-selecting it.
+    const importedKey = detail.core?.key || detail.key || ''
+    if (importedKey) {
+      setUserStoryKey(importedKey)
+      const projKey = importedKey.split('-')[0] || ''
+      if (projKey) setJiraProjectKey(projKey)
+    }
     onImport?.(detail)
     toast.success(`Imported ${detail.key}`)
   }
@@ -268,6 +300,13 @@ export default function JiraIssuePicker({
   const handleImportMany = async () => {
     if (selectedKeys.size === 0) return
     const picked = issues.filter(it => selectedKeys.has(it.key))
+    // Pin the project key from the first imported ticket — all
+    // imports come from the same Jira project. We don't pin a
+    // user-story key here because multi-import has no single parent.
+    if (picked[0]?.key) {
+      const projKey = picked[0].key.split('-')[0] || ''
+      if (projKey) setJiraProjectKey(projKey)
+    }
     setImportingMany(true)
     try {
       await onImportMany?.(picked)

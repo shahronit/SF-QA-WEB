@@ -45,7 +45,12 @@ export default function Projects() {
       const name = typeof d === 'string' ? d : (d?.name || d?.filename)
       if (!name) continue
       beNames.add(name)
-      merged.push({ name, local_only: false })
+      merged.push({
+        name,
+        local_only: false,
+        web_view_link: typeof d === 'object' ? (d?.web_view_link || '') : '',
+        drive_file_id: typeof d === 'object' ? (d?.drive_file_id || '') : '',
+      })
     }
     try {
       const local = await docStoreList(projectScope(slug))
@@ -373,6 +378,7 @@ export default function Projects() {
                     {docs.map((d) => {
                       const name = typeof d === 'string' ? d : d.name
                       const localOnly = typeof d === 'object' && d.local_only
+                      const driveLink = typeof d === 'object' ? d.web_view_link : ''
                       return (
                         <li
                           key={name}
@@ -383,6 +389,17 @@ export default function Projects() {
                             <span className="truncate text-toon-navy" title={name}>
                               {name}
                             </span>
+                            {driveLink && (
+                              <a
+                                href={driveLink}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-[9px] uppercase tracking-wider font-bold px-1.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 hover:bg-emerald-100 flex-shrink-0"
+                                title="Open this file in Google Drive"
+                              >
+                                Drive ↗
+                              </a>
+                            )}
                             {localOnly && (
                               <span
                                 className="text-[9px] uppercase tracking-wider font-bold px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 flex-shrink-0"
