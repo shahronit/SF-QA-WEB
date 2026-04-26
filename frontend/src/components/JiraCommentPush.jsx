@@ -4,6 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import toast from 'react-hot-toast'
 import api from '../api/client'
 import { useJira } from '../context/JiraContext'
+import { useSessionPrefs } from '../context/SessionPrefsContext'
 import { extractClarificationBlock } from '../utils/extractClarificationBlock'
 
 const JIRA_KEY_RE = /^[A-Z][A-Z0-9_]*-\d+$/i
@@ -20,6 +21,7 @@ function defaultCommentBody(markdown, agentName) {
 
 export default function JiraCommentPush({ markdown, agentName, defaultIssueKey = '' }) {
   const { connected: jiraConnected } = useJira()
+  const { userStoryKey: pinnedStoryKey, setUserStoryKey } = useSessionPrefs()
   const [open, setOpen] = useState(false)
   const [issueKey, setIssueKey] = useState('')
   const [body, setBody] = useState('')
@@ -36,10 +38,14 @@ export default function JiraCommentPush({ markdown, agentName, defaultIssueKey =
       toast.error('No content to post yet.')
       return
     }
-    setIssueKey((defaultIssueKey || '').trim())
+    // Seed order: explicit defaultIssueKey from caller > persistent
+    // userStoryKey pin > empty. The pin is what makes "comment on Jira"
+    // pre-fill with the same parent ticket the user picked anywhere else.
+    const seed = (defaultIssueKey || '').trim() || (pinnedStoryKey || '').trim()
+    setIssueKey(seed)
     setBody(defaultCommentBody(markdown, agentName))
     setOpen(true)
-  }, [jiraConnected, markdown, agentName, defaultIssueKey])
+  }, [jiraConnected, markdown, agentName, defaultIssueKey, pinnedStoryKey])
 
   const closeModal = () => {
     setOpen(false)
@@ -121,7 +127,13 @@ export default function JiraCommentPush({ markdown, agentName, defaultIssueKey =
                     <input
                       className="toon-input !py-2 w-full"
                       value={issueKey}
-                      onChange={e => setIssueKey(e.target.value.toUpperCase())}
+                      onChange={e => {
+                        const v = e.target.value.toUpperCase()
+                        setIssueKey(v)
+                        // Pin the user's choice so the next Jira-push
+                        // surface (test mgmt, bug push) defaults to it.
+                        if (JIRA_KEY_RE.test(v.trim())) setUserStoryKey(v.trim())
+                      }}
                       placeholder="PROJ-123"
                     />
                   </div>

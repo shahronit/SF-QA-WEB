@@ -19,6 +19,7 @@ import Confetti from './motion/Confetti'
 import GeneratingScene from './motion/GeneratingScene'
 import { extractJiraKey } from '../utils/jiraDetect'
 import { useQaMode, QA_MODE_OPTIONS } from '../hooks/useQaMode'
+import { useSessionPrefs } from '../context/SessionPrefsContext'
 
 const LINK_PREVIEW_MD_COMPONENTS = { td: MarkdownTableCell, table: MarkdownTableScroll }
 
@@ -332,7 +333,23 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
   const [resultStamp, setResultStamp] = useState(0)
   const [loading, setLoading] = useState(false)
   const [projects, setProjects] = useState([])
-  const [selectedProject, setSelectedProject] = useState('')
+  // Pinned context — RAG project, Jira project, sprint, user-story key.
+  // Lives in SessionPrefsContext so selections persist across pages,
+  // reset clicks, and reloads ("until the user manually removes it").
+  const {
+    qaProjectSlug,
+    setQaProjectSlug,
+    jiraProjectKey: pinnedJiraProjectKey,
+    setJiraProjectKey: setPinnedJiraProjectKey,
+    sprintId: pinnedSprintId,
+    sprintName: pinnedSprintName,
+    setSprint: setPinnedSprint,
+    userStoryKey: pinnedUserStoryKey,
+    setUserStoryKey: setPinnedUserStoryKey,
+    clearPin,
+  } = useSessionPrefs()
+  const selectedProject = qaProjectSlug
+  const setSelectedProject = setQaProjectSlug
   const [linkedAgent, setLinkedAgent] = useState('')
   const [showLinkedPreview, setShowLinkedPreview] = useState(false)
   // Per-session, per-device override for the system prompt. Only the Test
@@ -345,7 +362,12 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
   const [historicalRuns, setHistoricalRuns] = useState([])
   const [shakeKeys, setShakeKeys] = useState({})
   const [confettiTrigger, setConfettiTrigger] = useState(0)
-  const [jiraContextKey, setJiraContextKey] = useState('')
+  // jiraContextKey is the parent user story used by Jira-push surfaces
+  // (test management, comment push, bug push). It's the same value as
+  // the persistent userStoryKey pin so picking a story on one page
+  // auto-fills it on every other Jira surface.
+  const jiraContextKey = pinnedUserStoryKey
+  const setJiraContextKey = setPinnedUserStoryKey
   // Rich payload(s) of the most recent Jira import. Rendered below the picker
   // as a confirmation card via `<JiraTicketCard />` so the user keeps full
   // visibility of what was pulled in even after closing the picker.
@@ -555,11 +577,15 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
   const handleReset = useCallback(() => {
     setValues({})
     setResult('')
-    setSelectedProject('')
     setLinkedAgent('')
     setShowLinkedPreview(false)
     setShakeKeys({})
-    setJiraContextKey('')
+    setImportedJira(null)
+    setImportedJiraList([])
+    // Persistent pins (RAG project, Jira project, sprint, user story)
+    // are intentionally NOT cleared here — Reset only wipes the
+    // page-detail state. Pins are removed only via the chip-row × on
+    // each pin or the picker's clear button.
   }, [])
 
   const handleTextareaBlur = useCallback(async (fieldKey, currentValue) => {
@@ -593,6 +619,8 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
         return { ...prev, [fieldKey]: next }
       })
       setJiraContextKey(resp.key)
+      const projKey = resp.key.split('-')[0] || ''
+      if (projKey) setPinnedJiraProjectKey(projKey)
       setAutoFetchedNotice(prev => ({ ...prev, [fieldKey]: { key: resp.key, stamp: Date.now() } }))
       setTimeout(() => {
         setAutoFetchedNotice(prev => {
@@ -618,7 +646,14 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
     const issueKey = core.key || ''
     const issueSummary = core.summary || ''
     const issueUrl = core.url || issue.url || ''
-    if (issueKey) setJiraContextKey(issueKey)
+    if (issueKey) {
+      setJiraContextKey(issueKey)
+      // Project key is the prefix before the dash (e.g. "ABC" from
+      // "ABC-123"). Pin it so every downstream Jira-push surface
+      // pre-selects the same project unless the user changes it.
+      const projKey = issueKey.split('-')[0] || ''
+      if (projKey) setPinnedJiraProjectKey(projKey)
+    }
     setImportedJira(issue)
     setImportedJiraList([])
     const text = jiraIssueToText(issue)
@@ -714,6 +749,12 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
       writeScopeBlock(block)
       setImportedJira(null)
       setImportedJiraList(payloads || [])
+      // Pin the project key from the first imported ticket (same
+      // project for all in a multi-import). User story stays whatever
+      // it was — multi-import doesn't have a single "parent" story.
+      const firstKey = issuesList[0]?.key || ''
+      const projKey = firstKey.split('-')[0] || ''
+      if (projKey) setPinnedJiraProjectKey(projKey)
       toast.success(`Loaded ${count} ticket${count === 1 ? '' : 's'} into scope`, { id: t })
     } catch (err) {
       toast.error(err?.response?.data?.detail || 'Failed to import tickets', { id: t })
@@ -722,6 +763,8 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
 
   const handleSprintScope = useCallback(async ({ projectKey, sprintId, sprintName }) => {
     if (!projectKey || !sprintId) return
+    if (projectKey) setPinnedJiraProjectKey(projectKey)
+    if (sprintId) setPinnedSprint(sprintId, sprintName || '')
     const t = toast.loading(`Fetching sprint "${sprintName}"…`)
     try {
       const list = await jiraListIssues(projectKey, {
@@ -748,8 +791,81 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
 
   const activeProject = projects.find(p => p.slug === selectedProject)
 
+  // ---- Pinned-context chip row -------------------------------------------
+  // Shows the four cross-page pins (RAG project, Jira project, sprint,
+  // user story) the user has selected. The × on each chip is the only
+  // path that removes that single pin — Reset never touches them. This
+  // is what makes "selections persist until manually removed" tangible
+  // for the user (otherwise pins are invisible state).
+  const pinnedChips = []
+  if (selectedProject) {
+    pinnedChips.push({
+      id: 'qaProjectSlug',
+      icon: '📂',
+      label: activeProject?.name || selectedProject,
+      title: 'RAG project',
+      onRemove: () => clearPin('qaProjectSlug'),
+    })
+  }
+  if (pinnedJiraProjectKey) {
+    pinnedChips.push({
+      id: 'jiraProjectKey',
+      icon: '🎯',
+      label: pinnedJiraProjectKey,
+      title: 'Jira project',
+      onRemove: () => clearPin('jiraProjectKey'),
+    })
+  }
+  if (pinnedSprintId) {
+    pinnedChips.push({
+      id: 'sprint',
+      icon: '🏁',
+      label: pinnedSprintName || `Sprint ${pinnedSprintId}`,
+      title: 'Sprint',
+      onRemove: () => clearPin('sprint'),
+    })
+  }
+  if (jiraContextKey) {
+    pinnedChips.push({
+      id: 'userStoryKey',
+      icon: '📌',
+      label: jiraContextKey,
+      title: 'User story',
+      onRemove: () => clearPin('userStoryKey'),
+    })
+  }
+
   return (
     <div className="space-y-6">
+      {pinnedChips.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 px-3 py-2 rounded-2xl bg-violet-50 border border-violet-100">
+          <span className="text-[11px] font-bold uppercase tracking-wider text-violet-600">
+            Pinned context
+          </span>
+          {pinnedChips.map(chip => (
+            <span
+              key={chip.id}
+              title={chip.title}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-white border border-violet-200 text-xs font-bold text-toon-navy shadow-sm"
+            >
+              <span aria-hidden="true">{chip.icon}</span>
+              <span className="max-w-[180px] truncate">{chip.label}</span>
+              <button
+                type="button"
+                onClick={chip.onRemove}
+                aria-label={`Remove pin: ${chip.title}`}
+                className="ml-0.5 text-gray-400 hover:text-toon-coral text-sm leading-none"
+              >
+                ×
+              </button>
+            </span>
+          ))}
+          <span className="ml-auto text-[10px] text-violet-500 font-semibold">
+            Survives Reset — remove individually
+          </span>
+        </div>
+      )}
+
       {/* QA Mode toggle */}
       <div className="toon-card !p-4">
         <div className="flex flex-col sm:flex-row sm:items-center gap-3">

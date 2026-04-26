@@ -4,6 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import toast from 'react-hot-toast'
 import { useTestManagement } from '../context/TestManagementContext'
 import { useJira } from '../context/JiraContext'
+import { useSessionPrefs } from '../context/SessionPrefsContext'
 
 const TARGETS = [
   { id: 'xray',         label: 'Xray',                icon: '🛰️', tag: 'Cloud' },
@@ -123,8 +124,15 @@ export default function TestManagementPush({ markdown, agentName }) {
   const [cases, setCases] = useState([])
   const [selected, setSelected] = useState({})
   const [titleEdits, setTitleEdits] = useState({})
-  const [projectKey, setProjectKey] = useState('')
-  const [userStoryKey, setUserStoryKey] = useState('')
+  // Pinned project + parent story: read defaults from SessionPrefs and
+  // write user changes back, so the same selections fan out to every
+  // Jira-push surface and survive Reset / page navigation.
+  const {
+    jiraProjectKey: projectKey,
+    setJiraProjectKey: setProjectKey,
+    userStoryKey,
+    setUserStoryKey,
+  } = useSessionPrefs()
   const [stories, setStories] = useState([])
   const [storiesLoading, setStoriesLoading] = useState(false)
   const [results, setResults] = useState(null)
@@ -204,9 +212,11 @@ export default function TestManagementPush({ markdown, agentName }) {
     setSelected({})
     setTitleEdits({})
     setResults(null)
-    setProjectKey('')
-    setUserStoryKey('')
     setStories([])
+    // projectKey + userStoryKey are persistent pins (SessionPrefs).
+    // Reset only wipes per-modal state — pins survive until the user
+    // manually changes them in the dropdown / typeahead, or removes
+    // them from the chip-row on the agent page.
   }
 
   // When the user picks a Jira project, fetch its Stories so the

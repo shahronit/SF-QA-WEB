@@ -17,6 +17,7 @@ import { Stagger, StaggerItem } from '../components/motion/Stagger'
 import GeneratingScene from '../components/motion/GeneratingScene'
 import { extractJiraKey } from '../utils/jiraDetect'
 import { useQaMode, QA_MODE_OPTIONS } from '../hooks/useQaMode'
+import { useSessionPrefs } from '../context/SessionPrefsContext'
 
 const PHASE_LABELS = {
   requirement: { phase: 'Phase 1', short: 'Requirements Analysis' },
@@ -129,8 +130,18 @@ export default function StlcPack() {
   const { connected: jiraConnected } = useJira()
   const { saveResult } = useAgentResults()
   const [projects, setProjects] = useState([])
-  const [selectedProject, setSelectedProject] = useState('')
-  const [jiraInput, setJiraInput] = useState('')
+  // RAG project + Jira ticket key are pinned via SessionPrefs so a
+  // selection survives Reset, page navigation, and reloads.
+  const {
+    qaProjectSlug,
+    setQaProjectSlug,
+    userStoryKey,
+    setUserStoryKey,
+    setJiraProjectKey,
+  } = useSessionPrefs()
+  const selectedProject = qaProjectSlug
+  const setSelectedProject = setQaProjectSlug
+  const [jiraInput, setJiraInput] = useState(userStoryKey || '')
   const [userStory, setUserStory] = useState('')
   const [running, setRunning] = useState(false)
   const [statuses, setStatuses] = useState(() => Object.fromEntries(STLC_PACK_AGENTS.map(a => [a, 'idle'])))
@@ -160,16 +171,26 @@ export default function StlcPack() {
   const detectedKey = useMemo(() => extractJiraKey(jiraInput), [jiraInput])
   const canRun = !running && (jiraInput.trim().length > 0 || userStory.trim().length > 0)
 
+  // Auto-pin the user-story key (and project key prefix) whenever the
+  // user types a recognisable Jira key/URL into the seed input. Keeps
+  // the "current ticket" pin in sync with this page's local input.
+  useEffect(() => {
+    if (!detectedKey) return
+    setUserStoryKey(detectedKey)
+    const projKey = detectedKey.split('-')[0] || ''
+    if (projKey) setJiraProjectKey(projKey)
+  }, [detectedKey, setUserStoryKey, setJiraProjectKey])
+
   const reset = () => {
     if (running) return
+    // Wipe page-detail state only — selectedProject (RAG), jiraInput
+    // (which mirrors the pinned user story), and userStory free-text
+    // are intentionally preserved per Task 1: pins survive Reset.
     setStatuses(Object.fromEntries(STLC_PACK_AGENTS.map(a => [a, 'idle'])))
     setOutputs({})
     setExpanded({})
     setCombined('')
     setPackId('')
-    setJiraInput('')
-    setUserStory('')
-    setSelectedProject('')
   }
 
   const handleRun = async () => {
