@@ -420,25 +420,41 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
   // Fall back to /history when no in-session results exist so the Link
   // Previous Agent Output dropdown still has something to chain. We
   // skip the requirements agent entirely (the card is hidden there).
+  //
+  // We pull a generous window (most recent 100 runs) and filter on the
+  // client because the previous fixed limit of 10 silently broke the
+  // dropdown whenever a user's last 10 runs happened to all be of the
+  // current agent (very common on the Test Cases page where the same
+  // user iterates many times). After filtering out the current agent
+  // we de-duplicate by agent — keeping only the newest run of each
+  // distinct agent — so the dropdown stays short and meaningful.
   useEffect(() => {
     if (agentName === 'requirement') return
     if (availableResults.length > 0) return
     let cancelled = false
-    api.get('/history/', { params: { limit: 10 } })
+    api.get('/history/', { params: { limit: 100 } })
       .then(({ data }) => {
         if (cancelled) return
-        const records = (data?.records || []).slice(0, 10)
-        const mapped = records
-          .filter(rec => rec.agent && rec.agent !== agentName)
-          .map((rec, idx) => ({
+        const records = data?.records || []
+        const seen = new Set()
+        const mapped = []
+        records.forEach((rec, idx) => {
+          if (!rec || !rec.agent || rec.agent === agentName) return
+          if (seen.has(rec.agent)) return
+          const content = rec.output || rec.output_preview || ''
+          if (!content) return
+          seen.add(rec.agent)
+          mapped.push({
             name: `history:${idx}`,
             label: AGENT_LABELS[rec.agent] || rec.agent,
-            content: rec.output || rec.output_preview || '',
+            content,
             timestamp: rec.ts ? Date.parse(rec.ts) || Date.now() : Date.now(),
             source: 'history',
-          }))
-          .filter(r => r.content)
-        setHistoricalRuns(mapped)
+          })
+        })
+        // Cap the dropdown so it stays readable even if a user has
+        // touched every agent we know about.
+        setHistoricalRuns(mapped.slice(0, 15))
       })
       .catch(() => { if (!cancelled) setHistoricalRuns([]) })
     return () => { cancelled = true }
