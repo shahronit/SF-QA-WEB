@@ -27,7 +27,7 @@ function deriveSummary(markdown) {
   return firstLine.trim().slice(0, 80)
 }
 
-export default function JiraBugPush({ markdown, agentName }) {
+export default function JiraBugPush({ markdown, agentName, defaultIssueKey = '' }) {
   const { connected: jiraConnected, projects, listIssues } = useJira()
   const {
     jiraProjectKey: pinnedProjectKey,
@@ -89,9 +89,16 @@ export default function JiraBugPush({ markdown, agentName }) {
       return
     }
     setSummary(derivedSummary)
-    // Default linkedKey to the pinned user story so a bug filed from a
-    // test result auto-links to its parent ticket. User can override.
-    if (!linkedKey && pinnedStoryKey) setLinkedKey(pinnedStoryKey)
+    // Seed order: pinned session-pref > explicit defaultIssueKey from parent
+    // (jiraContextKey from AgentForm). Always refresh on open so switching
+    // tickets between runs is reflected immediately.
+    const storyFallback = (pinnedStoryKey || defaultIssueKey || '').trim()
+    setLinkedKey(storyFallback)
+    // Also seed project from story key prefix when session pref is empty
+    if (!projectKey && storyFallback) {
+      const projSeed = storyFallback.split('-')[0] || ''
+      if (projSeed) setProjectKey(projSeed)
+    }
     setResult(null)
     setOpen(true)
   }
@@ -183,9 +190,12 @@ export default function JiraBugPush({ markdown, agentName }) {
                         <select
                           className="toon-input !py-2"
                           value={projectKey}
-                          onChange={e => { setProjectKey(e.target.value); setLinkedKey('') }}
+                          onChange={e => setProjectKey(e.target.value)}
                         >
                           <option value="">— Select project —</option>
+                          {projectKey && !(projects || []).find(p => p.key === projectKey) && (
+                            <option value={projectKey}>{projectKey}</option>
+                          )}
                           {(projects || []).map(p => (
                             <option key={p.key} value={p.key}>
                               {p.key} — {p.name}

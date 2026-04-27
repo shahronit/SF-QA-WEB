@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import toast from 'react-hot-toast'
@@ -114,7 +114,7 @@ function ConnectZephyr({ onDone }) {
   )
 }
 
-export default function TestManagementPush({ markdown, agentName }) {
+export default function TestManagementPush({ markdown, agentName, defaultStoryKey = '' }) {
   const { status, refreshStatus, parse, push, disconnect } = useTestManagement()
   const { projects, connected: jiraConnected, listIssues } = useJira()
   const [open, setOpen] = useState(false)
@@ -139,34 +139,40 @@ export default function TestManagementPush({ markdown, agentName }) {
   // Tracks the keys we've handed to /test-case-editor windows so the
   // postMessage handler can correlate replies back to the right row and
   // ignore stale events fired after a window is closed and re-opened.
-  const [editKeys, setEditKeys] = useState({}) // { [rowIdx]: editKey }
+  //
+  // pendingEdits is a plain Map<key, rowIdx> stored in a ref — it is
+  // mutated directly (no React state) so the postMessage handler can
+  // look up the row index synchronously, with zero risk of the async-
+  // state-updater timing issue that plagued the previous editKeysRef
+  // approach.  editKeys state is kept only for the UI (disabling the
+  // Edit button while a window is open).
+  const [editKeys, setEditKeys] = useState({})
+  const pendingEdits = useRef(new Map()) // key -> rowIdx
 
   // Listen for save events from the pop-out editor. Same-origin only —
   // we ignore any cross-origin postMessage so a malicious site embedding
   // us can't inject crafted test cases. The editor cleans up its own
-  // sessionStorage entry; we drop our key->row mapping here.
+  // sessionStorage entry; we drop our pending-edit mapping here.
   useEffect(() => {
     const onMessage = (event) => {
       if (event.origin !== window.location.origin) return
       const data = event.data
       if (!data || data.type !== 'tc-edit-result' || !data.key || !data.testcase) return
-      let rowIdx = -1
-      setEditKeys((prev) => {
-        const entry = Object.entries(prev).find(([, k]) => k === data.key)
-        if (!entry) return prev
-        rowIdx = Number(entry[0])
-        const next = { ...prev }
-        delete next[entry[0]]
-        return next
-      })
-      if (rowIdx < 0) return
+      // Synchronous Map lookup — no React state / scheduler involved.
+      if (!pendingEdits.current.has(data.key)) return
+      const rowIdx = pendingEdits.current.get(data.key)
+      pendingEdits.current.delete(data.key)
+      // Apply the full edited test case (all fields) to cases state and
+      // separately update the title-edits map so the inline title input
+      // also reflects the change immediately.
       setCases((prev) => prev.map((tc, i) => (i === rowIdx ? { ...tc, ...data.testcase } : tc)))
       setTitleEdits((prev) => ({ ...prev, [rowIdx]: data.testcase.title || prev[rowIdx] }))
+      setEditKeys((prev) => { const n = { ...prev }; delete n[rowIdx]; return n })
       toast.success('Test case updated')
     }
     window.addEventListener('message', onMessage)
     return () => window.removeEventListener('message', onMessage)
-  }, [])
+  }, []) // no deps — pendingEdits is a stable ref, state setters are stable
 
   const openRowEditor = (idx) => {
     const tc = cases[idx]
@@ -183,6 +189,10 @@ export default function TestManagementPush({ markdown, agentName }) {
       toast.error('Could not stash test case for editor window')
       return
     }
+    // Register in the Map BEFORE opening the window so the message
+    // handler can always find the entry even if the child posts back
+    // very quickly on a fast machine.
+    pendingEdits.current.set(key, idx)
     setEditKeys((prev) => ({ ...prev, [idx]: key }))
     const win = window.open(
       `/test-case-editor?key=${encodeURIComponent(key)}`,
@@ -192,11 +202,8 @@ export default function TestManagementPush({ markdown, agentName }) {
     if (!win) {
       toast.error('Pop-up blocked. Allow pop-ups for this site to edit test cases.')
       try { sessionStorage.removeItem(`tc-edit:${key}`) } catch { /* ignore */ }
-      setEditKeys((prev) => {
-        const next = { ...prev }
-        delete next[idx]
-        return next
-      })
+      pendingEdits.current.delete(key)
+      setEditKeys((prev) => { const n = { ...prev }; delete n[idx]; return n })
     }
   }
 
@@ -243,6 +250,18 @@ export default function TestManagementPush({ markdown, agentName }) {
     setOpen(true)
     setParsing(true)
     setResults(null)
+    // Seed the user-story pin from the explicit prop when the session pref
+    // is still empty (e.g. first open after a fresh page load). The prop is
+    // jiraContextKey from AgentForm, which always reflects the most recently
+    // imported/detected ticket.
+    if (!userStoryKey && defaultStoryKey) {
+      const seed = defaultStoryKey.trim()
+      if (seed) {
+        setUserStoryKey(seed)
+        const projSeed = seed.split('-')[0] || ''
+        if (projSeed && !projectKey) setProjectKey(projSeed)
+      }
+    }
     try {
       await refreshStatus()
       const data = await parse(markdown)
@@ -412,9 +431,14 @@ export default function TestManagementPush({ markdown, agentName }) {
                         <select
                           className="toon-input !py-2"
                           value={projectKey}
-                          onChange={e => { setProjectKey(e.target.value); setUserStoryKey('') }}
+                          onChange={e => setProjectKey(e.target.value)}
                         >
                           <option value="">— Select project —</option>
+                          {/* Fallback option keeps the select visually correct
+                              while the projects list is still loading */}
+                          {projectKey && !(projects || []).find(p => p.key === projectKey) && (
+                            <option value={projectKey}>{projectKey}</option>
+                          )}
                           {(projects || []).map(p => (
                             <option key={p.key} value={p.key}>
                               {p.key} — {p.name}

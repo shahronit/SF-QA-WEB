@@ -582,11 +582,11 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
     setShakeKeys({})
     setImportedJira(null)
     setImportedJiraList([])
-    // Persistent pins (RAG project, Jira project, sprint, user story)
-    // are intentionally NOT cleared here — Reset only wipes the
-    // page-detail state. Pins are removed only via the chip-row × on
-    // each pin or the picker's clear button.
-  }, [])
+    // Clear the user-story pin so the next agent run starts fresh.
+    // RAG project, Jira project, and sprint are kept pinned — they
+    // survive Reset and are only removed via the chip-row ×.
+    clearPin('userStoryKey')
+  }, [clearPin])
 
   const handleTextareaBlur = useCallback(async (fieldKey, currentValue) => {
     if (!jiraConnected || !currentValue) return

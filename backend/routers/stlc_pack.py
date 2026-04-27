@@ -55,6 +55,30 @@ class StlcRunRequest(BaseModel):
     jira_key_or_url: str | None = None
     project_slug: str | None = None
     qa_mode: str | None = "salesforce"  # "salesforce" or "general"
+    # Optional execution data for Phase 4 (Test Execution Report). When
+    # ``executed`` / ``passed`` / ``failed`` are all non-empty the pack
+    # will run Phase 4 with these values; otherwise Phase 4 and Phase 5
+    # are skipped (an ``agent_skipped`` SSE event is emitted instead).
+    # Optional companion keys: ``blocked``, ``defects_summary``,
+    # ``coverage_notes``, ``cycle_name``.
+    execution_data: dict[str, Any] | None = None
+
+
+def _has_exec_data(data: dict[str, Any] | None) -> bool:
+    """Decide whether the supplied execution data is sufficient for Phase 4.
+
+    Required keys: ``executed``, ``passed``, ``failed`` — each must be
+    a non-empty string after ``.strip()``. ``"0"`` is acceptable. We do
+    not validate that the values parse as integers; the agent prompt
+    handles that itself and renders whatever the user supplied.
+    """
+    if not data:
+        return False
+    for k in ("executed", "passed", "failed"):
+        v = str(data.get(k, "")).strip()
+        if not v:
+            return False
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -308,13 +332,16 @@ def _agent_input(
     seed_text: str,
     prior_output: str | None,
     qa_mode: str = "salesforce",
+    execution_data: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Map the seed text to the primary input field expected by each agent.
 
     The keys here mirror those declared on the matching pages under
     ``frontend/src/pages`` so the prompts receive the same JSON shape they
     would when invoked manually. ``qa_mode`` is propagated to every phase so
-    the whole pack runs in a single mode.
+    the whole pack runs in a single mode. ``execution_data`` (when present)
+    feeds Phase 4 directly so the report reflects the user's real numbers
+    instead of synthetic placeholders.
     """
     base: dict[str, Any] = {}
     if agent == "requirement":
@@ -331,14 +358,15 @@ def _agent_input(
             "additional_context": "Generated as part of one-click STLC pack.",
         }
     elif agent == "exec_report":
+        ed = execution_data or {}
         base = {
-            "cycle_name": "STLC Pack — first execution",
-            "executed": "(estimate from linked Test Cases)",
-            "passed": "(planned)",
-            "failed": "0",
-            "blocked": "0",
-            "defects_summary": "(none yet — populate from real run)",
-            "coverage_notes": seed_text,
+            "cycle_name": (ed.get("cycle_name") or "").strip() or "STLC Pack",
+            "executed": str(ed.get("executed", "")).strip(),
+            "passed": str(ed.get("passed", "")).strip(),
+            "failed": str(ed.get("failed", "")).strip(),
+            "blocked": str(ed.get("blocked", "")).strip() or "0",
+            "defects_summary": (ed.get("defects_summary") or "").strip() or "(none reported)",
+            "coverage_notes": (ed.get("coverage_notes") or "").strip() or seed_text,
         }
     elif agent == "closure_report":
         base = {
@@ -434,8 +462,33 @@ async def run_stlc_pack(body: StlcRunRequest, user=Depends(get_current_user)):
             "seed_preview": seed_text[:600],
         })
 
+        exec_ok = _has_exec_data(body.execution_data)
+        skipped_reason = (
+            "Execution details not provided. Add Executed / Passed / Failed "
+            "counts on the STLC Pack page to generate this report."
+        )
+
         for index, step in enumerate(PACK_AGENTS, start=1):
             agent = step["agent"]
+            if agent in ("exec_report", "closure_report") and not exec_ok:
+                # Tell the UI we deliberately skipped these phases so it can
+                # render a clear "Skipped" card instead of a fake report.
+                yield _sse("agent_skipped", {
+                    "pack_id": pack_id,
+                    "index": index,
+                    "total": total,
+                    "agent": agent,
+                    "label": step["label"],
+                    "phase": step["phase"],
+                    "reason": skipped_reason,
+                })
+                outputs[agent] = ""
+                # Phase 5 chains off Phase 4's output today; when Phase 4 is
+                # skipped we deliberately leave ``prior_output`` untouched so
+                # later phases (none right now) wouldn't inherit a half-baked
+                # placeholder. ``closure_report`` is also skipped via this
+                # branch, so the chain effectively stops at Phase 3.
+                continue
             yield _sse("agent_start", {
                 "pack_id": pack_id,
                 "index": index,
@@ -444,7 +497,10 @@ async def run_stlc_pack(body: StlcRunRequest, user=Depends(get_current_user)):
                 "label": step["label"],
                 "phase": step["phase"],
             })
-            user_input = _agent_input(agent, seed_text, prior_output, qa_mode=qa_mode)
+            user_input = _agent_input(
+                agent, seed_text, prior_output, qa_mode=qa_mode,
+                execution_data=body.execution_data,
+            )
             collected: list[str] = []
             err_msg: str | None = None
             q: asyncio.Queue[tuple[str, Any]] = asyncio.Queue()
@@ -487,10 +543,14 @@ async def run_stlc_pack(body: StlcRunRequest, user=Depends(get_current_user)):
                 "content": full,
             })
 
-        combined = "\n\n".join(
-            f"## {step['phase']} — {step['label']}\n\n{outputs.get(step['agent'], '')}\n\n---\n"
-            for step in PACK_AGENTS
-        )
+        def _section(step: dict[str, str]) -> str:
+            agent = step["agent"]
+            content = outputs.get(agent, "")
+            if not content and agent in ("exec_report", "closure_report") and not exec_ok:
+                content = f"_Skipped — {skipped_reason}_"
+            return f"## {step['phase']} — {step['label']}\n\n{content}\n\n---\n"
+
+        combined = "\n\n".join(_section(step) for step in PACK_AGENTS)
         _log_pack_run(
             pack_id=pack_id,
             username=user["username"],

@@ -304,9 +304,9 @@ export default function ReportPanel({
         <button onClick={() => download('pdf')} className="toon-btn toon-btn-coral text-sm py-2 px-4">📄 PDF</button>
         <button onClick={() => download('markdown')} className="toon-btn toon-btn-purple text-sm py-2 px-4">📝 Markdown</button>
         <button onClick={copyText} className="toon-btn bg-gray-400 hover:bg-gray-500 text-sm py-2 px-4">📑 Copy</button>
-        <TestManagementPush markdown={content} agentName={agentName} />
+        <TestManagementPush markdown={content} agentName={agentName} defaultStoryKey={jiraContextKey} />
         <JiraCommentPush markdown={content} agentName={agentName} defaultIssueKey={jiraContextKey} />
-        <JiraBugPush markdown={content} agentName={agentName} />
+        <JiraBugPush markdown={content} agentName={agentName} defaultIssueKey={jiraContextKey} />
       </div>
       <ExportColumnPicker
         open={!!pickerFormat}

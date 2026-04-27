@@ -34,16 +34,25 @@ const STATUSES = {
   running: { dot: 'bg-toon-blue animate-pulse', ring: 'ring-toon-blue/40', text: 'Running…' },
   done: { dot: 'bg-toon-mint', ring: 'ring-toon-mint/40', text: 'Done' },
   error: { dot: 'bg-toon-coral', ring: 'ring-toon-coral/40', text: 'Error' },
+  skipped: { dot: 'bg-gray-400', ring: 'ring-gray-300', text: 'Skipped' },
 }
 
-function PhaseStep({ agent, index, total, status, content, expanded, onToggle }) {
+function PhaseStep({ agent, index, total, status, content, reason, expanded, onToggle }) {
   const meta = getAgent(agent)
   const phase = PHASE_LABELS[agent]
   const styles = STATUSES[status] || STATUSES.idle
+  const skipped = status === 'skipped'
+  const borderClass = status === 'done'
+    ? 'border-toon-mint/40'
+    : status === 'running'
+    ? 'border-toon-blue/40'
+    : skipped
+    ? 'border-gray-300 border-dashed bg-gray-50'
+    : 'border-gray-200'
   return (
     <motion.div
       layout
-      className={`relative bg-white rounded-2xl border-2 ${status === 'done' ? 'border-toon-mint/40' : status === 'running' ? 'border-toon-blue/40' : 'border-gray-200'} p-4 shadow-toon transition-colors`}
+      className={`relative rounded-2xl border-2 ${borderClass} p-4 shadow-toon transition-colors ${skipped ? 'opacity-80' : 'bg-white'}`}
     >
       <div className="flex items-center gap-3">
         <div className={`w-10 h-10 rounded-xl bg-gradient-to-br ${meta?.gradient || 'from-gray-300 to-gray-400'} flex items-center justify-center text-white text-lg shadow-md`}>
@@ -59,9 +68,9 @@ function PhaseStep({ agent, index, total, status, content, expanded, onToggle })
               {styles.text}
             </span>
           </div>
-          <h3 className="font-extrabold text-toon-navy">{meta?.label || agent}</h3>
+          <h3 className={`font-extrabold ${skipped ? 'text-gray-500' : 'text-toon-navy'}`}>{meta?.label || agent}</h3>
         </div>
-        {content && (
+        {content && !skipped && (
           <button
             onClick={onToggle}
             className="text-xs font-bold text-toon-blue hover:underline"
@@ -71,8 +80,15 @@ function PhaseStep({ agent, index, total, status, content, expanded, onToggle })
         )}
       </div>
 
+      {skipped && (
+        <div className="mt-3 text-xs text-gray-500 bg-white/60 border border-gray-200 rounded-xl px-3 py-2">
+          <span className="font-bold text-gray-600">Skipped — </span>
+          {reason || 'Execution details not provided. Add Executed / Passed / Failed counts above to generate this report.'}
+        </div>
+      )}
+
       <AnimatePresence>
-        {expanded && content && (
+        {expanded && content && !skipped && (
           <motion.div
             key="preview"
             initial={{ opacity: 0, height: 0 }}
@@ -146,10 +162,29 @@ export default function StlcPack() {
   const [running, setRunning] = useState(false)
   const [statuses, setStatuses] = useState(() => Object.fromEntries(STLC_PACK_AGENTS.map(a => [a, 'idle'])))
   const [outputs, setOutputs] = useState({})
+  const [skipReasons, setSkipReasons] = useState({})
   const [expanded, setExpanded] = useState({})
   const [combined, setCombined] = useState('')
   const [packId, setPackId] = useState('')
   const [qaMode, setQaMode] = useQaMode()
+  // Optional Phase 4/5 inputs. When ``executed`` + ``passed`` + ``failed``
+  // are all filled in, the backend will run the Test Execution and Test
+  // Closure reports with these numbers; otherwise both phases are skipped
+  // (no synthetic placeholders).
+  const [executionData, setExecutionData] = useState({
+    cycle_name: '',
+    executed: '',
+    passed: '',
+    failed: '',
+    blocked: '',
+    defects_summary: '',
+    coverage_notes: '',
+  })
+  const updateExec = (key) => (e) =>
+    setExecutionData(prev => ({ ...prev, [key]: e.target.value }))
+  const hasAnyExec = (d) => Object.values(d || {}).some(v => String(v ?? '').trim().length > 0)
+  const hasRequiredExec = (d) =>
+    ['executed', 'passed', 'failed'].every(k => String(d?.[k] ?? '').trim().length > 0)
   const abortRef = useRef(null)
 
   const fetchProjects = useCallback(() => {
@@ -188,9 +223,19 @@ export default function StlcPack() {
     // are intentionally preserved per Task 1: pins survive Reset.
     setStatuses(Object.fromEntries(STLC_PACK_AGENTS.map(a => [a, 'idle'])))
     setOutputs({})
+    setSkipReasons({})
     setExpanded({})
     setCombined('')
     setPackId('')
+    setExecutionData({
+      cycle_name: '',
+      executed: '',
+      passed: '',
+      failed: '',
+      blocked: '',
+      defects_summary: '',
+      coverage_notes: '',
+    })
   }
 
   const handleRun = async () => {
@@ -198,6 +243,7 @@ export default function StlcPack() {
     setRunning(true)
     setStatuses(Object.fromEntries(STLC_PACK_AGENTS.map(a => [a, 'idle'])))
     setOutputs({})
+    setSkipReasons({})
     setCombined('')
     setPackId('')
     const controller = new AbortController()
@@ -219,6 +265,9 @@ export default function StlcPack() {
           jira_key_or_url: jiraInput || null,
           project_slug: selectedProject || null,
           qa_mode: qaMode,
+          // Only forward execution data when the user has actually filled
+          // something in. Backend treats ``null`` as "skip Phase 4 + 5".
+          execution_data: hasAnyExec(executionData) ? executionData : null,
         }),
       })
       if (!resp.ok || !resp.body) {
@@ -254,6 +303,14 @@ export default function StlcPack() {
             }
           } else if (frame.event === 'agent_error') {
             setStatuses(prev => ({ ...prev, [frame.data.agent]: 'error' }))
+          } else if (frame.event === 'agent_skipped') {
+            const agent = frame.data.agent
+            const reason = frame.data.reason || ''
+            accumulator[agent] = ''
+            setOutputs({ ...accumulator })
+            setStatuses(prev => ({ ...prev, [agent]: 'skipped' }))
+            setSkipReasons(prev => ({ ...prev, [agent]: reason }))
+            setExpanded(prev => ({ ...prev, [agent]: false }))
           } else if (frame.event === 'pack_done') {
             setCombined(frame.data.combined_markdown || '')
             toast.success('STLC pack generated!')
@@ -393,6 +450,137 @@ export default function StlcPack() {
           />
         </div>
 
+        <details
+          className="mt-4 group bg-gray-50 border border-gray-200 rounded-2xl"
+          open={hasAnyExec(executionData)}
+        >
+          <summary className="cursor-pointer select-none list-none px-4 py-3 flex items-center gap-2">
+            <span className="w-7 h-7 rounded-lg bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center text-white text-xs shadow-sm">
+              📊
+            </span>
+            <span className="font-bold text-toon-navy text-sm">
+              Execution details <span className="text-gray-400 font-normal">(Phase 4 + 5 — optional)</span>
+            </span>
+            {hasRequiredExec(executionData) ? (
+              <span className="ml-2 text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
+                Will run
+              </span>
+            ) : hasAnyExec(executionData) ? (
+              <span className="ml-2 text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200">
+                Need Executed / Passed / Failed
+              </span>
+            ) : (
+              <span className="ml-2 text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-gray-100 text-gray-500 border border-gray-200">
+                Will skip Phase 4 + 5
+              </span>
+            )}
+            <span className="ml-auto text-xs text-gray-400 group-open:hidden">Expand ▾</span>
+            <span className="ml-auto text-xs text-gray-400 hidden group-open:inline">Collapse ▴</span>
+          </summary>
+          <div className="px-4 pb-4 pt-1">
+            <p className="text-xs text-gray-500 mb-3">
+              Optional. Leave blank to skip Phases 4 + 5. To generate the Test Execution Report,
+              fill in at least <span className="font-bold text-toon-navy">Executed</span>,
+              {' '}<span className="font-bold text-toon-navy">Passed</span> and
+              {' '}<span className="font-bold text-toon-navy">Failed</span>.
+            </p>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <div>
+                <label className="text-xs font-bold text-toon-navy mb-1 block">Executed *</label>
+                <input
+                  className="toon-input"
+                  type="number"
+                  min="0"
+                  inputMode="numeric"
+                  placeholder="e.g. 42"
+                  value={executionData.executed}
+                  onChange={updateExec('executed')}
+                  disabled={running}
+                />
+              </div>
+              <div>
+                <label className="text-xs font-bold text-toon-navy mb-1 block">Passed *</label>
+                <input
+                  className="toon-input"
+                  type="number"
+                  min="0"
+                  inputMode="numeric"
+                  placeholder="e.g. 38"
+                  value={executionData.passed}
+                  onChange={updateExec('passed')}
+                  disabled={running}
+                />
+              </div>
+              <div>
+                <label className="text-xs font-bold text-toon-navy mb-1 block">Failed *</label>
+                <input
+                  className="toon-input"
+                  type="number"
+                  min="0"
+                  inputMode="numeric"
+                  placeholder="e.g. 3"
+                  value={executionData.failed}
+                  onChange={updateExec('failed')}
+                  disabled={running}
+                />
+              </div>
+              <div>
+                <label className="text-xs font-bold text-toon-navy mb-1 block">Blocked</label>
+                <input
+                  className="toon-input"
+                  type="number"
+                  min="0"
+                  inputMode="numeric"
+                  placeholder="e.g. 1"
+                  value={executionData.blocked}
+                  onChange={updateExec('blocked')}
+                  disabled={running}
+                />
+              </div>
+            </div>
+
+            <details className="mt-3 bg-white border border-gray-200 rounded-xl">
+              <summary className="cursor-pointer select-none list-none px-3 py-2 text-xs font-bold text-toon-navy">
+                Advanced ▾
+              </summary>
+              <div className="px-3 pb-3 pt-1 space-y-3">
+                <div>
+                  <label className="text-xs font-bold text-toon-navy mb-1 block">Cycle name</label>
+                  <input
+                    className="toon-input"
+                    placeholder="e.g. Sprint 24 — Smoke + Regression"
+                    value={executionData.cycle_name}
+                    onChange={updateExec('cycle_name')}
+                    disabled={running}
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-toon-navy mb-1 block">Defects summary</label>
+                  <textarea
+                    className="toon-textarea"
+                    rows={2}
+                    placeholder="Brief summary of defects raised this cycle (counts, severities, key examples)"
+                    value={executionData.defects_summary}
+                    onChange={updateExec('defects_summary')}
+                    disabled={running}
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-toon-navy mb-1 block">Coverage notes</label>
+                  <textarea
+                    className="toon-textarea"
+                    rows={2}
+                    placeholder="What was/wasn't covered, deferred scenarios, environment caveats…"
+                    value={executionData.coverage_notes}
+                    onChange={updateExec('coverage_notes')}
+                    disabled={running}
+                  />
+                </div>
+              </div>
+            </details>
+          </div>
+        </details>
+
         <div className="flex flex-wrap gap-2 mt-5">
           <motion.button
             whileTap={{ scale: 0.97 }}
@@ -449,6 +637,7 @@ export default function StlcPack() {
               total={STLC_PACK_AGENTS.length}
               status={statuses[agent]}
               content={outputs[agent]}
+              reason={skipReasons[agent]}
               expanded={!!expanded[agent]}
               onToggle={() => setExpanded(prev => ({ ...prev, [agent]: !prev[agent] }))}
             />
