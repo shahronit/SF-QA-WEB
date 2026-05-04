@@ -112,3 +112,6 @@ JIRA_SESSIONS = "jira_sessions"
 GDRIVE_SESSIONS = "gdrive_sessions"
 XRAY_SESSIONS = "xray_sessions"
 ZEPHYR_SESSIONS = "zephyr_sessions"
+# In-app admin notifications. One doc per (admin recipient, event), so
+# fanning out a single registration to N admins writes N documents.
+NOTIFICATIONS = "notifications"

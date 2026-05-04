@@ -82,6 +82,137 @@ function Typewriter({ text, enabled = true, max = 600, duration = 600 }) {
   return <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]} components={MD_COMPONENTS}>{shown || text}</ReactMarkdown>
 }
 
+/**
+ * Compact "1.2k tokens" / "12,345 tokens" formatter for badges.
+ *
+ * Numbers above 9 999 collapse to a one-decimal `k` suffix
+ * (12 345 → "12.3k") so the chip stays narrow even when a long
+ * generation eats hundreds of thousands of tokens. Falls back to
+ * "—" when the count is null/undefined so we visibly distinguish
+ * "we didn't get a count" from "the model used zero tokens".
+ */
+function formatTokenCount(n) {
+  if (n == null || Number.isNaN(n)) return '—'
+  const v = Number(n)
+  if (v < 1000) return String(v)
+  if (v < 10000) return v.toLocaleString()
+  return `${(v / 1000).toFixed(1).replace(/\.0$/, '')}k`
+}
+
+/**
+ * Token-usage chip rendered in the ReportPanel header.
+ *
+ * Colour-codes by `source`:
+ *   - "live"      → mint  (real counts pulled from the SDK)
+ *   - "estimated" → amber (cursor-agent doesn't expose counts; ~chars/4)
+ *   - "cached"    → blue  (replayed from the response cache)
+ *
+ * Hides itself entirely when no usage info is available, since a
+ * "0 tokens" pill is misleading.
+ */
+function TokenUsageChip({ runMeta }) {
+  if (!runMeta || (!runMeta.usage && !runMeta.cached && !runMeta.model)) {
+    return null
+  }
+  const usage = runMeta.usage || {}
+  const source = usage.source || (runMeta.cached ? 'cached' : 'live')
+  const sourceLabel = source === 'estimated'
+    ? '~est'
+    : source === 'cached'
+      ? 'cached'
+      : 'live'
+  const palette = source === 'cached'
+    ? { bg: 'bg-sky-50', border: 'border-sky-200', accent: 'text-sky-700', dot: 'bg-sky-500' }
+    : source === 'estimated'
+      ? { bg: 'bg-amber-50', border: 'border-amber-200', accent: 'text-amber-700', dot: 'bg-amber-500' }
+      : { bg: 'bg-emerald-50', border: 'border-emerald-200', accent: 'text-emerald-700', dot: 'bg-emerald-500' }
+
+  const prompt = formatTokenCount(usage.prompt_tokens)
+  const completion = formatTokenCount(usage.completion_tokens)
+  const total = formatTokenCount(usage.total_tokens)
+  const totalRaw = usage.total_tokens != null
+    ? Number(usage.total_tokens).toLocaleString()
+    : '—'
+  const tooltip = [
+    runMeta.provider && runMeta.model ? `${runMeta.provider} · ${runMeta.model}` : null,
+    `Prompt: ${formatTokenCount(usage.prompt_tokens)}`,
+    `Completion: ${formatTokenCount(usage.completion_tokens)}`,
+    `Total: ${totalRaw}`,
+    `Source: ${source}`,
+  ].filter(Boolean).join(' · ')
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: -4, scale: 0.96 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      transition={{ type: 'spring', stiffness: 320, damping: 22 }}
+      title={tooltip}
+      className={`inline-flex items-center gap-2 px-2.5 py-1 rounded-full ${palette.bg} ${palette.border} border text-[11px] font-bold ${palette.accent} shadow-sm`}
+    >
+      <span className={`inline-block w-1.5 h-1.5 rounded-full ${palette.dot}`} />
+      <span aria-hidden="true">🪙</span>
+      <span className="tabular-nums">
+        <span className="opacity-70">in</span>{' '}{prompt}
+        <span className="mx-1.5 opacity-40">·</span>
+        <span className="opacity-70">out</span>{' '}{completion}
+        <span className="mx-1.5 opacity-40">·</span>
+        <span className="font-extrabold">{total}</span>
+      </span>
+      <span className="ml-1 px-1.5 py-0.5 rounded-md bg-white/70 text-[9px] uppercase tracking-wider">
+        {sourceLabel}
+      </span>
+    </motion.div>
+  )
+}
+
+/**
+ * Tiny "🤖 gemini · gemini-2.5-pro" pill that complements the token
+ * chip — surfaces the resolved (provider, model) so users can tell at
+ * a glance which backend produced the report. Hidden when neither
+ * field is known (early failure path before the usage event arrives).
+ */
+function ModelChip({ runMeta }) {
+  if (!runMeta || (!runMeta.provider && !runMeta.model)) return null
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: -4, scale: 0.96 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      transition={{ type: 'spring', stiffness: 320, damping: 22, delay: 0.05 }}
+      title={`Resolved backend for this run: ${runMeta.provider} · ${runMeta.model}`}
+      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-violet-50 border border-violet-200 text-[11px] font-bold text-violet-700 shadow-sm"
+    >
+      <span aria-hidden="true">🤖</span>
+      <span className="opacity-70">{runMeta.provider}</span>
+      <span className="opacity-40">·</span>
+      <span>{runMeta.model}</span>
+    </motion.div>
+  )
+}
+
+/**
+ * "Auto-repaired" pill shown when the orchestrator's auto-repair pass
+ * kicked in for this run. Backend sets `runMeta.repaired = true` when
+ * the agent's output validator failed and a second LLM call was made
+ * with a strict format clamp to fix the drift. We surface this so
+ * users understand why their token count is higher than usual on
+ * runs where the model needed coaxing into the right shape.
+ */
+function RepairedChip({ runMeta }) {
+  if (!runMeta || !runMeta.repaired) return null
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: -4, scale: 0.96 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      transition={{ type: 'spring', stiffness: 320, damping: 22, delay: 0.1 }}
+      title="The first attempt didn't match the required structure, so we ran one extra call with a strict format clamp. The output above is the cleaned version."
+      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-fuchsia-50 border border-fuchsia-200 text-[11px] font-bold text-fuchsia-700 shadow-sm"
+    >
+      <span aria-hidden="true">🛠️</span>
+      <span className="uppercase tracking-wider text-[9px]">Auto-repaired</span>
+    </motion.div>
+  )
+}
+
 export default function ReportPanel({
   content,
   agentName,
@@ -89,6 +220,7 @@ export default function ReportPanel({
   stamp,
   loading = false,
   jiraContextKey = '',
+  runMeta = null,
 }) {
   const [tab, setTab] = useState('formatted')
   const meta = getAgent(agentName)
@@ -177,8 +309,8 @@ export default function ReportPanel({
       animate={{ opacity: 1, y: 0 }}
       className="toon-card"
     >
-      <div className="flex items-center justify-between gap-2 mb-4">
-        <div className="flex items-center gap-2">
+      <div className="flex items-center justify-between gap-2 mb-4 flex-wrap">
+        <div className="flex items-center gap-2 flex-wrap">
           <motion.span
             className="w-8 h-8 rounded-xl bg-toon-mint text-white flex items-center justify-center text-sm shadow-toon-mint"
             initial={{ scale: 0 }}
@@ -193,6 +325,16 @@ export default function ReportPanel({
               {meta.label}
             </span>
           )}
+          {/* Provider/model + token-usage badges sit immediately after
+              the title so users see at a glance which backend produced
+              the report and how many tokens it cost. The chips render
+              themselves null when the backend hasn't reported usage
+              yet (e.g. while the stream is still in-flight). */}
+          <div className="ml-1 flex items-center gap-1.5 flex-wrap">
+            <ModelChip runMeta={runMeta} />
+            <TokenUsageChip runMeta={runMeta} />
+            <RepairedChip runMeta={runMeta} />
+          </div>
         </div>
         {sparklineValues.length > 0 && (
           <div className="hidden sm:block opacity-80">

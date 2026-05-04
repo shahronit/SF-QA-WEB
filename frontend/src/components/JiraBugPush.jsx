@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import toast from 'react-hot-toast'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import api from '../api/client'
 import { useJira } from '../context/JiraContext'
 import { useSessionPrefs } from '../context/SessionPrefsContext'
@@ -272,6 +274,24 @@ export default function JiraBugPush({ markdown, agentName, defaultIssueKey = '' 
                         <pre className="whitespace-pre-wrap text-xs text-gray-700 font-mono">{markdown}</pre>
                       </div>
                     </div>
+
+                    {/* Astound Pentair preview - shows the Bug Metadata table
+                        and Steps / Actual / Expected blocks the way Jira will
+                        render them once the rich markdown -> ADF converter
+                        runs server-side. */}
+                    <details className="border border-gray-200 rounded-2xl bg-white open:bg-gray-50/40">
+                      <summary className="cursor-pointer select-none px-3 py-2 text-xs font-bold text-toon-navy">
+                        Preview as Jira table
+                      </summary>
+                      <div
+                        className="px-3 pb-3 pt-1 max-h-64 overflow-auto prose prose-sm prose-toon text-xs"
+                        style={{ wordBreak: 'break-word' }}
+                      >
+                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                          {markdown}
+                        </ReactMarkdown>
+                      </div>
+                    </details>
                   </>
                 ) : (
                   <div className="space-y-3">

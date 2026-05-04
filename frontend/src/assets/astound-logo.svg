@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Astound Digital">
+  <defs>
+    <linearGradient id="a-grad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%"  stop-color="#7B61FF"/>
+      <stop offset="55%" stop-color="#FF3D8B"/>
+      <stop offset="100%" stop-color="#43E5F4"/>
+    </linearGradient>
+    <radialGradient id="a-hi" cx="35%" cy="30%" r="55%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.55"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="a-shadow" x="-30%" y="-10%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="3" stdDeviation="2.5" flood-color="#0F0E1A" flood-opacity="0.32"/>
+    </filter>
+  </defs>
+  <g filter="url(#a-shadow)">
+    <!-- Stylised "A"  slanted triangle with crossbar in a bold gradient -->
+    <path d="M32 6 L56 56 L46 56 L40 42 L24 42 L18 56 L8 56 Z M28 32 L36 32 L32 18 Z"
+          fill="url(#a-grad)"/>
+    <path d="M32 6 L56 56 L46 56 L40 42 L24 42 L18 56 L8 56 Z M28 32 L36 32 L32 18 Z"
+          fill="url(#a-hi)"/>
+    <!-- Sparkle motif -->
+    <circle cx="50" cy="14" r="3" fill="#43E5F4"/>
+    <circle cx="50" cy="14" r="1.5" fill="#ffffff" opacity="0.85"/>
+  </g>
+</svg>

@@ -8,10 +8,20 @@ from threading import Lock
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from core import firestore_db
+from core import firestore_db, secret_fields
 from core.jira_client import JiraClient
 from core.jira_links import extract_jira_key
 from routers.deps import get_current_user
+
+# Fields in a Jira session dict that hold sensitive material and should
+# be encrypted at rest. Everything else (jira_url, email, last_project,
+# created, etc.) stays plaintext so existing Firestore queries by
+# username still work and the operator can audit *which* account is
+# linked without granting decrypt access.
+_JIRA_SESSION_PLAINTEXT_FIELDS = {
+    "jira_url", "email", "last_project", "last_issue_type",
+    "created", "updated",
+}
 
 router = APIRouter()
 
@@ -27,19 +37,32 @@ _SESSIONS_LOCK = Lock()
 # ---------------------------------------------------------------------------
 
 def _save_session(username: str, session: dict) -> None:
-    """Persist a Jira session to memory and (optionally) Firestore."""
+    """Persist a Jira session to memory and (optionally) Firestore.
+
+    The in-memory cache holds plaintext for the JiraClient's hot path;
+    Firestore receives an encrypted copy of every secret field
+    (currently just ``api_token``) so a database dump on its own does
+    not reveal Jira credentials.
+    """
     with _SESSIONS_LOCK:
         _SESSIONS[username] = session
     if firestore_db.is_enabled():
         try:
             db = firestore_db.get_db()
-            db.collection(firestore_db.JIRA_SESSIONS).document(username).set(session)
+            persisted = secret_fields.encrypt_dict_values(
+                session, exclude=_JIRA_SESSION_PLAINTEXT_FIELDS,
+            )
+            db.collection(firestore_db.JIRA_SESSIONS).document(username).set(persisted)
         except Exception:
             pass
 
 
 def _load_session(username: str) -> dict | None:
-    """Look up a Jira session for *username* (memory first, then Firestore)."""
+    """Look up a Jira session for *username* (memory first, then Firestore).
+
+    Decrypts any encrypted values pulled from Firestore before caching
+    them in memory so the JiraClient always sees plaintext credentials.
+    """
     with _SESSIONS_LOCK:
         session = _SESSIONS.get(username)
     if session:
@@ -49,7 +72,10 @@ def _load_session(username: str) -> dict | None:
             db = firestore_db.get_db()
             doc = db.collection(firestore_db.JIRA_SESSIONS).document(username).get()
             if doc.exists:
-                session = doc.to_dict()
+                raw = doc.to_dict() or {}
+                session = secret_fields.decrypt_dict_values(
+                    raw, exclude=_JIRA_SESSION_PLAINTEXT_FIELDS,
+                )
                 with _SESSIONS_LOCK:
                     _SESSIONS[username] = session
                 return session

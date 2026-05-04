@@ -506,9 +506,9 @@ async def run_stlc_pack(body: StlcRunRequest, user=Depends(get_current_user)):
             q: asyncio.Queue[tuple[str, Any]] = asyncio.Queue()
             loop = asyncio.get_running_loop()
 
-            def _producer(_agent=agent, _input=user_input, _q=q, _loop=loop) -> None:
+            def _producer(_agent=agent, _input=user_input, _q=q, _loop=loop, _user=user["username"]) -> None:
                 try:
-                    for chunk in orch.stream_agent(_agent, _input):
+                    for chunk in orch.stream_agent(_agent, _input, username=_user):
                         _loop.call_soon_threadsafe(_q.put_nowait, ("chunk", chunk))
                 except Exception as exc:  # noqa: BLE001
                     _loop.call_soon_threadsafe(_q.put_nowait, ("error", str(exc)))

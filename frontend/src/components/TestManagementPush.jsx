@@ -194,16 +194,23 @@ export default function TestManagementPush({ markdown, agentName, defaultStoryKe
     // very quickly on a fast machine.
     pendingEdits.current.set(key, idx)
     setEditKeys((prev) => ({ ...prev, [idx]: key }))
+    // Open the editor in a NEW BROWSER TAB rather than a popup window.
+    // Browsers route window.open(url, target) to a tab when no `features`
+    // string is passed; supplying width/height/etc. forces the legacy
+    // popup window. We keep the per-key target name so re-clicking the
+    // same row reuses (and refocuses) the existing tab instead of
+    // spawning duplicates.
     const win = window.open(
       `/test-case-editor?key=${encodeURIComponent(key)}`,
       `tc-editor-${key}`,
-      'width=900,height=800,resizable=yes,scrollbars=yes',
     )
     if (!win) {
-      toast.error('Pop-up blocked. Allow pop-ups for this site to edit test cases.')
+      toast.error('Browser blocked the new tab. Allow pop-ups for this site to edit test cases.')
       try { sessionStorage.removeItem(`tc-edit:${key}`) } catch { /* ignore */ }
       pendingEdits.current.delete(key)
       setEditKeys((prev) => { const n = { ...prev }; delete n[idx]; return n })
+    } else {
+      try { win.focus() } catch { /* ignore — cross-tab focus is best effort */ }
     }
   }
 

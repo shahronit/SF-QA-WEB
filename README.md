@@ -1,8 +1,10 @@
 # QA Studio — AI Test Artifact Generator
 
-A single-deployable web app that helps QA teams generate the full Software Testing Life Cycle (STLC) of artifacts — requirements analysis, test plans, test cases, bug reports, automation scripts, RTM, UAT, execution & closure reports — from short prompts grounded in your project documents and Jira tickets.
+> **QA Studio · by Astound Digital** — Created &amp; Managed by the **QDEC Team**.
 
-Built with **FastAPI + React** and shipped as one process: the React SPA is built into `backend/static/` and served by FastAPI on port `8080`.
+A single-deployable web app that helps the Astound Digital delivery QA team generate the full Software Testing Life Cycle (STLC) of artifacts — requirements analysis, test plans, test cases, bug reports, automation scripts, RTM, UAT, execution & closure reports — from short prompts grounded in your project documents and Jira tickets.
+
+Built with **FastAPI + React** and shipped as one process: the React SPA is built into `backend/static/` and served by FastAPI on port `8080`. The frontend wears an Astound co-brand (deep-violet / magenta / cyan aurora theme, Sora display font, vendored 3D iconography) without renaming the application.
 
 > Companion docs:
 >
