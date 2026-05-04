@@ -804,18 +804,28 @@ class JiraClient:
         project_key: str,
         summary: str,
         description_markdown: str,
+        rich_adf: bool = True,
     ) -> dict[str, str]:
-        """Create a Bug issue and return {key, url}.
+        """Create a Bug issue and return ``{key, url}``.
 
         Description is sent as ADF (Atlassian Document Format) so Jira
-        Cloud renders it properly.
+        Cloud renders it properly. When *rich_adf* is true (the default
+        for the bug-report flow) we use :func:`_markdown_to_adf_rich`
+        which preserves headings, pipe tables, ordered/bulleted lists,
+        fenced code blocks, and bold/italic/code marks - the layout the
+        Astound bug-report agent emits. Set *rich_adf* to false to fall
+        back to the simple paragraph-only converter.
         """
+        if rich_adf:
+            description_adf = _markdown_to_adf_rich(description_markdown)
+        else:
+            description_adf = _markdown_to_adf(description_markdown)
         payload = {
             "fields": {
                 "project": {"key": project_key},
                 "summary": summary,
                 "issuetype": {"name": "Bug"},
-                "description": _markdown_to_adf(description_markdown),
+                "description": description_adf,
             }
         }
         result = self._request("POST", "/issue", payload)
@@ -934,6 +944,279 @@ def _markdown_to_adf(text: str) -> dict[str, Any]:
         "type": "doc",
         "content": content_nodes,
     }
+
+
+# ---------------------------------------------------------------------------
+# Rich markdown -> ADF converter
+#
+# Used by the bug-report Jira push (Astound Pentair format) so headings,
+# pipe tables, ordered/bulleted lists, fenced code blocks, and inline
+# bold / italic / code marks survive the round-trip into the Jira
+# Description field. Hand-rolled so we don't add an external dependency.
+# Anything we can't parse falls back to a regular paragraph node, so the
+# output is always a valid ADF document.
+# ---------------------------------------------------------------------------
+
+# Inline mark patterns - applied in this order so ``code`` wins over
+# ``**bold**`` (we don't want to double-mark text inside backticks).
+_RICH_INLINE_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"`([^`]+)`"), "code"),
+    (re.compile(r"\*\*([^*\n]+)\*\*"), "strong"),
+    (re.compile(r"(?<!\*)\*([^*\n]+)\*(?!\*)"), "em"),
+    (re.compile(r"\b(https?://[^\s\)\]<>]+)"), "link"),
+]
+
+
+def _rich_inline_text(text: str) -> list[dict[str, Any]]:
+    """Convert a single line of markdown to a list of ADF inline nodes.
+
+    Splits *text* on the inline mark patterns and emits ``text`` nodes with
+    appropriate ``marks``. Plain segments produce unmarked ``text`` nodes.
+    Returns ``[{"type": "text", "text": ""}]`` when *text* is empty so the
+    caller can always wrap the result in a paragraph.
+    """
+    if not text:
+        return [{"type": "text", "text": ""}]
+
+    # Find every inline match across all patterns, then walk left-to-right
+    # picking the earliest non-overlapping match each time.
+    nodes: list[dict[str, Any]] = []
+    cursor = 0
+    while cursor < len(text):
+        best: tuple[int, int, str, str] | None = None  # (start, end, mark, payload)
+        for pattern, mark in _RICH_INLINE_PATTERNS:
+            m = pattern.search(text, cursor)
+            if not m:
+                continue
+            if best is None or m.start() < best[0]:
+                best = (m.start(), m.end(), mark, m.group(1))
+        if best is None:
+            nodes.append({"type": "text", "text": text[cursor:]})
+            break
+        if best[0] > cursor:
+            nodes.append({"type": "text", "text": text[cursor:best[0]]})
+        if best[2] == "link":
+            nodes.append({
+                "type": "text",
+                "text": best[3],
+                "marks": [{"type": "link", "attrs": {"href": best[3]}}],
+            })
+        else:
+            nodes.append({
+                "type": "text",
+                "text": best[3],
+                "marks": [{"type": best[2]}],
+            })
+        cursor = best[1]
+
+    return nodes or [{"type": "text", "text": ""}]
+
+
+def _rich_paragraph(text: str) -> dict[str, Any]:
+    return {"type": "paragraph", "content": _rich_inline_text(text)}
+
+
+_HEADING_RE = re.compile(r"^(#{1,6})\s+(.+)$")
+_ORDERED_RE = re.compile(r"^\s*\d+[.)]\s+(.+)$")
+_BULLET_RE = re.compile(r"^\s*[-*+]\s+(.+)$")
+_FENCE_RE = re.compile(r"^```(\w+)?\s*$")
+_TABLE_HR_RE = re.compile(r"^\s*\|?\s*[:\-\|\s]+\s*\|?\s*$")
+
+
+def _split_table_row(row: str) -> list[str]:
+    """Split a markdown pipe-table row into trimmed cell strings."""
+    return [c.strip() for c in row.strip().strip("|").split("|")]
+
+
+def _build_table_node(headers: list[str], data_rows: list[list[str]]) -> dict[str, Any]:
+    """Build an ADF table node from plain-string headers + rows."""
+    def _cell(text: str, header: bool) -> dict[str, Any]:
+        return {
+            "type": "tableHeader" if header else "tableCell",
+            "attrs": {},
+            "content": [_rich_paragraph(text)],
+        }
+
+    rows: list[dict[str, Any]] = [
+        {"type": "tableRow", "content": [_cell(h, header=True) for h in headers]},
+    ]
+    for row in data_rows:
+        # Pad / trim cells so every row has the same width as the header.
+        cells = list(row) + [""] * max(0, len(headers) - len(row))
+        cells = cells[: len(headers)]
+        rows.append({"type": "tableRow", "content": [_cell(c, header=False) for c in cells]})
+    return {
+        "type": "table",
+        "attrs": {"isNumberColumnEnabled": False, "layout": "default"},
+        "content": rows,
+    }
+
+
+def _list_node(kind: str, items: list[str]) -> dict[str, Any]:
+    """Build an ordered or bulleted list from a list of item strings."""
+    return {
+        "type": "orderedList" if kind == "ordered" else "bulletList",
+        "content": [
+            {
+                "type": "listItem",
+                "content": [_rich_paragraph(it)],
+            }
+            for it in items
+        ],
+    }
+
+
+def _markdown_to_adf_rich(text: str) -> dict[str, Any]:
+    """Best-effort rich markdown -> ADF document.
+
+    Handles:
+
+    - ATX headings (`# H1` ... `### H3`)
+    - Ordered / bulleted lists (consecutive `1.` / `- ` / `* ` lines)
+    - Pipe tables (`| a | b |\n| --- | --- |\n| 1 | 2 |`)
+    - Fenced code blocks with optional language tag
+    - Inline `**bold**`, `*italic*`, `` `code` ``, and bare URLs
+    - Anything else (plain prose) becomes a `paragraph` node
+
+    Falls back to the simple :func:`_markdown_to_adf` shape on empty input
+    so callers always get a valid ADF document.
+    """
+    if not text or not text.strip():
+        return _markdown_to_adf(text or "")
+
+    lines = text.replace("\r\n", "\n").split("\n")
+    blocks: list[dict[str, Any]] = []
+
+    i = 0
+    n = len(lines)
+    in_code = False
+    code_lang: str | None = None
+    code_buf: list[str] = []
+
+    def _flush_code() -> None:
+        nonlocal code_buf, code_lang
+        if not code_buf and not code_lang:
+            return
+        node: dict[str, Any] = {
+            "type": "codeBlock",
+            "attrs": {"language": code_lang} if code_lang else {},
+            "content": [{"type": "text", "text": "\n".join(code_buf)}],
+        }
+        blocks.append(node)
+        code_buf = []
+        code_lang = None
+
+    while i < n:
+        raw = lines[i]
+        line = raw.rstrip()
+
+        # Fenced code block - flush whatever we're inside until the
+        # closing fence, regardless of any other syntax.
+        fence = _FENCE_RE.match(line.strip())
+        if fence:
+            if in_code:
+                _flush_code()
+                in_code = False
+            else:
+                in_code = True
+                code_lang = fence.group(1)
+            i += 1
+            continue
+        if in_code:
+            code_buf.append(raw)
+            i += 1
+            continue
+
+        # Blank line - paragraph separator.
+        if not line.strip():
+            i += 1
+            continue
+
+        # Heading.
+        h = _HEADING_RE.match(line)
+        if h:
+            level = min(len(h.group(1)), 6)
+            blocks.append({
+                "type": "heading",
+                "attrs": {"level": level},
+                "content": _rich_inline_text(h.group(2).strip()),
+            })
+            i += 1
+            continue
+
+        # Pipe table - require a separator on the next line.
+        if line.lstrip().startswith("|") and i + 1 < n and _TABLE_HR_RE.match(lines[i + 1].strip()):
+            headers = _split_table_row(line)
+            data_rows: list[list[str]] = []
+            j = i + 2
+            while j < n and lines[j].lstrip().startswith("|"):
+                data_rows.append(_split_table_row(lines[j]))
+                j += 1
+            blocks.append(_build_table_node(headers, data_rows))
+            i = j
+            continue
+
+        # Ordered list (consume all consecutive ordered-list lines).
+        ord_m = _ORDERED_RE.match(line)
+        if ord_m:
+            items: list[str] = [ord_m.group(1).strip()]
+            j = i + 1
+            while j < n:
+                nxt = lines[j].rstrip()
+                m2 = _ORDERED_RE.match(nxt)
+                if m2:
+                    items.append(m2.group(1).strip())
+                    j += 1
+                    continue
+                break
+            blocks.append(_list_node("ordered", items))
+            i = j
+            continue
+
+        # Bulleted list.
+        bul_m = _BULLET_RE.match(line)
+        if bul_m:
+            items = [bul_m.group(1).strip()]
+            j = i + 1
+            while j < n:
+                nxt = lines[j].rstrip()
+                m2 = _BULLET_RE.match(nxt)
+                if m2:
+                    items.append(m2.group(1).strip())
+                    j += 1
+                    continue
+                break
+            blocks.append(_list_node("bullet", items))
+            i = j
+            continue
+
+        # Default - paragraph. Glue consecutive non-blank, non-syntactic
+        # lines into one paragraph (markdown soft wraps).
+        para_lines: list[str] = [line]
+        j = i + 1
+        while j < n:
+            nxt = lines[j].rstrip()
+            if not nxt.strip():
+                break
+            if _HEADING_RE.match(nxt) or _ORDERED_RE.match(nxt) or _BULLET_RE.match(nxt):
+                break
+            if _FENCE_RE.match(nxt.strip()):
+                break
+            if nxt.lstrip().startswith("|"):
+                break
+            para_lines.append(nxt)
+            j += 1
+        blocks.append(_rich_paragraph(" ".join(s.strip() for s in para_lines)))
+        i = j
+
+    # Close any open code block at EOF (malformed markdown but keep going).
+    if in_code:
+        _flush_code()
+
+    if not blocks:
+        return _markdown_to_adf(text)
+
+    return {"version": 1, "type": "doc", "content": blocks}
 
 
 def _summarize_issue(issue: dict[str, Any]) -> dict[str, Any]:

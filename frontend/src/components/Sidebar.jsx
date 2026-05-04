@@ -1,68 +1,103 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useAuth } from '../context/AuthContext'
+import { userCanAccessPath } from '../config/agentMeta'
 import api from '../api/client'
 import toast from 'react-hot-toast'
 import logo from '../assets/logo.png'
+import Icon3D from './icons/Icon3D'
 
 const utilityItems = [
-  { path: '/', label: 'Dashboard', icon: '🏠' },
-  { path: '/projects', label: 'Projects', icon: '📂' },
-  { path: '/history', label: 'History', icon: '📜' },
+  { path: '/',         label: 'Dashboard', iconKey3d: 'home' },
+  { path: '/projects', label: 'Projects',  iconKey3d: 'folder' },
+  { path: '/history',  label: 'History',   iconKey3d: 'history' },
 ]
 
 const navGroups = [
   {
     id: 'manual',
     phase: 'Manual QA',
-    icon: '🧪',
-    accent: 'from-blue-500 to-indigo-500',
+    iconKey3d: 'testcase',
+    accent: 'from-astound-violet to-astound-cyan',
     items: [
-      { path: '/requirements',   label: 'Requirements Analysis', icon: '📝' },
-      { path: '/test-plan',      label: 'Test Plan & Strategy',  icon: '📋' },
-      { path: '/testcases',      label: 'Test Case Dev',         icon: '🧪' },
-      { path: '/smoke',          label: 'Smoke Test Plan - Checklist',       icon: '💨' },
-      { path: '/regression',     label: 'Regression Test Plan - Checklist',    icon: '🔄' },
-      { path: '/bugs',           label: 'Defect Reports',        icon: '🐛' },
-      { path: '/closure-report', label: 'Closure Report',        icon: '🏁' },
+      { path: '/requirements',   label: 'Requirements Analysis',           iconKey3d: 'requirement' },
+      { path: '/test-plan',      label: 'Test Plan & Strategy',            iconKey3d: 'test_plan' },
+      { path: '/testcases',      label: 'Test Case Dev',                   iconKey3d: 'testcase' },
+      { path: '/smoke',          label: 'Smoke Test Plan - Checklist',     iconKey3d: 'smoke' },
+      { path: '/regression',     label: 'Regression Test Plan - Checklist',iconKey3d: 'regression' },
+      { path: '/bugs',           label: 'Defect Reports',                  iconKey3d: 'bug_report' },
+      { path: '/closure-report', label: 'Closure Report',                  iconKey3d: 'closure_report' },
     ],
   },
   {
     id: 'advanced',
     phase: 'Advanced QA Agents',
-    icon: '⚙️',
-    accent: 'from-violet-500 to-fuchsia-500',
+    iconKey3d: 'sparkles',
+    accent: 'from-astound-magenta to-astound-violet',
     items: [
-      { path: '/estimation',       label: 'Effort Estimation',     icon: '📊' },
-      { path: '/automation-plan',  label: 'Automation Plan',       icon: '🤖' },
-      { path: '/test-data',        label: 'Test Data Preparation', icon: '🧬' },
-      { path: '/rtm',              label: 'RTM',                   icon: '🧭' },
-      { path: '/copado-scripts',   label: 'Automation Scripts',    icon: '⚡' },
-      { path: '/uat-plan',         label: 'UAT & Sign-off',        icon: '🤝' },
-      { path: '/execution-report', label: 'Execution Report',      icon: '📈' },
-      { path: '/rca',              label: 'Root Cause Analysis',   icon: '🔍' },
-      { path: '/stlc-pack',        label: '1-click STLC Pack',     icon: '🚀' },
+      { path: '/estimation',       label: 'Effort Estimation',     iconKey3d: 'estimation' },
+      { path: '/automation-plan',  label: 'Automation Plan',       iconKey3d: 'automation_plan' },
+      { path: '/test-data',        label: 'Test Data Preparation', iconKey3d: 'test_data' },
+      { path: '/rtm',              label: 'RTM',                   iconKey3d: 'rtm' },
+      { path: '/copado-scripts',   label: 'Automation Scripts',    iconKey3d: 'copado_script' },
+      { path: '/uat-plan',         label: 'UAT & Sign-off',        iconKey3d: 'uat_plan' },
+      { path: '/execution-report', label: 'Execution Report',      iconKey3d: 'exec_report' },
+      { path: '/rca',              label: 'Root Cause Analysis',   iconKey3d: 'rca' },
+      { path: '/stlc-pack',        label: '1-click STLC Pack',     iconKey3d: 'stlc_pack' },
     ],
   },
 ]
 
-const PROVIDER_ORDER = ['gemini']
+// Visual metadata for the two supported providers. The backend
+// (deps.py) only ever registers gemini + cursor, so the dropdown is
+// intentionally restricted to these. If a future provider is added
+// on the backend, append it here — anything the API returns that's
+// missing from this map still renders with a generic gradient
+// + sparkle icon, so display will degrade gracefully.
 const PROVIDER_META = {
-  gemini: { icon: '💎', label: 'Gemini Pro', color: 'from-blue-500 to-cyan-400' },
+  gemini: { label: 'Google Gemini', short: 'Gemini', iconKey3d: 'sparkles', accent: 'from-astound-cyan to-astound-violet' },
+  cursor: { label: 'Cursor (CLI)',  short: 'Cursor', iconKey3d: 'sparkles', accent: 'from-astound-magenta to-astound-violet' },
 }
+
+// Pretty label for a (provider, model) pair. Falls back to the raw
+// model id so an unrecognised provider still reads cleanly in the UI.
+const providerLabel = (name) => PROVIDER_META[name]?.label || name
+const providerShort = (name) => PROVIDER_META[name]?.short || name
+const providerAccent = (name) =>
+  PROVIDER_META[name]?.accent || 'from-astound-violet to-astound-cyan'
 
 export default function Sidebar() {
   const { user, logout } = useAuth()
   const location = useLocation()
   const initials = user?.display_name?.split(' ').map(w => w[0]).join('').toUpperCase() || '?'
   const [providers, setProviders] = useState([])
+  const [active, setActive] = useState({ provider: '', model: '' })
   const [switching, setSwitching] = useState(false)
+  const [enginePickerOpen, setEnginePickerOpen] = useState(false)
+  // Outside-click handle so the engine popover behaves like a real menu.
+  const enginePickerRef = useRef(null)
+
+  // Filter the static navGroups by the current user's admin-managed
+  // visibility rules: hide whole groups via menu_visibility[group.id]
+  // (manual / advanced) and individual items via agent_access. Admins
+  // always see everything (so they can configure on behalf of others).
+  const visibleGroups = useMemo(() => {
+    if (!user) return []
+    const menu = user.menu_visibility || { manual: true, advanced: true }
+    return navGroups
+      .filter(g => user.is_admin || menu[g.id] !== false)
+      .map(g => ({
+        ...g,
+        items: g.items.filter(it => userCanAccessPath(user, it.path)),
+      }))
+      .filter(g => g.items.length > 0)
+  }, [user])
 
   const activeGroupId = useMemo(() => {
-    const match = navGroups.find(g => g.items.some(it => location.pathname === it.path || location.pathname.startsWith(it.path + '/')))
+    const match = visibleGroups.find(g => g.items.some(it => location.pathname === it.path || location.pathname.startsWith(it.path + '/')))
     return match?.id || null
-  }, [location.pathname])
+  }, [location.pathname, visibleGroups])
 
   const [openGroups, setOpenGroups] = useState(() => (activeGroupId ? { [activeGroupId]: true } : {}))
 
@@ -79,19 +114,32 @@ export default function Sidebar() {
   useEffect(() => {
     api.get('/llm/providers').then(({ data }) => {
       setProviders(data.providers || [])
+      if (data.active) setActive(data.active)
     }).catch(() => {})
   }, [])
 
-  const activeProvider = providers.find(p => p.active)
+  // Close the picker on any outside click. The popover is mounted next
+  // to the trigger so a single ref covers both.
+  useEffect(() => {
+    if (!enginePickerOpen) return
+    const handler = (e) => {
+      if (enginePickerRef.current && !enginePickerRef.current.contains(e.target)) {
+        setEnginePickerOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [enginePickerOpen])
 
-  const handleSwitch = async (providerName) => {
+  const handleSwitch = async (providerName, model) => {
     if (switching) return
     setSwitching(true)
     try {
-      const { data } = await api.post('/llm/switch', { provider: providerName })
+      const { data } = await api.post('/llm/switch', { provider: providerName, model })
       setProviders(data.providers || [])
-      const meta = PROVIDER_META[providerName] || {}
-      toast.success(`Switched to ${meta.label || providerName}`)
+      if (data.active) setActive(data.active)
+      setEnginePickerOpen(false)
+      toast.success(`Switched to ${providerShort(providerName)} · ${model}`)
     } catch (err) {
       toast.error(err.response?.data?.detail || 'Failed to switch')
     } finally {
@@ -103,52 +151,123 @@ export default function Sidebar() {
     <motion.aside
       initial={{ x: -260 }}
       animate={{ x: 0 }}
-      className="toon-sidebar w-64 flex flex-col p-4"
+      className="toon-sidebar w-64 flex flex-col p-4 relative z-[2]"
     >
       <div className="flex items-center gap-3 mb-6 px-2">
-        <img src={logo} alt="Logo" className="w-10 h-10 rounded-xl shadow-toon" />
-        <div>
-          <h1 className="font-extrabold text-toon-navy text-sm leading-tight">QA Studio</h1>
-          <p className="text-xs text-gray-500">AI Test Artifacts</p>
+        <img src={logo} alt="QA Studio" className="w-10 h-10 rounded-xl shadow-astound-glow ring-1 ring-astound-violet/30" />
+        <div className="min-w-0">
+          <h1 className="font-display font-extrabold text-toon-navy text-base leading-tight">QA Studio</h1>
+          <p className="text-[10px] uppercase tracking-[0.18em] text-astound-violet font-bold">
+            by Astound Digital
+          </p>
         </div>
       </div>
 
-      {/* LLM Provider Selector */}
+      {/* AI Engine selector — grouped combobox showing every configured
+          (provider, model). Replaces the legacy pill bar that could only
+          render one provider at a time. */}
       {providers.length > 0 && (
-        <div className="mb-4 px-1">
-          <p className="text-[10px] uppercase tracking-wider text-gray-400 font-bold mb-2 px-2">AI Engine</p>
-          <div className="flex gap-1.5 bg-gray-100 rounded-2xl p-1 relative">
-            {PROVIDER_ORDER.filter(name => providers.some(p => p.provider === name)).map(name => {
-              const p = providers.find(pr => pr.provider === name)
-              const meta = PROVIDER_META[name] || { icon: '🔮', label: name, color: 'from-gray-400 to-gray-500' }
-              return (
-                <button
-                  key={p.provider}
-                  onClick={() => handleSwitch(p.provider)}
-                  disabled={switching}
-                  className={`relative flex-1 flex items-center justify-center gap-1.5 py-2 px-2 rounded-xl text-xs font-bold transition-colors ${
-                    p.active ? 'text-white' : 'text-gray-500 hover:text-toon-navy'
-                  }`}
-                  title={`${meta.label} (${p.model})`}
-                >
-                  {p.active && (
-                    <motion.span
-                      layoutId="providerPill"
-                      className={`absolute inset-0 bg-gradient-to-r ${meta.color} rounded-xl shadow-sm`}
-                      transition={{ type: 'spring', stiffness: 380, damping: 30 }}
-                    />
-                  )}
-                  <span className="relative">{meta.icon}</span>
-                  <span className="relative">{meta.label}</span>
-                </button>
-              )
-            })}
-          </div>
-          {activeProvider && (
-            <p className="text-[10px] text-gray-400 text-center mt-1.5">
-              {activeProvider.model}
-            </p>
-          )}
+        <div className="mb-4 px-1 relative" ref={enginePickerRef}>
+          <p className="text-[10px] uppercase tracking-wider text-gray-400 font-bold mb-2 px-2">
+            AI Engine
+          </p>
+          <button
+            type="button"
+            onClick={() => setEnginePickerOpen(o => !o)}
+            disabled={switching}
+            aria-expanded={enginePickerOpen}
+            className={`group w-full flex items-center gap-2 px-2.5 py-2 rounded-2xl text-left bg-white/70 hover:bg-white border border-astound-violet/20 hover:border-astound-violet/40 shadow-sm transition-all ${
+              switching ? 'opacity-60 cursor-wait' : ''
+            }`}
+          >
+            <span
+              className={`w-7 h-7 rounded-xl bg-gradient-to-br ${providerAccent(active.provider)} flex items-center justify-center shadow-sm flex-shrink-0`}
+            >
+              <Icon3D name={PROVIDER_META[active.provider]?.iconKey3d || 'sparkles'} size={14} />
+            </span>
+            <span className="flex-1 min-w-0">
+              <span className="block text-[11px] font-extrabold text-toon-navy truncate">
+                {providerShort(active.provider) || 'Select engine'}
+              </span>
+              <span className="block text-[10px] text-gray-500 font-mono truncate">
+                {active.model || '—'}
+              </span>
+            </span>
+            <motion.span
+              animate={{ rotate: enginePickerOpen ? 180 : 0 }}
+              transition={{ duration: 0.2 }}
+              className="text-gray-400 text-xs flex-shrink-0"
+              aria-hidden="true"
+            >
+              ▾
+            </motion.span>
+          </button>
+          <AnimatePresence>
+            {enginePickerOpen && (
+              <motion.div
+                initial={{ opacity: 0, y: -6, scale: 0.98 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: -6, scale: 0.98 }}
+                transition={{ duration: 0.15, ease: [0.16, 1, 0.3, 1] }}
+                className="absolute left-1 right-1 mt-1 z-30 max-h-[60vh] overflow-y-auto rounded-2xl bg-white shadow-2xl border border-astound-violet/15 p-2 space-y-2"
+                role="listbox"
+              >
+                {providers.map(p => (
+                  <div key={p.provider}>
+                    <div className="flex items-center gap-2 px-2 pt-1 pb-1.5">
+                      <span
+                        className={`w-5 h-5 rounded-md bg-gradient-to-br ${providerAccent(p.provider)} flex items-center justify-center flex-shrink-0`}
+                      >
+                        <Icon3D
+                          name={PROVIDER_META[p.provider]?.iconKey3d || 'sparkles'}
+                          size={10}
+                        />
+                      </span>
+                      <span className="text-[10px] font-extrabold uppercase tracking-wider text-gray-500 flex-1">
+                        {providerLabel(p.provider)}
+                      </span>
+                      {p.active && (
+                        <span className="text-[9px] font-bold text-astound-violet uppercase tracking-wider">
+                          active
+                        </span>
+                      )}
+                    </div>
+                    <div className="space-y-0.5">
+                      {(p.models && p.models.length ? p.models : [p.model]).filter(Boolean).map(m => {
+                        const isActive = p.active && active.model === m
+                        return (
+                          <button
+                            key={`${p.provider}::${m}`}
+                            type="button"
+                            onClick={() => handleSwitch(p.provider, m)}
+                            disabled={switching}
+                            role="option"
+                            aria-selected={isActive}
+                            className={`w-full flex items-center gap-2 px-2.5 py-1.5 rounded-xl text-left text-xs transition-colors ${
+                              isActive
+                                ? 'bg-astound-grad text-white shadow-sm'
+                                : 'text-toon-navy hover:bg-astound-mist/60'
+                            }`}
+                          >
+                            <span className={`w-1.5 h-1.5 rounded-full ${isActive ? 'bg-white' : 'bg-astound-violet/30'}`} />
+                            <span className="flex-1 truncate font-mono">{m}</span>
+                            {isActive && (
+                              <span className="text-[10px] font-bold uppercase tracking-wider opacity-90">
+                                ✓
+                              </span>
+                            )}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </div>
+                ))}
+                <div className="pt-1.5 mt-1 border-t border-astound-violet/10 px-2 text-[10px] text-gray-400">
+                  Admins can pin a different model per agent in <span className="font-bold text-astound-violet">Admin → Models</span>.
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
       )}
 
@@ -160,8 +279,10 @@ export default function Sidebar() {
               to={item.path}
               end={item.path === '/'}
               className={({ isActive }) =>
-                `relative flex items-center gap-3 px-3 py-2 rounded-2xl text-sm font-semibold transition-colors ${
-                  isActive ? 'text-toon-blue' : 'text-gray-600 hover:text-toon-navy hover:bg-gray-50'
+                `relative flex items-center gap-3 px-3 py-2 rounded-2xl text-sm font-semibold transition-all ${
+                  isActive
+                    ? 'text-white shadow-astound'
+                    : 'text-gray-600 hover:text-toon-navy hover:bg-astound-mist/60'
                 }`
               }
             >
@@ -170,19 +291,53 @@ export default function Sidebar() {
                   {isActive && (
                     <motion.span
                       layoutId="navHighlightUtility"
-                      className="absolute inset-0 bg-toon-blue/10 rounded-2xl shadow-sm"
+                      className="absolute inset-0 bg-astound-grad rounded-2xl"
                       transition={{ type: 'spring', stiffness: 380, damping: 32 }}
                     />
                   )}
-                  <span className="relative text-base">{item.icon}</span>
+                  <span className="relative">
+                    <Icon3D name={item.iconKey3d} size={20} float />
+                  </span>
                   <span className="relative">{item.label}</span>
                 </>
               )}
             </NavLink>
           ))}
+          {/* Admin nav item — visible only to administrators. Lives
+              alongside the other utility items (Dashboard, Projects,
+              History) so it's the same visual rank as the rest of
+              the navigation. */}
+          {user?.is_admin && (
+            <NavLink
+              to="/admin"
+              className={({ isActive }) =>
+                `relative flex items-center gap-3 px-3 py-2 rounded-2xl text-sm font-semibold transition-all ${
+                  isActive
+                    ? 'text-white shadow-astound'
+                    : 'text-gray-600 hover:text-toon-navy hover:bg-astound-mist/60'
+                }`
+              }
+            >
+              {({ isActive }) => (
+                <>
+                  {isActive && (
+                    <motion.span
+                      layoutId="navHighlightAdmin"
+                      className="absolute inset-0 bg-astound-grad rounded-2xl"
+                      transition={{ type: 'spring', stiffness: 380, damping: 32 }}
+                    />
+                  )}
+                  <span className="relative">
+                    <Icon3D name="shield" size={20} float />
+                  </span>
+                  <span className="relative">Admin</span>
+                </>
+              )}
+            </NavLink>
+          )}
         </div>
 
-        {navGroups.map((group) => {
+        {visibleGroups.map((group) => {
           const isOpen = !!openGroups[group.id]
           const isActiveGroup = group.id === activeGroupId
           return (
@@ -193,18 +348,16 @@ export default function Sidebar() {
                 aria-expanded={isOpen}
                 className={`group w-full flex items-center gap-2 px-3 py-2 rounded-2xl transition-all duration-200 ${
                   isActiveGroup
-                    ? 'bg-gradient-to-r from-gray-50 to-white shadow-sm'
-                    : 'hover:bg-gray-50'
+                    ? 'bg-astound-mist/70 shadow-sm'
+                    : 'hover:bg-astound-mist/40'
                 }`}
               >
-                <motion.span
-                  className={`w-7 h-7 rounded-xl bg-gradient-to-br ${group.accent} flex items-center justify-center text-white text-xs shadow-sm`}
-                  animate={isActiveGroup ? { scale: [1, 1.08, 1] } : { scale: 1 }}
-                  transition={isActiveGroup ? { duration: 2.4, repeat: Infinity, ease: 'easeInOut' } : { duration: 0.2 }}
+                <span
+                  className={`w-7 h-7 rounded-xl bg-gradient-to-br ${group.accent} flex items-center justify-center shadow-sm`}
                 >
-                  {group.icon}
-                </motion.span>
-                <span className={`flex-1 text-left text-[11px] uppercase tracking-wider font-extrabold ${isActiveGroup ? 'text-toon-navy' : 'text-gray-500 group-hover:text-toon-navy'}`}>
+                  <Icon3D name={group.iconKey3d} size={16} float={isActiveGroup} />
+                </span>
+                <span className={`flex-1 text-left text-[11px] uppercase tracking-wider font-extrabold font-display ${isActiveGroup ? 'text-toon-navy' : 'text-gray-500 group-hover:text-toon-navy'}`}>
                   {group.phase}
                 </span>
                 <motion.span
@@ -225,14 +378,16 @@ export default function Sidebar() {
                     transition={{ duration: 0.22, ease: 'easeOut' }}
                     className="overflow-hidden"
                   >
-                    <div className="space-y-0.5 pl-3 mt-1 ml-3 border-l border-gray-100">
+                    <div className="space-y-0.5 pl-3 mt-1 ml-3 border-l border-astound-violet/15">
                       {group.items.map((item) => (
                         <NavLink
                           key={item.path}
                           to={item.path}
                           className={({ isActive }) =>
-                            `relative flex items-center gap-3 px-3 py-2 rounded-2xl text-sm font-semibold transition-colors ${
-                              isActive ? 'text-toon-blue' : 'text-gray-600 hover:text-toon-navy hover:bg-gray-50'
+                            `relative flex items-center gap-3 px-3 py-2 rounded-2xl text-sm font-semibold transition-all ${
+                              isActive
+                                ? 'text-white shadow-astound'
+                                : 'text-gray-600 hover:text-toon-navy hover:bg-astound-mist/60'
                             }`
                           }
                         >
@@ -241,11 +396,13 @@ export default function Sidebar() {
                               {isActive && (
                                 <motion.span
                                   layoutId={`navHighlight-${group.id}`}
-                                  className="absolute inset-0 bg-toon-blue/10 rounded-2xl shadow-sm"
+                                  className="absolute inset-0 bg-astound-grad rounded-2xl"
                                   transition={{ type: 'spring', stiffness: 380, damping: 32 }}
                                 />
                               )}
-                              <span className="relative text-base">{item.icon}</span>
+                              <span className="relative">
+                                <Icon3D name={item.iconKey3d} size={20} />
+                              </span>
                               <span className="relative">{item.label}</span>
                             </>
                           )}
@@ -260,19 +417,27 @@ export default function Sidebar() {
         })}
       </nav>
 
-      <div className="border-t border-gray-100 pt-4 mt-4">
-        <div className="flex items-center gap-3 px-2 mb-3">
-          <div className="w-9 h-9 rounded-full bg-gradient-to-br from-toon-blue to-toon-purple text-white flex items-center justify-center font-bold text-sm">
+      <div className="border-t border-astound-violet/10 pt-4 mt-4">
+        <div className="flex items-center gap-2 px-2 mb-3">
+          <div className="w-9 h-9 rounded-full bg-astound-grad text-white flex items-center justify-center font-bold text-sm shadow-astound">
             {initials}
           </div>
           <div className="flex-1 min-w-0">
             <p className="text-sm font-bold text-toon-navy truncate">{user?.display_name}</p>
             <p className="text-xs text-gray-400 truncate">{user?.username}</p>
           </div>
+          {/* Admin-only notifications bell now lives in Layout's top-
+              right corner so the affordance is consistent across pages
+              and visible regardless of sidebar scroll position. */}
         </div>
-        <button onClick={logout} className="w-full text-left px-3 py-2 text-sm text-gray-500 hover:text-toon-coral hover:bg-red-50 rounded-xl transition-all">
-          🚪 Logout
+        <button onClick={logout} className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-500 hover:text-toon-coral hover:bg-red-50 rounded-xl transition-all">
+          <Icon3D name="bell" size={16} />
+          <span>Logout</span>
         </button>
+        <div className="mt-3 pt-3 border-t border-astound-violet/10 flex items-center justify-center gap-1.5 text-[10px] text-slate-400">
+          <Icon3D name="sparkles" size={10} float />
+          <span>by <span className="astound-text-grad font-bold">QDEC Team</span></span>
+        </div>
       </div>
     </motion.aside>
   )

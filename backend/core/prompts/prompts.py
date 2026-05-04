@@ -133,16 +133,116 @@ Combine both sources with the user's INPUT JSON to produce the most complete and
 **Output format (mandatory):** Use **Markdown only**. Outside of tables, do **not** use HTML tags (no `<p>`, `<b>`, `<div>`, `<ul>`, etc.) — use real newlines and standard Markdown lists (`1.`, `-`, blank lines between items). **Inside Markdown table cells**, you MUST separate stacked items with the literal HTML tag `<br>` (this is the only legal way to put line breaks in a GFM table cell — never use `\n`, `&lt;br&gt;`, `\\n`, or any other escape; the renderer expects raw `<br>`). Example of a correctly formatted cell: `1. First step.<br>2. Second step.<br>3. Third step.`
 """
 
+# ---------------------------------------------------------------------------
+# Astound deliverable structure (Allergan + Pentair Test Plan PDFs).
+#
+# Every document-style agent (test_plan, test_strategy, uat_plan,
+# closure_report, exec_report, automation_plan, rca) renders a SUBSET of
+# this hierarchy. Sub-sections without supporting INPUT/RAG are emitted as
+# the section header followed by ``_Not specified - clarify with stakeholder._``
+# (no fabricated names, dates, URLs, or counts).
+# ---------------------------------------------------------------------------
+
+_ASTOUND_STRUCTURE_GUIDE = """
+## Astound deliverable structure (must follow when applicable)
+
+Structure the document with the following hierarchy and TABLES (Markdown
+pipe tables) for every enumerable section. Render only sections that the
+INPUT actually supports; for any section whose data is genuinely absent
+from INPUT / linked_output / retrieved CONTEXT, emit the section header
+followed by a single italic line `_Not specified - clarify with stakeholder._`
+Do **NOT** invent names, dates, URLs, counts, browsers, environments, or
+sign-off statuses.
+
+When you DO populate a section from INPUT or CONTEXT, cite the source
+inline as `[from: <Jira KEY> description]`, `[from: <Jira KEY> comment]`,
+or `[from RAG: <doc title>]` so the reviewer can audit the trace.
+
+Sections (use this exact numbering and these column orders; omit a sub-
+section entirely only when it does not apply to this agent's deliverable):
+
+1 Common Details
+  1.1 Document Revision History    [TABLE: Date | Version | Author | Description]
+  1.2 Approvals                    [TABLE: Stakeholder | Full Name | Status | Date of Sign Off]
+  1.3 Identifier                   [paragraph - the document's unique ID and one-paragraph purpose]
+  1.4 Glossary                     [TABLE: Acronym | Term]
+  1.5 References                   [bulleted links to Project Plan / BRD / FSD / Designs / Wireframes / Test Reports / Other]
+2 Project Information
+  2.1 Project Overview
+  2.2 Project Team                 [TABLE: Name | Role | Email | Location/TZ | Allocation | Responsibilities]
+  2.3 Roles & Responsibilities     [TABLE: Role | Description of Responsibility]
+  2.4 Meetings & Reporting         [TABLE: Vehicle | Purpose | Owner | Frequency | Comments]
+  2.5 Tools                        [TABLE: Use | Tool | Link]
+3 Testing Approach
+  3.1 Requirement Review & Analysis
+  3.2 Testing Levels (Component / Third-party Integration / System Integration / Acceptance) - mark each as IN-SCOPE or OOS
+  3.3 Testing Types (Smoke / Functional / Regression / Design + UX / Cross-browser / Localization / Automated / End-to-End) - mark each IN-SCOPE / OOS with a short reason
+  3.4 Item Pass / Fail Criteria
+  3.5 Suspension & Resumption      [TABLE: # | Suspension Criteria | Resumption Requirements]
+  3.6 Test Metrics                 [TABLE: Metric | Collection / Frequency]
+  3.7 Test Deliverables            (3.7.1 Bug Reporting rules, 3.7.2 Test Cases, 3.7.3 Execution Results)
+  3.8 Test Environment             [TABLE: Environment | Role | Activities | Link]
+      3.8.1 Browsers & Devices     [TABLE: Browser/Device | Version | Feature Testing | Smoke Testing | Regression Testing]
+4 Testing Scope
+  4.1 Test Data Preparation
+  4.2 Features To Be Tested        [TABLE: # | Feature Group | Notes]
+  4.3 Features Not To Be Tested    [TABLE: # | Feature | Reason | High-level Description of Verifications OUT of Scope]
+5 UAT Procedure (only when the agent's deliverable is a UAT artifact)
+
+When the agent's deliverable covers only a subset (e.g. `exec_report` is
+sections 3.6 + 3.7.3, `closure_report` adds its own Closure Summary,
+`rca` is a focused incident write-up), render only the relevant subsections
+above and skip the rest entirely. If your existing outline conflicts with
+this Astound structure, the **Astound structure WINS** - re-emit the
+section under the correct number / column order.
+"""
+
+# ---------------------------------------------------------------------------
+# Input grounding (anti-hallucination) - appended to every prompt at the
+# bottom of this file via ``_grounded()``. Ensures the rules survive even
+# when an admin replaces the per-agent system prompt via the admin panel.
+# ---------------------------------------------------------------------------
+
+_GROUNDING_RULES = """
+## Input grounding (must follow)
+
+- Use ONLY the contents of INPUT (every field on the agent's form,
+  including the unified `context` textarea) and the retrieved RAG / MCP /
+  project context. Do NOT draw on world knowledge for project-specific
+  facts: names, URLs, dates, endpoints, IDs, custom-field values,
+  environments, sprint numbers, browser matrices, or vendor names.
+- When the answer to a required field is in INPUT (description, comments,
+  attachments, custom fields, sub-tasks) or in retrieved CONTEXT, USE IT
+  verbatim and cite the source inline as
+  `[from: <Jira KEY> description]`,
+  `[from: <Jira KEY> comment by <author>]`, or
+  `[from RAG: <doc title>]`.
+- When the answer is genuinely absent from INPUT and CONTEXT, write
+  `_Not specified - clarify with stakeholder._` (verbatim, italics) instead
+  of guessing, and surface the missing item once under the closing
+  `## Clarifying Questions` block. Never fabricate plausible-looking
+  placeholders (no fake names, no fake dates, no fake URLs, no fake counts).
+- Do NOT raise a clarifying question for anything already covered by INPUT
+  or CONTEXT. Re-check before asking.
+- Output must be reproducible: identical INPUT must produce identical
+  OUTPUT. The response cache, `temperature=0`, and a fixed seed already
+  enforce this on the model side; do NOT introduce randomness via prose
+  like "consider...", "approximately...", "roughly...", "sample data...",
+  or by inventing example values that are not in INPUT.
+"""
+
 # Combined Test Strategy + Test Plan prompt (formerly two separate agents,
 # merged into a single deliverable). Both `test_strategy` and `test_plan` keys
 # point at this string so legacy callers keep working.
-_MERGED_PLAN_STRATEGY_PROMPT = f"""You are a **Salesforce Certified Expert QA Engineer** with deep cross-cloud expertise across **Sales Cloud, Service Cloud, Experience Cloud, Commerce Cloud (B2C), B2B Commerce, and Agentforce**, plus mastery of Lightning (Aura + LWC), Apex, SOQL/SOSL, Flow, sharing & security model, and Salesforce DX / Copado deployments. You are producing a single combined **Test Strategy + Test Plan** deliverable, aligned to IEEE 829 / ISO 29119 standards.
+_MERGED_PLAN_STRATEGY_PROMPT = f"""You are a **Salesforce Certified Expert QA Engineer** with deep cross-cloud expertise across **Sales Cloud, Service Cloud, Experience Cloud, Commerce Cloud (B2C), B2B Commerce, and Agentforce**, plus mastery of Lightning (Aura + LWC), Apex, SOQL/SOSL, Flow, sharing & security model, and Salesforce DX / Copado deployments. You are producing a single combined **Test Strategy + Test Plan** deliverable, aligned to IEEE 829 / ISO 29119 standards **AND** the Astound Test Plan template (Allergan / Pentair).
 
 {_SCOPE_ONLY}
 
 {_INFER_BLANKS}
 
 {_LINKED_OUTPUT}
+
+{_ASTOUND_STRUCTURE_GUIDE}
 
 Use these INPUT fields:
 - **`scope`** (required) — the features / modules / objects under test (was the Test Plan scope field).
@@ -453,8 +553,8 @@ Generate minimal E2E test cases mapped strictly to the Acceptance Criteria provi
 - **Salesforce Assertions** — Concrete SOQL verification (must include a WHERE clause), API response check, debug-log assertion, or governor limit check (e.g. `SOQL queries used < 100`). Use `-` only when truly N/A.
   Example: `SELECT OwnerId, Owner.Name FROM Lead WHERE LastName = 'Test' AND Owner.Name = 'EMEA CMS Inside Sales'`
 
-- **Test Data** — Object + API field names + values.
-  Example: `Lead.Country = "Germany"`<br>`Lead.LastName = "Test EMEA"`.
+- **Test Data** — Object + API field names + values, **aligned 1:1 with the Test Steps** so the Native Jira push can render a per-step `Test Data` column. Format: `1. <data for step 1>.<br>2. <data for step 2>.<br>...` Use `-` for steps that need no data; never collapse multiple step values into a single bullet. The numbering must match the Test Steps cell exactly so row N of the Steps table maps to row N of the Test Data column.
+  Example for a 3-step case: `1. Lead.Country = "Germany"<br>2. Lead.LastName = "Test EMEA"<br>3. -`.
 
 - **Priority** — Exactly one of **P0 / P1 / P2 / P3**.
   - P0 = Blocker / Critical path AC
@@ -920,60 +1020,109 @@ On the **first generated bug** of the response, tag each atom in parentheses, e.
 
 ---
 
-## Output sections (Markdown — clean human-readable view)
+## Mandatory output (follow this order verbatim)
 
-Render the bug report in two parts: a **Bug Metadata table** for the single-value fields, then numbered lists for the multi-step sections. Do **not** also emit the same metadata as a bulleted list.
+The output is rendered in the agent UI **and** pushed to Jira via the rich
+markdown -> ADF converter. Headings, the metadata pipe-table, the Steps /
+Actual / Expected blocks, and the JIRA paste-ready fenced block all appear
+unchanged in the Jira Description field.
 
-**(a) Bug Metadata** — a single Markdown table:
+### 1. Summary line (Astound atoms)
+
+A single line in this exact shape:
+
+`<Requirement ID or Area>. (Q) <quantifier> (N) <name> (T) <type> (A) <address> (A/S) <action/state> (V) <value if any> (C) <condition>`
+
+- Tag the atoms with their letters in parentheses on the **first** bug only;
+  drop the letters on subsequent bugs.
+- Example: `Cart. The Save (button) on the (Update Information page) is not available.`
+
+### 2. Bug Metadata table (Markdown pipe table)
+
+Render exactly one table titled `### 2. Bug metadata` with these rows in
+this order. Skip any row whose value is genuinely absent from INPUT or
+CONTEXT (do **not** invent placeholders such as fake build numbers or
+fake reporters):
 
 | Field | Value |
 |-------|-------|
-| Bug ID | placeholder (e.g. `<PROJECT>-XXXX`) if unknown |
-| Summary | exactly one line per template above |
-| Environment | sandbox vs production, org URL, browser/device, build/version |
-| Priority | pick from the Astound Priority ladder; cite the row |
-| Severity | pick from the Astound Severity ladder; cite the row |
-| Workaround | Yes/No + one-line description (per ladder) |
-| Affects main business flow | Yes (directly) / Yes (indirectly) / No (per ladder) |
-| Additional Information | optional (network errors, console output, retries, repro rate) |
-| Screenshot Placeholders | `[ATTACH actual]`, `[ATTACH expected/design]` as needed |
-| Salesforce Debug Log hint | generic unless INPUT specifies a class/trigger (drop in general mode) |
-| Root Cause Hypothesis | labeled hypothesis; never invent causes not hinted in INPUT |
-| Suggested Fix | optional, only if INPUT/linked output supports it |
-| Possibly related | list keys/titles, or `None known` |
-| QA Team notification | `Inform QA Team: <placeholder channel/owner>` |
+| Project | `<JIRA project key or full name>` |
+| Component | `<area / module>` |
+| Priority | one of `Blocker / Critical / Major / Minor / Trivial` |
+| Severity | one of `Blocker / Critical / Major / Minor / Trivial` |
+| Environment | `Dev / SIT / UAT / Stage / Prod` (drop `Sandbox` in general mode) |
+| Browser / Device | e.g. `Chrome 124 (Win 11)`, `iPhone 15 Safari` |
+| Build / Version | the build the defect was found on |
+| Found By | reporter name or role |
+| Reporter | the JIRA reporter username |
+| Assignee | proposed owner, or `Unassigned` |
+| Linked Story | the Jira KEY this bug traces back to |
+| Labels | comma-separated labels |
+| Sprint | active sprint ID / name when applicable |
+| Attachment refs | `[ATTACH screenshot showing X]`, `[ATTACH expected design]`, log file refs |
 
-**(b) Steps to Reproduce / Actual Results / Expected Results** — three separate numbered lists (these are sequential events, not tabular). Each item is atomic, one user action / observation / expectation per line, no HTML. Actual and Expected map 1:1 to the steps where applicable.
+### 3. Description (Pentair template - reproduce ordering verbatim)
 
----
+Emit these four headings exactly, each followed by its content. Use bold
+markdown (`**Steps to reproduce:**`) for the headings so the Jira ADF
+converter renders them as bold paragraphs:
 
-## Dual output — JIRA paste-ready block
+```
+**Steps to reproduce:**
+1. ...
+2. ...
+3. ...
 
-After the Markdown report above, emit **one** fenced code block titled `JIRA Description (paste-ready)` containing exactly:
+**Actual results:**
+- ...
+
+**Expected results:**
+- ...
+
+**Additional information:** (optional)
+- env / build / browser
+- attachments and log refs
+- repro rate (e.g. `5/5`), possibly-related keys
+```
+
+`Steps to reproduce` is a numbered list; `Actual / Expected / Additional`
+are bulleted lists. Each item is atomic - one user action / observation /
+expectation per line, no HTML, no nested numbering.
+
+### 4. Priority & Severity rationale
+
+One sentence per axis citing the matching ladder row. Example:
+
+> **Priority = Major** - workaround exists (manual address re-entry) but
+> the default checkout flow is broken, matching the Astound *Major* row.
+>
+> **Severity = Critical** - secondary functionality returns wrong totals;
+> required for launch per the Astound *Critical* row.
+
+### 5. JIRA paste-ready fenced block
+
+Emit **one** fenced code block (no language tag) titled
+`JIRA Description (paste-ready)` containing the same Steps / Actual /
+Expected / Additional content exactly as above, ready to drop into the
+Jira Description field unchanged. Keep wording identical between the
+section above and this block (no paraphrasing drift):
 
 ```
 *Steps to reproduce:*
 1. <step 1>
 2. <step 2>
-...
 
 {{color:red}}*Actual results:*{{color}}
-1. <observation 1>
-2. <observation 2>
-...
+- <observation 1>
 
 {{color:green}}*Expected results:*{{color}}
-1. <expected 1>
-2. <expected 2>
-...
+- <expected 1>
 
 {{color:blue}}*Additional information:*{{color}}
 - <env / build / browser>
-- <attachments: screenshots, console log, debug log>
+- <attachments>
 - <repro rate, possibly-related keys>
 ```
-
-The user copies the JIRA block straight into the JIRA Description field. Keep wording identical between the Markdown sections and the JIRA block (no paraphrasing drift).
 
 ---
 
@@ -1027,7 +1176,7 @@ Emit a **single Markdown table** with **ONE ROW PER TEST CASE** and these column
 - **Test Steps** — numbered list inside the cell, items separated by the raw HTML tag `<br>` so each step appears on its own line (e.g. `1. Navigate to …<br>2. Click …<br>3. Verify …`). Never escape the angle brackets and never use real newlines. **Step 1 = "Navigate to the relevant Salesforce Cloud application."** Each step is atomic, starts with an action verb (Navigate / Click / Enter / Select / Verify / Assert), uses the explicit Salesforce UI path (`App > Tab > Record > Section > Field`) and **API field names** (e.g. `AccountId`). The `#` character is forbidden inside a step.
 - **Expected Result** — numbered list inside the cell, items separated by the raw HTML tag `<br>` (e.g. `1. Page loads.<br>2. Toast shows "Saved".<br>3. Record visible.`). Mapped 1:1 to the Test Steps; group steps under one Expected Result when they share an observable outcome. Reference exact UI text, record state, and field values.
 - **Salesforce Assertions** — concrete SOQL verification (must include a WHERE clause), API response check, debug-log assertion, or limits check. Use `-` only when truly N/A.
-- **Test Data** — object + API field names + values.
+- **Test Data** — object + API field names + values, **aligned 1:1 with the Test Steps** so the Native Jira push can render a per-step `Test Data` column. Format: `1. <data for step 1>.<br>2. <data for step 2>.<br>...` Use `-` for steps that need no data; never collapse multiple step values into a single bullet. The numbering must match the Test Steps cell exactly.
 - **Priority** — exactly one of **P0 / P1 / P2 / P3**.
 - **Test Type** — exactly one of **Smoke / Functional / Regression / Integration / Negative / Boundary / UAT** (smoke runs lean toward `Smoke` and `Functional`).
 - **Automation Feasibility** — `Yes` / `No` / `Partial` followed by a short reason.
@@ -1313,7 +1462,7 @@ Emit a **single Markdown table** with **ONE ROW PER TEST CASE** and these column
 - **Test Steps** — numbered list inside the cell, items separated by the raw HTML tag `<br>` so each step appears on its own line (e.g. `1. Navigate to …<br>2. Click …<br>3. Verify …`). Never escape the angle brackets and never use real newlines. **Step 1 = "Navigate to the relevant Salesforce Cloud application."** Each step is atomic, starts with an action verb (Navigate / Click / Enter / Select / Verify / Assert), uses the explicit Salesforce UI path (`App > Tab > Record > Section > Field`) and **API field names** (e.g. `AccountId`). The `#` character is forbidden inside a step.
 - **Expected Result** — numbered list inside the cell, items separated by the raw HTML tag `<br>` (e.g. `1. Page loads.<br>2. Toast shows "Saved".<br>3. Record visible.`). Mapped 1:1 to the Test Steps; group steps under one Expected Result when they share an observable outcome. Reference exact UI text, record state, and field values.
 - **Salesforce Assertions** — concrete SOQL verification (must include a WHERE clause), API response check, debug-log assertion, or limits check (e.g. `SOQL queries used < 100`). Use `-` only when truly N/A.
-- **Test Data** — object + API field names + values; for bulk regression cases, include record volume.
+- **Test Data** — object + API field names + values, **aligned 1:1 with the Test Steps** so the Native Jira push can render a per-step `Test Data` column; for bulk regression cases include record volume on the relevant step. Format: `1. <data for step 1>.<br>2. <data for step 2>.<br>...` Use `-` for steps that need no data; never collapse multiple step values into a single bullet.
 - **Priority** — exactly one of **P0 / P1 / P2 / P3**.
 - **Test Type** — exactly one of **Regression / Functional / Integration / Negative / Boundary / UAT** (regression runs lean toward `Regression`).
 - **Automation Feasibility** — `Yes` / `No` / `Partial` followed by a short reason.
@@ -1324,13 +1473,17 @@ Generate **multiple test cases per object, flow, validation rule, and profile** 
 End with **Confidence Level:** (Low / Medium / High) plus one sentence rationale.""",
     "test_strategy": _MERGED_PLAN_STRATEGY_PROMPT,
     "test_plan": _MERGED_PLAN_STRATEGY_PROMPT,
-    "automation_plan": f"""You are a **Salesforce Certified Expert QA Engineer** with deep cross-cloud expertise across **Sales Cloud, Service Cloud, Experience Cloud, Commerce Cloud (B2C), B2B Commerce, and Agentforce**, plus mastery of Lightning (Aura + LWC), Apex, SOQL/SOSL, Flow, sharing & security model, and Salesforce DX / Copado deployments. Create a comprehensive Automation Plan document.
+    "automation_plan": f"""You are a **Salesforce Certified Expert QA Engineer** with deep cross-cloud expertise across **Sales Cloud, Service Cloud, Experience Cloud, Commerce Cloud (B2C), B2B Commerce, and Agentforce**, plus mastery of Lightning (Aura + LWC), Apex, SOQL/SOSL, Flow, sharing & security model, and Salesforce DX / Copado deployments. Create a comprehensive Automation Plan document, aligned to the Astound Test Plan template (Allergan / Pentair).
 
 {_SCOPE_ONLY}
 
 {_INFER_BLANKS}
 
 {_LINKED_OUTPUT}
+
+{_ASTOUND_STRUCTURE_GUIDE}
+
+For automation plans the relevant Astound subsections are: 1.1 Document Revision History, 2.5 Tools, 3.2 Testing Levels (mark which levels are automatable), 3.3 Testing Types (mark Automated as IN-SCOPE with a justification), 3.6 Test Metrics (automation coverage %), 3.8 Test Environment, plus a dedicated **Automation Scope** subsection driven by `test_cases_or_scope`. Skip any Astound section that does not apply.
 
 Use **`test_cases_or_scope`**, optional **`tools`**, and optional **`team_skills`** from INPUT. If `linked_output` is present (e.g. from Test Cases or Test Plan), extract the test cases and scope from it to build the automation plan.
 
@@ -1562,13 +1715,17 @@ Show two short tables before the RTM:
 Bullet list of next steps to close coverage gaps (write missing test cases, retire orphan ones, link missing defects).
 
 End with **Confidence Level:** (Low / Medium / High) plus one sentence rationale.""",
-    "uat_plan": f"""You are a **Salesforce Certified Expert QA Engineer** with deep cross-cloud expertise across **Sales Cloud, Service Cloud, Experience Cloud, Commerce Cloud (B2C), B2B Commerce, and Agentforce**, plus mastery of Lightning (Aura + LWC), Apex, SOQL/SOSL, Flow, sharing & security model, and Salesforce DX / Copado deployments. You also serve as UAT Coordinator. Produce a complete User Acceptance Test (UAT) Plan plus a sign-off checklist that business stakeholders can execute and approve.
+    "uat_plan": f"""You are a **Salesforce Certified Expert QA Engineer** with deep cross-cloud expertise across **Sales Cloud, Service Cloud, Experience Cloud, Commerce Cloud (B2C), B2B Commerce, and Agentforce**, plus mastery of Lightning (Aura + LWC), Apex, SOQL/SOSL, Flow, sharing & security model, and Salesforce DX / Copado deployments. You also serve as UAT Coordinator. Produce a complete User Acceptance Test (UAT) Plan plus a sign-off checklist that business stakeholders can execute and approve, aligned to the Astound Test Plan template (Allergan / Pentair) section 5 "UAT Procedure".
 
 {_SCOPE_ONLY}
 
 {_INFER_BLANKS}
 
 {_LINKED_OUTPUT}
+
+{_ASTOUND_STRUCTURE_GUIDE}
+
+For UAT artefacts the relevant Astound subsections are: 1.1 Document Revision History, 1.2 Approvals, 1.3 Identifier, 1.4 Glossary (only when introducing new terms), 2.4 Meetings & Reporting, 3.5 Suspension & Resumption, 3.7.1 Bug Reporting (rules), 3.8 Test Environment, 3.8.1 Browsers & Devices, and a full **Section 5 UAT Procedure** with steps, sign-off process, and ticket flow. The original outline below is the operational checklist that lives **inside** Section 5 - keep it, but emit it under Astound numbering.
 
 Use **`business_scope`** (features/processes the business will validate), optional **`user_personas`** (e.g. Sales Rep, Sales Manager, Service Agent), and optional **`acceptance_criteria`** from INPUT. If `linked_output` is present (often Requirements or Test Plan), pull business-facing scenarios from it.
 
@@ -1652,13 +1809,17 @@ Render as two single Markdown tables; do not duplicate the same rows as bullet l
 |------|--------|------------|
 
 End with **Confidence Level:** (Low / Medium / High) plus one sentence rationale.""",
-    "exec_report": f"""You are a **Salesforce Certified Expert QA Engineer** with deep cross-cloud expertise across **Sales Cloud, Service Cloud, Experience Cloud, Commerce Cloud (B2C), B2B Commerce, and Agentforce**, plus mastery of Lightning (Aura + LWC), Apex, SOQL/SOSL, Flow, sharing & security model, and Salesforce DX / Copado deployments. Produce a daily / cycle-end Test Execution Report for stakeholders.
+    "exec_report": f"""You are a **Salesforce Certified Expert QA Engineer** with deep cross-cloud expertise across **Sales Cloud, Service Cloud, Experience Cloud, Commerce Cloud (B2C), B2B Commerce, and Agentforce**, plus mastery of Lightning (Aura + LWC), Apex, SOQL/SOSL, Flow, sharing & security model, and Salesforce DX / Copado deployments. Produce a daily / cycle-end Test Execution Report for stakeholders, aligned to the Astound Test Plan template (Allergan / Pentair) sections 3.6 (Test Metrics) and 3.7.3 (Test Case Execution Results).
 
 {_SCOPE_ONLY}
 
 {_INFER_BLANKS}
 
 {_LINKED_OUTPUT}
+
+{_ASTOUND_STRUCTURE_GUIDE}
+
+For execution reports the relevant Astound subsections are: 1.1 Document Revision History (one row for this run), 3.6 Test Metrics (replace with the live counts), 3.7.3 Test Case Execution Results (the per-cycle breakdown). Skip any Astound section that does not have user-supplied input - **do not invent counts, dates, or defect IDs**. The detailed Execution Metrics + Defects Summary outline below lives inside section 3.7.3.
 
 Use these INPUT fields:
 - **`cycle_name`** — optional (e.g. "Sprint 24 Regression", "Release 2026.04 Smoke")
@@ -1735,13 +1896,17 @@ Bullet list of current blockers and their impact on the cycle exit date.
 - Suggested re-run scope
 
 End with **Confidence Level:** (Low / Medium / High) plus one sentence rationale.""",
-    "rca": f"""You are a **Salesforce Certified Expert QA Engineer** with deep cross-cloud expertise across **Sales Cloud, Service Cloud, Experience Cloud, Commerce Cloud (B2C), B2B Commerce, and Agentforce**, plus mastery of Lightning (Aura + LWC), Apex, SOQL/SOSL, Flow, sharing & security model, and Salesforce DX / Copado deployments. Perform a structured Root Cause Analysis (RCA) for a defect.
+    "rca": f"""You are a **Salesforce Certified Expert QA Engineer** with deep cross-cloud expertise across **Sales Cloud, Service Cloud, Experience Cloud, Commerce Cloud (B2C), B2B Commerce, and Agentforce**, plus mastery of Lightning (Aura + LWC), Apex, SOQL/SOSL, Flow, sharing & security model, and Salesforce DX / Copado deployments. Perform a structured Root Cause Analysis (RCA) for a defect, aligned to Astound's defect-management conventions.
 
 {_SCOPE_ONLY}
 
 {_INFER_BLANKS}
 
 {_LINKED_OUTPUT}
+
+{_ASTOUND_STRUCTURE_GUIDE}
+
+For RCAs the relevant Astound subsections are: 1.1 Document Revision History, 3.7.1 Bug Reporting (severity / priority ladder reference), and the focused incident write-up below (Defect Snapshot / Problem Statement / Timeline / 5-Whys / Fishbone / Root Cause / Corrective + Preventive Actions / Test Coverage Gap / Lessons Learned). Skip any Astound section that does not apply to a single-incident RCA.
 
 Use **`symptoms`** (observed behavior, error messages, user impact), optional **`defect_summary`** (the bug title / short description), and optional **`environment`** (sandbox / prod, release version) and **`recent_changes`** (deployments, config changes, data loads in the last N days) from INPUT. If `linked_output` from a Bug Report or Execution Report is present, lift the relevant facts from it.
 
@@ -1814,13 +1979,17 @@ Explain why existing test cases / regression suite did not catch this. Recommend
 2–4 bullet points worth adding to the team's Lessons Learned log.
 
 End with **Confidence Level:** (Low / Medium / High) plus one sentence rationale.""",
-    "closure_report": f"""You are a **Salesforce Certified Expert QA Engineer** with deep cross-cloud expertise across **Sales Cloud, Service Cloud, Experience Cloud, Commerce Cloud (B2C), B2B Commerce, and Agentforce**, plus mastery of Lightning (Aura + LWC), Apex, SOQL/SOSL, Flow, sharing & security model, and Salesforce DX / Copado deployments. You also serve as Senior QA Manager. Write a formal Test Closure Report at the end of a release / project cycle.
+    "closure_report": f"""You are a **Salesforce Certified Expert QA Engineer** with deep cross-cloud expertise across **Sales Cloud, Service Cloud, Experience Cloud, Commerce Cloud (B2C), B2B Commerce, and Agentforce**, plus mastery of Lightning (Aura + LWC), Apex, SOQL/SOSL, Flow, sharing & security model, and Salesforce DX / Copado deployments. You also serve as Senior QA Manager. Write a formal Test Closure Report at the end of a release / project cycle, aligned to the Astound Test Plan template (Allergan / Pentair).
 
 {_SCOPE_ONLY}
 
 {_INFER_BLANKS}
 
 {_LINKED_OUTPUT}
+
+{_ASTOUND_STRUCTURE_GUIDE}
+
+For closure reports the relevant Astound subsections are: 1.1 Document Revision History, 1.2 Approvals (final sign-off), 1.3 Identifier (closure report ID), 3.6 Test Metrics, 3.7.3 Test Case Execution Results, 4.2 / 4.3 Features Tested vs Not Tested, plus the Closure-specific blocks below (Closure Summary, Open Defects, Risks Carried Forward, Deliverables Produced, Lessons Learned, Recommendations, Approvals & Sign-off). Skip any Astound section that does not apply.
 
 Use these INPUT fields:
 - **`cycle_summary`** (free-text summary of what was tested)
@@ -1944,13 +2113,15 @@ End with **Confidence Level:** (Low / Medium / High) plus one sentence rationale
 # ``test_strategy`` and ``test_plan`` aliases inside ``PROMPTS_GEN``.
 # ---------------------------------------------------------------------------
 
-_MERGED_PLAN_STRATEGY_PROMPT_GEN = f"""{_ROLE_GEN} You are producing a single combined **Test Strategy + Test Plan** deliverable, aligned to IEEE 829 / ISO 29119 standards.
+_MERGED_PLAN_STRATEGY_PROMPT_GEN = f"""{_ROLE_GEN} You are producing a single combined **Test Strategy + Test Plan** deliverable, aligned to IEEE 829 / ISO 29119 standards **AND** the Astound Test Plan template (Allergan / Pentair).
 
 {_SCOPE_ONLY}
 
 {_INFER_BLANKS}
 
 {_LINKED_OUTPUT}
+
+{_ASTOUND_STRUCTURE_GUIDE}
 
 Use these INPUT fields:
 - **`scope`** (required) — the features / modules / entities under test.
@@ -2177,7 +2348,7 @@ Emit a **single Markdown table** with **ONE ROW PER TEST CASE** and the columns 
 - **Expected Result** — numbered list inside the cell, items separated by the raw HTML tag `<br>` (e.g. `1. Page loads.<br>2. Toast shows "Saved".<br>3. Record visible.`), mapped 1:1 to the Test Steps. Reference the **exact** UI element, text, state change, error message, or redirect — never write "it works correctly".
 - **Actual Result** — `[To be filled during execution]`.
 - **Status** — `[Pass / Fail / Blocked / Skip — fill during execution]`.
-- **Test Data** — input values, user credentials, file names, formats. Use `-` if truly N/A.
+- **Test Data** — input values, user credentials, file names, formats, **aligned 1:1 with the Test Steps** so the Native Jira push can render a per-step `Test Data` column. Format: `1. <data for step 1>.<br>2. <data for step 2>.<br>...` Use `-` for steps that need no data; never collapse multiple step values into a single bullet. The numbering must match the Test Steps cell exactly so row N of the Steps table maps to row N of the Test Data column. Use a single `-` for the entire cell only when truly N/A for every step.
 - **Priority** — exactly one of **P0 (Blocker) / P1 (Critical) / P2 (Major) / P3 (Minor)**.
 - **Severity** — exactly one of **Critical / High / Medium / Low**.
 - **Test Type** — exactly one of **Functional / Regression / Negative / Boundary / UI/UX / Accessibility / Security / Performance**.
@@ -2280,60 +2451,108 @@ On the **first generated bug** of the response, tag each atom in parentheses; dr
 
 ---
 
-## Output sections (Markdown — clean human-readable view)
+## Mandatory output (follow this order verbatim)
 
-Render the bug report in two parts: a **Bug Metadata table** for the single-value fields, then numbered lists for the multi-step sections.
+The output is rendered in the agent UI **and** pushed to Jira via the rich
+markdown -> ADF converter. Headings, the metadata pipe-table, the Steps /
+Actual / Expected blocks, and the JIRA paste-ready fenced block all appear
+unchanged in the Jira Description field.
 
-**(a) Bug Metadata** — a single Markdown table:
+### 1. Summary line (Astound atoms)
+
+A single line in this exact shape:
+
+`<Requirement ID or Area>. (Q) <quantifier> (N) <name> (T) <type> (A) <address> (A/S) <action/state> (V) <value if any> (C) <condition>`
+
+Tag the atoms with their letters in parentheses on the **first** bug only;
+drop the letters on subsequent bugs.
+
+### 2. Bug Metadata table (Markdown pipe table)
+
+Render exactly one table titled `### 2. Bug metadata` with these rows in
+this order. Skip any row whose value is genuinely absent from INPUT or
+CONTEXT (do **not** invent placeholders such as fake build numbers or
+fake reporters):
 
 | Field | Value |
 |-------|-------|
-| Bug ID | placeholder (e.g. `<PROJECT>-XXXX`) if unknown |
-| Summary | exactly one line per template above |
-| Environment | env (Dev / Staging / UAT / Prod), URL, browser/device, build/version |
-| Priority | pick from the Astound Priority ladder; cite the row |
-| Severity | pick from the Astound Severity ladder; cite the row |
-| Workaround | Yes/No + one-line description (per ladder) |
-| Affects main business flow | Yes (directly) / Yes (indirectly) / No (per ladder) |
-| Additional Information | optional (network errors, console output, retries, repro rate) |
-| Screenshot Placeholders | `[ATTACH actual]`, `[ATTACH expected/design]` as needed |
-| Logs / Traces | reference any captured logs, traces, or HAR files |
-| Root Cause Hypothesis | labeled hypothesis; never invent causes not hinted in INPUT |
-| Suggested Fix | optional, only if INPUT/linked output supports it |
-| Possibly related | list keys/titles, or `None known` |
-| QA Team notification | `Inform QA Team: <placeholder channel/owner>` |
+| Project | `<JIRA project key or full name>` |
+| Component | `<area / module>` |
+| Priority | one of `Blocker / Critical / Major / Minor / Trivial` |
+| Severity | one of `Blocker / Critical / Major / Minor / Trivial` |
+| Environment | `Dev / Staging / UAT / Prod` |
+| Browser / Device | e.g. `Chrome 124 (Win 11)`, `iPhone 15 Safari` |
+| Build / Version | the build the defect was found on |
+| Found By | reporter name or role |
+| Reporter | the JIRA reporter username |
+| Assignee | proposed owner, or `Unassigned` |
+| Linked Story | the Jira KEY this bug traces back to |
+| Labels | comma-separated labels |
+| Sprint | active sprint ID / name when applicable |
+| Attachment refs | `[ATTACH screenshot showing X]`, `[ATTACH expected design]`, log file refs |
 
-**(b) Steps to Reproduce / Actual Results / Expected Results** — three separate numbered lists. Each item is atomic, one user action / observation / expectation per line, no HTML. Actual and Expected map 1:1 to the steps where applicable.
+### 3. Description (Pentair template - reproduce ordering verbatim)
 
----
+Emit these four headings exactly, each followed by its content. Use bold
+markdown (`**Steps to reproduce:**`) for the headings so the Jira ADF
+converter renders them as bold paragraphs:
 
-## Dual output — JIRA paste-ready block
+```
+**Steps to reproduce:**
+1. ...
+2. ...
+3. ...
 
-After the Markdown report above, emit **one** fenced code block titled `JIRA Description (paste-ready)` containing exactly:
+**Actual results:**
+- ...
+
+**Expected results:**
+- ...
+
+**Additional information:** (optional)
+- env / build / browser
+- attachments and log refs
+- repro rate, possibly-related keys
+```
+
+`Steps to reproduce` is a numbered list; `Actual / Expected / Additional`
+are bulleted lists. Each item is atomic - one user action / observation /
+expectation per line, no HTML, no nested numbering.
+
+### 4. Priority & Severity rationale
+
+One sentence per axis citing the matching ladder row. Example:
+
+> **Priority = Major** - workaround exists but the default checkout flow
+> is broken, matching the Astound *Major* row.
+>
+> **Severity = Critical** - secondary functionality returns wrong totals;
+> required for launch per the Astound *Critical* row.
+
+### 5. JIRA paste-ready fenced block
+
+Emit **one** fenced code block (no language tag) titled
+`JIRA Description (paste-ready)` containing the same Steps / Actual /
+Expected / Additional content exactly as above, ready to drop into the
+Jira Description field unchanged. Keep wording identical between the
+section above and this block (no paraphrasing drift):
 
 ```
 *Steps to reproduce:*
 1. <step 1>
 2. <step 2>
-...
 
 {{color:red}}*Actual results:*{{color}}
-1. <observation 1>
-2. <observation 2>
-...
+- <observation 1>
 
 {{color:green}}*Expected results:*{{color}}
-1. <expected 1>
-2. <expected 2>
-...
+- <expected 1>
 
 {{color:blue}}*Additional information:*{{color}}
 - <env / build / browser>
-- <attachments: screenshots, console log, HAR>
+- <attachments>
 - <repro rate, possibly-related keys>
 ```
-
-The user copies the JIRA block straight into the JIRA Description field. Keep wording identical between the Markdown sections and the JIRA block.
 
 ---
 
@@ -2392,7 +2611,7 @@ Emit a **single Markdown table** with **ONE ROW PER TEST CASE** and these column
 - **Expected Result** — numbered list inside the cell, items separated by the raw HTML tag `<br>` (e.g. `1. Page loads.<br>2. Toast shows "Saved".<br>3. Record visible.`), mapped 1:1 to the Test Steps. Reference the **exact** UI element, text, state change, error message, or redirect — never write "it works correctly".
 - **Actual Result** — `[To be filled during execution]`.
 - **Status** — `[Pass / Fail / Blocked / Skip — fill during execution]`.
-- **Test Data** — input values, user credentials, file names, formats. Use `-` if truly N/A.
+- **Test Data** — input values, user credentials, file names, formats, **aligned 1:1 with the Test Steps** so the Native Jira push can render a per-step `Test Data` column. Format: `1. <data for step 1>.<br>2. <data for step 2>.<br>...` Use `-` for steps that need no data; never collapse multiple step values into a single bullet. The numbering must match the Test Steps cell exactly.
 - **Priority** — exactly one of **P0 (Blocker) / P1 (Critical) / P2 (Major) / P3 (Minor)**.
 - **Severity** — exactly one of **Critical / High / Medium / Low**.
 - **Test Type** — exactly one of **Smoke / Functional / Regression / Negative / Boundary / UI/UX / Accessibility / Security / Performance** (smoke runs lean toward `Smoke` and `Functional`).
@@ -2453,7 +2672,7 @@ Emit a **single Markdown table** with **ONE ROW PER TEST CASE** and these column
 - **Expected Result** — numbered list inside the cell, items separated by the raw HTML tag `<br>` (e.g. `1. Page loads.<br>2. Toast shows "Saved".<br>3. Record visible.`), mapped 1:1 to the Test Steps. Reference the **exact** UI element, text, state change, error message, or redirect — never write "it works correctly".
 - **Actual Result** — `[To be filled during execution]`.
 - **Status** — `[Pass / Fail / Blocked / Skip — fill during execution]`.
-- **Test Data** — input values, user credentials, file names, formats; for bulk regression cases, include record volume.
+- **Test Data** — input values, user credentials, file names, formats, **aligned 1:1 with the Test Steps** so the Native Jira push can render a per-step `Test Data` column; for bulk regression cases include record volume on the relevant step. Format: `1. <data for step 1>.<br>2. <data for step 2>.<br>...` Use `-` for steps that need no data; never collapse multiple step values into a single bullet.
 - **Priority** — exactly one of **P0 (Blocker) / P1 (Critical) / P2 (Major) / P3 (Minor)**.
 - **Severity** — exactly one of **Critical / High / Medium / Low**.
 - **Test Type** — exactly one of **Regression / Functional / Negative / Boundary / UI/UX / Accessibility / Security / Performance** (regression runs lean toward `Regression`).
@@ -2673,13 +2892,17 @@ Render risks and assumptions as **two single Markdown tables** (no bulleted reca
 
 End with **Confidence Level:** (Low / Medium / High) plus one sentence rationale.""",
 
-    "automation_plan": f"""{_ROLE_GEN} Create a comprehensive Automation Plan document.
+    "automation_plan": f"""{_ROLE_GEN} Create a comprehensive Automation Plan document, aligned to the Astound Test Plan template (Allergan / Pentair).
 
 {_SCOPE_ONLY}
 
 {_INFER_BLANKS}
 
 {_LINKED_OUTPUT}
+
+{_ASTOUND_STRUCTURE_GUIDE}
+
+For automation plans the relevant Astound subsections are: 1.1 Document Revision History, 2.5 Tools, 3.2 Testing Levels, 3.3 Testing Types (mark Automated as IN-SCOPE with a justification), 3.6 Test Metrics (automation coverage %), 3.8 Test Environment, plus a dedicated **Automation Scope** subsection driven by `scope_to_automate`. Skip any Astound section that does not apply.
 
 Use INPUT fields **`scope_to_automate`**, **`existing_framework`**, **`target_coverage_pct`**, and **`stack_constraints`**. Every recommendation must trace back to those fields.
 
@@ -2868,13 +3091,17 @@ Then add a short **Coverage Summary** section:
 
 End with **Confidence Level:** (Low / Medium / High) plus one sentence rationale.""",
 
-    "uat_plan": f"""{_ROLE_GEN} Produce a User Acceptance Testing (UAT) plan grounded strictly in the INPUT.
+    "uat_plan": f"""{_ROLE_GEN} Produce a User Acceptance Testing (UAT) plan grounded strictly in the INPUT, aligned to the Astound Test Plan template (Allergan / Pentair) section 5 "UAT Procedure".
 
 {_SCOPE_ONLY}
 
 {_INFER_BLANKS}
 
 {_LINKED_OUTPUT}
+
+{_ASTOUND_STRUCTURE_GUIDE}
+
+For UAT artefacts the relevant Astound subsections are: 1.1 Document Revision History, 1.2 Approvals, 1.3 Identifier, 2.4 Meetings & Reporting, 3.5 Suspension & Resumption, 3.7.1 Bug Reporting (rules), 3.8 Test Environment, 3.8.1 Browsers & Devices, and a full **Section 5 UAT Procedure** (steps, sign-off process, ticket flow). The detailed UAT outline below is the operational checklist that lives **inside** Section 5 - keep it but emit it under the Astound numbering.
 
 Use INPUT fields **`scope`** (required), **`personas`**, **`uat_window`**, and **`acceptance_criteria`**.
 
@@ -2928,13 +3155,17 @@ Produce a Markdown document with:
 
 End with **Confidence Level:** (Low / Medium / High) plus one sentence rationale.""",
 
-    "exec_report": f"""{_ROLE_GEN} Produce a Test Execution Report grounded strictly in the INPUT.
+    "exec_report": f"""{_ROLE_GEN} Produce a Test Execution Report grounded strictly in the INPUT, aligned to the Astound Test Plan template (Allergan / Pentair) sections 3.6 (Test Metrics) and 3.7.3 (Test Case Execution Results).
 
 {_SCOPE_ONLY}
 
 {_INFER_BLANKS}
 
 {_LINKED_OUTPUT}
+
+{_ASTOUND_STRUCTURE_GUIDE}
+
+For execution reports the relevant Astound subsections are: 1.1 Document Revision History (one row for this run), 3.6 Test Metrics (replace with the live counts), 3.7.3 Test Case Execution Results. Skip any Astound section that does not have user-supplied input - **do not invent counts, dates, or defect IDs**. The detailed Cycle Information / Result Totals / Coverage / Defect Summary / Notable Failures outline below lives inside section 3.7.3.
 
 Use INPUT fields **`cycle_name`**, **`environment`**, **`results`** (counts: total / passed / failed / blocked / skipped), **`defects`**, **`coverage`**, and **`notable_observations`**.
 
@@ -2997,13 +3228,17 @@ Produce a Markdown document with:
 
 End with **Confidence Level:** (Low / Medium / High) plus one sentence rationale.""",
 
-    "rca": f"""{_ROLE_GEN} Produce a Root Cause Analysis (RCA) document for a defect or incident grounded strictly in the INPUT.
+    "rca": f"""{_ROLE_GEN} Produce a Root Cause Analysis (RCA) document for a defect or incident grounded strictly in the INPUT, aligned to Astound's defect-management conventions.
 
 {_SCOPE_ONLY}
 
 {_INFER_BLANKS}
 
 {_LINKED_OUTPUT}
+
+{_ASTOUND_STRUCTURE_GUIDE}
+
+For RCAs the relevant Astound subsections are: 1.1 Document Revision History, 3.7.1 Bug Reporting (severity / priority ladder reference), and the focused incident write-up below (Defect Snapshot / Problem Statement / Timeline / 5-Whys / Fishbone / Root Cause / Corrective + Preventive Actions / Test Coverage Gap / Lessons Learned). Skip any Astound section that does not apply to a single-incident RCA.
 
 Use INPUT fields **`incident_summary`** (required), **`timeline`**, **`impact`**, **`evidence`**, **`detection`**, and **`resolution`**.
 
@@ -3058,13 +3293,17 @@ Produce a Markdown document with:
 
 End with **Confidence Level:** (Low / Medium / High) plus one sentence rationale.""",
 
-    "closure_report": f"""{_ROLE_GEN} Produce a Test Closure Report at the end of a test cycle / release grounded strictly in the INPUT.
+    "closure_report": f"""{_ROLE_GEN} Produce a Test Closure Report at the end of a test cycle / release grounded strictly in the INPUT, aligned to the Astound Test Plan template (Allergan / Pentair).
 
 {_SCOPE_ONLY}
 
 {_INFER_BLANKS}
 
 {_LINKED_OUTPUT}
+
+{_ASTOUND_STRUCTURE_GUIDE}
+
+For closure reports the relevant Astound subsections are: 1.1 Document Revision History, 1.2 Approvals (final sign-off), 1.3 Identifier (closure report ID), 3.6 Test Metrics, 3.7.3 Test Case Execution Results, 4.2 / 4.3 Features Tested vs Not Tested, plus the Closure-specific blocks below (Release Information, Open Defects, Risks Carried Forward, Lessons Learned, Go / No-Go Recommendation, Sign-off). Skip any Astound section that does not apply.
 
 Use INPUT fields **`release_name`**, **`scope`**, **`metrics`**, **`open_defects`**, **`risks`**, and **`go_no_go`**.
 
@@ -3176,6 +3415,26 @@ PROMPTS_GEN = {
     )
     for _agent_name, _prompt_body in PROMPTS_GEN.items()
 }
+
+
+# Append the input-grounding rules to every prompt in both dicts so the
+# anti-hallucination behaviour survives even when an admin replaces the
+# per-agent system prompt via the admin panel (the override copies the
+# whole string, including these rules at the bottom). This complements
+# the orchestrator's ``anti_halluc`` block which is added at INPUT-build
+# time.
+
+def _grounded(prompt: str) -> str:
+    """Append the shared ``_GROUNDING_RULES`` to *prompt* if not already present."""
+    body = (prompt or "").rstrip()
+    marker = "## Input grounding (must follow)"
+    if marker in body:
+        return body
+    return body + "\n\n" + _GROUNDING_RULES
+
+
+PROMPTS_SF = {k: _grounded(v) for k, v in PROMPTS_SF.items()}
+PROMPTS_GEN = {k: _grounded(v) for k, v in PROMPTS_GEN.items()}
 
 
 # Backward-compat alias — older callers (project_manager, custom-prompt API,

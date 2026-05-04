@@ -20,14 +20,29 @@ from typing import Any
 # Column-name aliases. The keys are the canonical fields we expose in the
 # output; the values are header substrings (lower-cased) we accept for that
 # column. The first match wins.
+# Order matters: more specific aliases first so that "Test Step" (header)
+# is not eaten by the generic "step" rule before "test step" is tried.
+# Within each tuple the longer / more specific alias should appear first.
 _HEADER_ALIASES: dict[str, tuple[str, ...]] = {
-    "id":            ("id", "tc id", "test id", "case id", "tc#", "tc no"),
-    "title":         ("title", "scenario", "test case", "summary", "name", "description"),
+    "id":            ("tc id", "test id", "case id", "tc#", "tc no", "id"),
+    "title":         ("title", "scenario", "test case", "summary", "name"),
     "preconditions": ("precondition", "pre-condition", "pre condition", "pre-req", "prereq", "setup"),
-    "steps":         ("step", "test step", "procedure", "actions", "action"),
-    "expected":      ("expected", "expected result", "expected outcome", "result"),
-    "priority":      ("priority", "severity"),
-    "type":          ("type", "test type", "category", "kind"),
+    "steps":         ("test step", "step", "procedure", "actions", "action"),
+    "expected":      ("expected result", "expected outcome", "expected"),
+    # Per-step Test Data column. Must come BEFORE `description` so the
+    # generic "data" alias doesn't eat columns named just "Data" that are
+    # actually descriptions.
+    "test_data":     ("test data", "data"),
+    # Short narrative distinct from the title; round-trips through the
+    # pop-out editor and into the native Jira ADF body.
+    "description":   ("description",),
+    "priority":      ("priority",),
+    # Astound severity ladder column - keep separate from priority so the
+    # GEN-mode 15-column table populates both.
+    "severity":      ("severity",),
+    "type":          ("test type", "type", "category", "kind"),
+    "labels":        ("labels", "label", "tags"),
+    "component":     ("component", "module", "feature", "area"),
 }
 
 # A test-case-looking table needs at least these canonical columns. Without
@@ -46,6 +61,18 @@ class TestCase:
     expected: str = ""
     priority: str = ""
     type: str = ""
+    # Per-step test data, aligned 1:1 with `steps` when the agent emits a
+    # `1. data<br>2. data<br>...` Test Data cell. Empty list means the
+    # agent did not provide a Test Data column or every step needed `-`.
+    step_data: list[str] = field(default_factory=list)
+    # Optional fields surfaced by the Pentair-style test-case row. They
+    # round-trip through the Native Jira ADF body so the pushed ticket
+    # carries the same metadata the agent / pop-out editor produced.
+    test_data: str = ""
+    description: str = ""
+    labels: str = ""
+    component: str = ""
+    severity: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -107,6 +134,52 @@ def _split_steps(raw: str) -> list[str]:
     return [text]
 
 
+def _split_step_data(raw: str) -> list[str]:
+    """Split a per-step Test Data cell into one entry per step.
+
+    Mirrors the layout the testcase prompts ask the LLM to emit:
+
+        ``1. Lead.Country = "Germany"<br>2. -<br>3. Lead.LastName = "Test"``
+
+    Unlike :func:`_split_steps`, a literal ``-`` placeholder is preserved
+    as an empty string so the output stays aligned 1:1 with the Test
+    Steps cell. This matters because the Native Jira push uses these
+    values to populate the per-step Test Data column - dropping the
+    placeholder would shift every subsequent row by one.
+
+    Returns a list whose length matches the number of `1.`, `2.`, ...
+    items found in the cell, or an empty list when no numbered shape is
+    detected (in which case the caller should fall back to the raw
+    case-level Test Data string).
+    """
+    if not raw:
+        return []
+    text = raw.replace("<br>", "\n").replace("<br/>", "\n").replace("<br />", "\n").strip()
+    if not text:
+        return []
+
+    # Split on either real newlines or before a "<digit>. " boundary so
+    # cells that arrived on a single line still split into items.
+    parts = re.split(r"\n+|\s*(?=\b\d+[.)]\s)", text)
+    items: list[str] = []
+    for chunk in parts:
+        if not chunk.strip():
+            continue
+        # Strip the leading "N. " marker but KEEP "-" as an empty value
+        # so the per-step alignment is preserved.
+        cleaned = re.sub(r"^\s*\d+[.)]\s*", "", chunk).strip()
+        if cleaned == "-":
+            cleaned = ""
+        items.append(cleaned)
+
+    # Need at least 2 items to look like a per-step list; otherwise the
+    # cell is a single case-level value and the caller should treat it
+    # as such.
+    if len(items) < 2:
+        return []
+    return items
+
+
 def parse_testcases_markdown(md: str) -> list[TestCase]:
     """Parse all test-case tables found in *md* into :class:`TestCase` objects.
 
@@ -157,6 +230,14 @@ def parse_testcases_markdown(md: str) -> list[TestCase]:
                     continue
                 if canonical == "steps":
                     tc.steps = _split_steps(value)
+                elif canonical == "test_data":
+                    # Preserve the raw cell for the "case-level Test Data"
+                    # row in the metadata block. Also split it 1:1 with
+                    # steps via :func:`_split_step_data`, which keeps the
+                    # alignment intact (literal `-` becomes "" instead of
+                    # being dropped).
+                    tc.test_data = value.strip()
+                    tc.step_data = _split_step_data(value)
                 else:
                     setattr(tc, canonical, value.strip())
             if not tc.title and not tc.steps:

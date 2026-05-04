@@ -8,7 +8,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends
 
 from config import settings
-from core import firestore_db
+from core import firestore_db, secret_fields
 from routers.deps import get_current_user
 
 router = APIRouter()
@@ -21,6 +21,22 @@ def _log_path() -> Path:
     if LOG_PATH is None:
         LOG_PATH = settings.PROJECT_ROOT / "logs" / "agent_log.jsonl"
     return LOG_PATH
+
+
+def _decrypt_record(record: dict) -> dict:
+    """Decrypt the ``input`` / ``output`` fields of a single record.
+
+    Plaintext-tolerant for legacy rows written before encryption was
+    enabled; bad ciphertext falls back to a clear placeholder so the
+    History UI never silently shows garbled text.
+    """
+    out = dict(record)
+    for field in ("input", "output"):
+        try:
+            out[field] = secret_fields.decrypt_secret(out.get(field))
+        except Exception:  # noqa: BLE001
+            out[field] = "[decrypt failed - data may have been re-keyed]"
+    return out
 
 
 def _read_local(limit: int) -> list[dict]:
@@ -74,6 +90,7 @@ async def get_history(
         records = [r for r in records if r.get("agent") == agent]
     if project:
         records = [r for r in records if r.get("project") == project]
+    records = [_decrypt_record(r) for r in records]
     return {"records": records}
 
 

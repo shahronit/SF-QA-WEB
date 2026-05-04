@@ -24,13 +24,19 @@ export const AGENT_LABELS = {
 export function AgentResultsProvider({ children }) {
   const [results, setResults] = useState({})
 
-  const saveResult = useCallback((agentName, content) => {
+  // `meta` carries the per-run badges we surface in the UI without
+  // polluting the chained-output content blob: provider/model the run
+  // was routed to, the cached flag, and the canonical token-usage
+  // envelope ({prompt_tokens, completion_tokens, total_tokens, source}).
+  // Optional — older callers that omit it just keep the existing shape.
+  const saveResult = useCallback((agentName, content, meta = null) => {
     setResults(prev => ({
       ...prev,
       [agentName]: {
         content,
         timestamp: Date.now(),
         label: AGENT_LABELS[agentName] || agentName,
+        meta: meta || null,
       },
     }))
   }, [])

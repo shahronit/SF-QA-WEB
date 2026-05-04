@@ -28,11 +28,23 @@ import ClosureReport from './pages/ClosureReport'
 import StlcPack from './pages/StlcPack'
 import ResultView from './pages/ResultView'
 import TestCaseEditor from './pages/TestCaseEditor'
+import Admin from './pages/Admin'
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth()
   if (loading) return <div className="flex items-center justify-center min-h-screen"><div className="text-2xl text-toon-blue animate-bounce font-bold">Loading...</div></div>
   if (!user) return <Navigate to="/login" />
+  return children
+}
+
+// Mirror of ProtectedRoute that additionally requires is_admin. Non-admins
+// hitting /admin (e.g. via a stale bookmark) get bounced to the Hub
+// instead of seeing a confusing 403 page.
+function AdminRoute({ children }) {
+  const { user, loading } = useAuth()
+  if (loading) return <div className="flex items-center justify-center min-h-screen"><div className="text-2xl text-toon-blue animate-bounce font-bold">Loading...</div></div>
+  if (!user) return <Navigate to="/login" />
+  if (!user.is_admin) return <Navigate to="/" replace />
   return children
 }
 
@@ -76,6 +88,10 @@ export default function App() {
             <Route path="stlc-pack" element={<StlcPack />} />
             <Route path="projects" element={<Projects />} />
             <Route path="history" element={<History />} />
+            <Route
+              path="admin"
+              element={<AdminRoute><Admin /></AdminRoute>}
+            />
           </Route>
         </Routes>
           </AgentResultsProvider>

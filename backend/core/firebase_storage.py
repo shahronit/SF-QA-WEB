@@ -1,9 +1,20 @@
-"""Firebase Storage helpers for persisted project documents.
+"""DEPRECATED — Firebase Storage adapter for project documents.
 
-Files live under ``projects/{slug}/documents/{filename}`` in the bucket
-configured by ``FIREBASE_STORAGE_BUCKET``. The Firebase Admin app is
-initialized once via ``firestore_db.get_db()`` (which now passes the bucket
-name to ``initialize_app``), so this module simply borrows that app.
+Replaced by :mod:`backend.core.drive_storage` (Google Workspace Shared
+Drive via service account). Kept on disk only so the optional
+``scripts/migrate_firebase_to_drive.py`` script can still read existing
+Firebase Storage objects during the one-shot migration and so any
+out-of-tree code that still imports it can be located.
+
+NEW CODE MUST NOT IMPORT THIS MODULE. ``project_manager.py`` no longer
+references it. Once the migration script has been run in production
+this file is safe to delete (planned follow-up PR).
+
+Original behaviour: files live under
+``projects/{slug}/documents/{filename}`` in the bucket configured by
+``FIREBASE_STORAGE_BUCKET``. The Firebase Admin app is initialized once
+via ``firestore_db.get_db()`` (which now passes the bucket name to
+``initialize_app``), so this module simply borrows that app.
 """
 
 from __future__ import annotations

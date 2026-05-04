@@ -18,6 +18,75 @@ const JIRA_COMMENT_AGENTS = new Set(['requirement', 'exec_report', 'closure_repo
 
 const HISTORY_MD_COMPONENTS = { td: MarkdownTableCell, table: MarkdownTableScroll }
 
+// Inline token formatter — same rules as ReportPanel.formatTokenCount
+// but kept local because History is the other consumer and we don't
+// want to wire a shared util module just for two helper fns.
+function fmtTokens(n) {
+  if (n == null || Number.isNaN(n)) return '—'
+  const v = Number(n)
+  if (v < 1000) return String(v)
+  if (v < 10000) return v.toLocaleString()
+  return `${(v / 1000).toFixed(1).replace(/\.0$/, '')}k`
+}
+
+/**
+ * Compact horizontal usage badge for a History row.
+ *
+ * Shape: [ provider · model ]  [ 🪙 1.2k · 891 · 2.1k ]
+ * Hidden when the record has no usage data (older runs predate the
+ * tracking; cache-hit records always include the replayed counts).
+ */
+function HistoryUsageBadges({ rec }) {
+  const provider = rec.provider || ''
+  const model = rec.model || ''
+  const usage = rec.usage || null
+  if (!provider && !model && !usage) return null
+
+  const source = usage?.source || (rec.cache_hit ? 'cached' : 'live')
+  const palette = source === 'cached'
+    ? 'bg-sky-50 border-sky-200 text-sky-700'
+    : source === 'estimated'
+      ? 'bg-amber-50 border-amber-200 text-amber-700'
+      : 'bg-emerald-50 border-emerald-200 text-emerald-700'
+
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      {(provider || model) && (
+        <span
+          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-violet-50 border border-violet-200 text-violet-700 text-[10px] font-bold"
+          title={`Routed to ${provider}${model ? ` · ${model}` : ''}`}
+        >
+          <span aria-hidden="true">🤖</span>
+          <span className="opacity-70">{provider}</span>
+          {model && <><span className="opacity-40">·</span><span>{model}</span></>}
+        </span>
+      )}
+      {usage && (
+        <span
+          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full border ${palette} text-[10px] font-bold tabular-nums`}
+          title={`Prompt ${fmtTokens(usage.prompt_tokens)} · Completion ${fmtTokens(usage.completion_tokens)} · Total ${fmtTokens(usage.total_tokens)} (${source})`}
+        >
+          <span aria-hidden="true">🪙</span>
+          {fmtTokens(usage.prompt_tokens)}
+          <span className="opacity-40">·</span>
+          {fmtTokens(usage.completion_tokens)}
+          <span className="opacity-40">·</span>
+          <span className="font-extrabold">{fmtTokens(usage.total_tokens)}</span>
+        </span>
+      )}
+      {rec.repaired && (
+        <span
+          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-fuchsia-50 border border-fuchsia-200 text-fuchsia-700 text-[10px] font-bold uppercase tracking-wider"
+          title="The orchestrator's auto-repair pass kicked in for this run — the first attempt didn't match the required structure, so a second LLM call ran with a strict format clamp."
+        >
+          <span aria-hidden="true">🛠️</span>
+          Repaired
+        </span>
+      )}
+    </span>
+  )
+}
+
 const AGENT_LABELS = {
   requirement: '📝 Requirements',
   testcase: '🧪 Test Cases',
@@ -183,10 +252,11 @@ export default function History() {
 
           return (
             <ToonCard key={i} delay={0} className="cursor-pointer" onClick={() => setExpanded(isOpen ? null : i)}>
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
+              <div className="flex items-center justify-between gap-3 flex-wrap">
+                <div className="flex items-center gap-3 flex-wrap">
                   <span className="font-bold text-toon-navy">{label}</span>
                   {rec.project && <span className="toon-badge bg-toon-blue/10 text-toon-blue text-xs">📂 {rec.project}</span>}
+                  <HistoryUsageBadges rec={rec} />
                 </div>
                 <span className="text-xs text-gray-400">{ts}</span>
               </div>

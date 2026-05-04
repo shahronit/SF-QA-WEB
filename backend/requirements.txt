@@ -4,6 +4,11 @@ python-jose[cryptography]>=3.3.0
 python-multipart>=0.0.9
 bcrypt>=4.0.0
 google-genai>=1.0.0
+# httpx is retained for the orchestrator's Cursor CLI streaming + the
+# generic provider scaffold below. openai / anthropic / openrouter /
+# ollama SDKs intentionally NOT installed: this deployment exposes
+# only Gemini (native) + Cursor CLI in the Sidebar dropdown.
+httpx>=0.27.0
 chromadb>=0.5.0
 langchain>=0.3.0
 langchain-community>=0.3.0
@@ -27,3 +32,4 @@ google-auth-oauthlib>=1.2.0
 google-api-python-client>=2.150.0
 pdfplumber>=0.11.0
 mcp>=1.2.0
+cryptography>=42.0.0

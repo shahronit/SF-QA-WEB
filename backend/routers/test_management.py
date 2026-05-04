@@ -9,7 +9,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from core import firestore_db
+from core import firestore_db, secret_fields
 from core.jira_client import JiraClient
 from core.test_management.parser import TestCase, parse_testcases_markdown
 from core.test_management.native_jira import push_test_case as push_native
@@ -29,6 +29,27 @@ _XRAY_LOCK = Lock()
 _ZEPHYR_SESSIONS: dict[str, dict] = {}
 _ZEPHYR_LOCK = Lock()
 
+# Plaintext fields per scope (everything not listed is encrypted at
+# rest). Xray's secret is `client_secret`; Zephyr's secret is
+# `api_token`. Account / URL metadata stays queryable so the operator
+# can audit links without decrypt access.
+_XRAY_PLAINTEXT_FIELDS = {
+    "base_url", "client_id", "project_key", "project_id",
+    "created", "updated", "last_project",
+}
+_ZEPHYR_PLAINTEXT_FIELDS = {
+    "base_url", "project_key", "project_id",
+    "created", "updated", "last_project",
+}
+
+
+def _plaintext_fields_for(scope: str) -> set[str]:
+    if scope == "xray":
+        return _XRAY_PLAINTEXT_FIELDS
+    if scope == "zephyr":
+        return _ZEPHYR_PLAINTEXT_FIELDS
+    return set()
+
 
 def _save(scope: str, username: str, session: dict) -> None:
     cache, lock, collection = _resolve_scope(scope)
@@ -37,7 +58,10 @@ def _save(scope: str, username: str, session: dict) -> None:
     if firestore_db.is_enabled():
         try:
             db = firestore_db.get_db()
-            db.collection(collection).document(username).set(session)
+            persisted = secret_fields.encrypt_dict_values(
+                session, exclude=_plaintext_fields_for(scope),
+            )
+            db.collection(collection).document(username).set(persisted)
         except Exception:
             pass
 
@@ -53,7 +77,10 @@ def _load(scope: str, username: str) -> dict | None:
             db = firestore_db.get_db()
             doc = db.collection(collection).document(username).get()
             if doc.exists:
-                session = doc.to_dict()
+                raw = doc.to_dict() or {}
+                session = secret_fields.decrypt_dict_values(
+                    raw, exclude=_plaintext_fields_for(scope),
+                )
                 with lock:
                     cache[username] = session
                 return session
@@ -91,6 +118,15 @@ class ParseRequest(BaseModel):
 
 
 class TestCaseDTO(BaseModel):
+    """Wire shape for a single test case in the push payload.
+
+    Mirrors :class:`core.test_management.parser.TestCase`. The optional
+    fields below survive the round-trip from the pop-out editor (where
+    users can edit `description`, `severity`, `labels`, `component`) and
+    from the agent's parsed table (where `step_data` and `test_data`
+    drive the per-step Test Data column in the Native Jira ADF body).
+    """
+
     id: str = ""
     title: str = ""
     preconditions: str = ""
@@ -98,6 +134,21 @@ class TestCaseDTO(BaseModel):
     expected: str = ""
     priority: str = ""
     type: str = ""
+    # Per-step Test Data values aligned 1:1 with `steps`. When provided
+    # the Native Jira push renders a 4-column Steps table with this as
+    # the third column.
+    step_data: list[str] = []
+    # Case-level Test Data string (the raw cell as the agent emitted it,
+    # e.g. `1. Lead.Country = "Germany"<br>2. -`). Used in the metadata
+    # block at the top of the ADF body.
+    test_data: str = ""
+    # Free-text description distinct from the title - rendered as a
+    # paragraph after the Steps table in the ADF body.
+    description: str = ""
+    # Astound severity ladder; the parser splits this from `priority`.
+    severity: str = ""
+    labels: str = ""
+    component: str = ""
 
 
 class XrayConnectRequest(BaseModel):
@@ -131,6 +182,12 @@ def _dto_to_testcase(dto: TestCaseDTO) -> TestCase:
         expected=dto.expected,
         priority=dto.priority,
         type=dto.type,
+        step_data=list(dto.step_data or []),
+        test_data=dto.test_data,
+        description=dto.description,
+        labels=dto.labels,
+        component=dto.component,
+        severity=dto.severity,
     )
 
 

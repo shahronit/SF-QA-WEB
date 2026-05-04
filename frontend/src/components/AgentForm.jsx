@@ -10,16 +10,16 @@ import api from '../api/client'
 import ReportPanel from './ReportPanel'
 import { useAgentResults, AGENT_LABELS } from '../context/AgentResultsContext'
 import { useJira } from '../context/JiraContext'
-import JiraIssuePicker from './JiraIssuePicker'
 import JiraTicketCard from './JiraTicketCard'
 import CustomPromptEditor from './CustomPromptEditor'
 import ProjectContextPicker from './ProjectContextPicker'
-import { Stagger, StaggerItem } from './motion/Stagger'
 import Confetti from './motion/Confetti'
 import GeneratingScene from './motion/GeneratingScene'
+import MagneticButton from './motion/MagneticButton'
 import { extractJiraKey } from '../utils/jiraDetect'
 import { useQaMode, QA_MODE_OPTIONS } from '../hooks/useQaMode'
 import { useSessionPrefs } from '../context/SessionPrefsContext'
+import { resolvePrimaryField } from '../config/agentMeta'
 
 const LINK_PREVIEW_MD_COMPONENTS = { td: MarkdownTableCell, table: MarkdownTableScroll }
 
@@ -332,6 +332,12 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
   const [result, setResult] = useState('')
   const [resultStamp, setResultStamp] = useState(0)
   const [loading, setLoading] = useState(false)
+  // Per-run metadata surfaced in ReportPanel: which provider+model the
+  // backend resolved for this call, whether the response came from the
+  // cache, and the canonical token-usage envelope. Reset on every new
+  // generation so the previous run's chip doesn't briefly reappear
+  // while the next run is still streaming its first token.
+  const [runMeta, setRunMeta] = useState(null)
   const [projects, setProjects] = useState([])
   // Pinned context — RAG project, Jira project, sprint, user-story key.
   // Lives in SessionPrefsContext so selections persist across pages,
@@ -398,6 +404,21 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
   // doesn't re-fetch the same ticket every time the user clicks elsewhere.
   const importedKeysRef = useRef({})
   const [autoFetchedNotice, setAutoFetchedNotice] = useState({})
+
+  // Inline "Jira ticket or URL" input that lives in the primary card.
+  // Independent of the textarea contents so users can keep editing the
+  // Context box freely after the import lands. Empty unless the user
+  // is actively typing a key — we deliberately do NOT mirror imported
+  // keys here so the input doesn't become a stale parrot of the chip
+  // already shown above.
+  const [jiraQuickInput, setJiraQuickInput] = useState('')
+  const [jiraQuickStatus, setJiraQuickStatus] = useState({ kind: 'idle', message: '' })
+
+  // Refs for the Advanced disclosure body so we can scroll to + focus
+  // the first missing required field when the user clicks Generate
+  // with the disclosure collapsed.
+  const advancedDetailsRef = useRef(null)
+  const fieldRefs = useRef({})
 
   const fetchProjects = useCallback(() => {
     api.get('/projects/').then(({ data }) => {
@@ -468,13 +489,24 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
     .filter(f => f.hideInMode !== qaMode)
     .map(f => resolveField(f, qaMode))
 
-  // Selects are auto-treated as advanced unless a page explicitly opts out.
-  const isAdvancedField = (f) =>
-    f.advanced === true || (f.type === 'select' && f.advanced !== false)
+  // The unified UI elevates ONE field per agent as the primary "Context"
+  // input (resolved via agentMeta.primaryFieldKey, falling back to the
+  // legacy heuristic). Every other declared field — required or not —
+  // moves into the Advanced details disclosure below. This is what
+  // makes every agent share the same "Jira + freetext" surface.
+  const primaryField = resolvePrimaryField(agentName, resolvedFields)
+  const advancedFields = resolvedFields.filter(f => !primaryField || f.key !== primaryField.key)
 
-  const primaryFields = resolvedFields.filter(f => !isAdvancedField(f))
-  const advancedFields = resolvedFields.filter(isAdvancedField)
-  const requiredFields = primaryFields.filter(f => f.required !== false && f.type !== 'select')
+  // Required fields can now live in either place. We track them
+  // separately so the "N required" badge on the Advanced disclosure
+  // and the "missing required" UX know exactly what's still empty.
+  const isRequiredField = (f) => f.required !== false && f.type !== 'select'
+  const requiredAdvancedFields = advancedFields.filter(isRequiredField)
+  const primaryIsRequired = primaryField ? isRequiredField(primaryField) : false
+
+  const missingPrimary = !!(primaryField && primaryIsRequired && !values[primaryField.key]?.trim?.())
+  const missingAdvanced = requiredAdvancedFields.filter(f => !values[f.key]?.trim?.())
+  const allRequiredFilled = !missingPrimary && missingAdvanced.length === 0
 
   const [advancedOpen, setAdvancedOpen] = useState(() => {
     try { return localStorage.getItem(ADV_KEY(agentName)) === '1' } catch { return false }
@@ -483,7 +515,6 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
     try { localStorage.setItem(ADV_KEY(agentName), advancedOpen ? '1' : '0') } catch { /* ignore */ }
   }, [advancedOpen, agentName])
 
-  const allRequiredFilled = requiredFields.every(f => values[f.key]?.trim?.())
   const canGenerate = allRequiredFilled && !loading
 
   const selectedLinked =
@@ -494,14 +525,32 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
     if (loading) return
     if (!allRequiredFilled) {
       const missing = {}
-      requiredFields.forEach(f => {
-        if (!values[f.key]?.trim?.()) missing[f.key] = Date.now()
-      })
+      if (missingPrimary && primaryField) missing[primaryField.key] = Date.now()
+      missingAdvanced.forEach(f => { missing[f.key] = Date.now() })
       setShakeKeys(missing)
+      // If any of the missing required fields lives in the Advanced
+      // disclosure, open it, scroll it into view, and focus the first
+      // missing input so the user immediately sees what's blocking
+      // Generate. Without this the badge alone is easy to miss.
+      if (missingAdvanced.length > 0) {
+        setAdvancedOpen(true)
+        const target = missingAdvanced[0]
+        setTimeout(() => {
+          const node = fieldRefs.current[target.key]
+          if (node && typeof node.scrollIntoView === 'function') {
+            node.scrollIntoView({ behavior: 'smooth', block: 'center' })
+            const focusable = node.querySelector('textarea, input, select')
+            if (focusable) {
+              try { focusable.focus({ preventScroll: true }) } catch { focusable.focus() }
+            }
+          }
+        }, 80)
+      }
       return
     }
     setLoading(true)
     setResult('')
+    setRunMeta(null)
     setResultStamp(Date.now())
 
     const mergedInput = { ...values, ...extraInput }
@@ -557,6 +606,20 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
           if (event === 'token' && typeof payload.text === 'string') {
             accumulated += payload.text
             setResult(accumulated)
+          } else if (event === 'usage') {
+            // Backend emits this once per stream after all tokens have
+            // been sent. Captures provider/model/cached/repaired + the
+            // token envelope. We update local state so ReportPanel
+            // renders the chips immediately, AND remember it for
+            // AgentResultsContext so other pages can show the same
+            // badges (history, hub, etc.).
+            setRunMeta({
+              provider: payload.provider || null,
+              model: payload.model || null,
+              cached: !!payload.cached,
+              repaired: !!payload.repaired,
+              usage: payload.usage || null,
+            })
           } else if (event === 'error') {
             errored = true
             const msg = payload.error || 'Unknown error'
@@ -580,7 +643,10 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
       // re-mounting the ReportPanel when the run completes (the visible
       // "blink"). The stamp set at run start is enough for the entrance.
       if (accumulated && !errored && !accumulated.startsWith('**Error')) {
-        saveResult(agentName, accumulated)
+        // Pass the latest run meta into the cross-page results store
+        // so chained agents downstream (and the History card) can
+        // surface the same provider/model/usage badges they see here.
+        saveResult(agentName, accumulated, runMeta)
         setConfettiTrigger(t => t + 1)
       }
       // Notify History + any other listeners to refresh without manual reload.
@@ -593,11 +659,14 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
   const handleReset = useCallback(() => {
     setValues({})
     setResult('')
+    setRunMeta(null)
     setLinkedAgent('')
     setShowLinkedPreview(false)
     setShakeKeys({})
     setImportedJira(null)
     setImportedJiraList([])
+    setJiraQuickInput('')
+    setJiraQuickStatus({ kind: 'idle', message: '' })
     // Clear the user-story pin so the next agent run starts fresh.
     // RAG project, Jira project, and sprint are kept pinned — they
     // survive Reset and are only removed via the chip-row ×.
@@ -699,6 +768,60 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
       return next
     })
   }, [resolvedFields])
+
+  // Submit handler for the new "Jira ticket or URL" input that lives
+  // inside the primary card. Resolves the text via JiraContext, fetches
+  // the rich /full payload, formats it with `jiraIssueToText`, and
+  // funnels through the canonical `handleJiraImport` path so the
+  // imported card and pinned context behave identically to the
+  // JiraIssuePicker flow. Inline status row replaces toasts so the
+  // user can correct typos without losing focus.
+  const handleQuickJiraSubmit = useCallback(async (rawText) => {
+    const text = (rawText ?? jiraQuickInput).trim()
+    if (!text) return
+    if (!jiraConnected) {
+      setJiraQuickStatus({
+        kind: 'error',
+        message: 'Jira is not connected — paste the details into the Context box below instead.',
+      })
+      return
+    }
+    setJiraQuickStatus({ kind: 'loading', message: 'Fetching Jira ticket…' })
+    try {
+      const resp = await resolveFromText(text)
+      if (!resp?.key) {
+        setJiraQuickStatus({
+          kind: 'error',
+          message: 'Could not parse a Jira ticket key from that input.',
+        })
+        return
+      }
+      let payload = null
+      try {
+        payload = await jiraGetFullIssue(resp.key)
+      } catch {
+        payload = resp.issue || null
+      }
+      if (!payload) {
+        setJiraQuickStatus({
+          kind: 'error',
+          message: `Jira returned no detail for ${resp.key}.`,
+        })
+        return
+      }
+      handleJiraImport(payload)
+      setJiraQuickInput('')
+      setJiraQuickStatus({ kind: 'success', message: `Imported ${resp.key}` })
+      setTimeout(() => {
+        setJiraQuickStatus(prev => (prev.kind === 'success' ? { kind: 'idle', message: '' } : prev))
+      }, 2500)
+    } catch (err) {
+      setJiraQuickStatus({
+        kind: 'error',
+        message: err?.message || 'Failed to fetch Jira ticket.',
+      })
+    }
+  }, [jiraQuickInput, jiraConnected, resolveFromText, jiraGetFullIssue, handleJiraImport])
 
   // Fetch full detail for a list of issues with bounded concurrency, then
   // format the consolidated scope block. Used by both `handleJiraImportMany`
@@ -1064,83 +1187,12 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
         )}
       </div>
 
-      {/* Jira issue picker (only when connected). The Test Plan & Strategy
-          agent gets multi-select + 'Use entire sprint as scope'; every
-          other agent stays single-select. */}
-      {jiraConnected && (
-        <JiraIssuePicker
-          onImport={handleJiraImport}
-          multiSelect={allowMultiPick}
-          onImportMany={allowMultiPick ? handleJiraImportMany : undefined}
-          onUseSprintScope={allowMultiPick ? handleSprintScope : undefined}
-        />
-      )}
-
-      {/* Confirmation card(s) for whatever was just imported from Jira.
-          Mirrors the picker's right-hand preview so the user keeps full
-          visibility (Assignee/Reporter/Priority/Created/Updated/Description,
-          plus subtasks/comments/custom fields) even after the picker is
-          collapsed. Removing a card clears the imported payload only — the
-          textarea content the user may have already edited is preserved. */}
-      {(importedJira || importedJiraList.length > 0) && (
-        <div className="toon-card !p-4">
-          <div className="flex items-center gap-3 mb-3">
-            <span className="w-9 h-9 rounded-xl bg-gradient-to-br from-emerald-400 to-emerald-600 flex items-center justify-center text-white text-sm shadow-toon">
-              ✓
-            </span>
-            <div className="flex-1">
-              <h3 className="text-sm font-bold text-toon-navy">
-                Imported from Jira
-                <span className="font-normal text-gray-400 ml-2">
-                  {importedJira
-                    ? `(${importedJira.core?.key || importedJira.key || ''})`
-                    : `(${importedJiraList.length} ticket${importedJiraList.length === 1 ? '' : 's'})`}
-                </span>
-              </h3>
-              <div className="text-[11px] text-gray-500">
-                Form fields below have been pre-filled. Edit anything before generating.
-              </div>
-            </div>
-            {importedJiraList.length > 1 && (
-              <button
-                type="button"
-                onClick={() => setImportedJiraList([])}
-                className="text-[11px] text-toon-coral hover:underline font-semibold"
-              >
-                Clear all
-              </button>
-            )}
-          </div>
-          {importedJira && (
-            <div className="ml-12">
-              <JiraTicketCard
-                detail={importedJira}
-                onRemove={() => { setImportedJira(null); setJiraContextKey('') }}
-              />
-            </div>
-          )}
-          {importedJiraList.length > 0 && (
-            <div className="ml-12 space-y-3">
-              {importedJiraList.map((d) => {
-                const k = d.core?.key || d.key || ''
-                return (
-                  <div key={k} className="border border-gray-200 rounded-xl p-3 bg-white">
-                    <JiraTicketCard
-                      detail={d}
-                      compact
-                      onRemove={() =>
-                        setImportedJiraList(list =>
-                          list.filter(x => (x.core?.key || x.key || '') !== k),
-                        )
-                      }
-                    />
-                  </div>
-                )
-              })}
-            </div>
-          )}
-        </div>
-      )}
+      {/* Jira issue picker removed by request — every agent now uses the
+          unified "Jira ticket or URL" quick-fetch input rendered inside
+          the primary card below. The picker's multi-select / sprint-
+          scope helpers (handleJiraImportMany / handleSprintScope) stay
+          defined above in case any future surface needs them, but they
+          are no longer mounted in the form. */}
 
       {/* Test Case Development users can override the system prompt for
           their session. Persisted to localStorage; the default prompt on
@@ -1152,24 +1204,183 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
         />
       )}
 
-      {/* Primary form fields (required-by-default) */}
-      <Stagger className="space-y-4" delayChildren={0.1} staggerChildren={0.05}>
-        {primaryFields.map((field) => (
-          <StaggerItem key={field.key}>
-            {renderFieldBody(field, {
-              shakeStamp: shakeKeys[field.key],
-              values,
-              handleChange,
-              handleTextareaBlur,
-              autoFetchedNotice,
-            })}
-          </StaggerItem>
-        ))}
-      </Stagger>
+      {/* ---- Unified PRIMARY card ----------------------------------------
+           This is the redesigned "Jira ticket + one Context box" surface
+           shared by every agent. It contains:
+             1. A quick "Jira ticket key or URL" input (Enter or arrow
+                button to fetch). Reuses `handleQuickJiraSubmit` which
+                funnels through the canonical `handleJiraImport` flow.
+             2. The imported `<JiraTicketCard />`(s), so the user keeps
+                the rich confirmation card right next to the Context box.
+             3. The single primary `Context` textarea bound to the field
+                resolved by `resolvePrimaryField()` — required-by-default
+                for most agents, prominently rendered.
+           Every other declared field — required or optional — moves into
+           the Advanced details disclosure below the Generate button.
+      ----------------------------------------------------------------- */}
+      <div className="toon-card !p-4 space-y-4">
+        {/* Jira quick-fetch row */}
+        <div>
+          <div className="flex items-center gap-3">
+            <span className="w-9 h-9 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white text-sm shadow-toon flex-shrink-0">
+              🎯
+            </span>
+            <div className="flex-1 min-w-0">
+              <label className="block text-sm font-bold text-toon-navy mb-1.5">
+                Jira ticket
+                <span className="font-normal text-gray-400 ml-2">
+                  {jiraConnected
+                    ? '(paste a key or URL — we auto-fetch the full details)'
+                    : '(Jira not connected — fill the Context box below directly)'}
+                </span>
+              </label>
+              <div className="flex gap-2">
+                <input
+                  className="toon-input flex-1"
+                  placeholder={jiraConnected ? 'ABC-123 or https://acme.atlassian.net/browse/ABC-123' : 'Connect Jira from the Hub to enable auto-fetch'}
+                  value={jiraQuickInput}
+                  onChange={(e) => {
+                    setJiraQuickInput(e.target.value)
+                    if (jiraQuickStatus.kind !== 'idle') {
+                      setJiraQuickStatus({ kind: 'idle', message: '' })
+                    }
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault()
+                      handleQuickJiraSubmit()
+                    }
+                  }}
+                  disabled={!jiraConnected || jiraQuickStatus.kind === 'loading'}
+                />
+                <button
+                  type="button"
+                  onClick={() => handleQuickJiraSubmit()}
+                  disabled={!jiraConnected || !jiraQuickInput.trim() || jiraQuickStatus.kind === 'loading'}
+                  className={`toon-btn toon-btn-blue px-4 text-sm whitespace-nowrap ${
+                    !jiraConnected || !jiraQuickInput.trim() ? 'opacity-50 cursor-not-allowed' : ''
+                  }`}
+                >
+                  {jiraQuickStatus.kind === 'loading' ? '⏳ Fetching…' : '🔍 Fetch'}
+                </button>
+              </div>
+              {jiraQuickStatus.kind !== 'idle' && (
+                <div
+                  className={`mt-1.5 text-xs font-bold ${
+                    jiraQuickStatus.kind === 'error'
+                      ? 'text-toon-coral'
+                      : jiraQuickStatus.kind === 'success'
+                      ? 'text-toon-mint'
+                      : 'text-gray-500'
+                  }`}
+                >
+                  {jiraQuickStatus.message}
+                </div>
+              )}
+            </div>
+          </div>
 
-      {/* Advanced (optional) fields — collapsed by default, persists per-agent */}
+          {/* Imported ticket card(s) — pinned beside the Context box so
+              the user keeps full visibility while editing freely. The
+              single-import card uses `compact` + `defaultExpanded` so it
+              opens by default for confirmation but the user can collapse
+              the long meta + comments + custom-fields block once they've
+              skimmed it (matches the multi-import row behaviour). */}
+          {(importedJira || importedJiraList.length > 0) && (
+            <div className="mt-3 ml-12">
+              {importedJira && (
+                <div className="border border-gray-200 rounded-xl p-3 bg-white">
+                  <JiraTicketCard
+                    detail={importedJira}
+                    compact
+                    defaultExpanded
+                    onRemove={() => { setImportedJira(null); setJiraContextKey('') }}
+                  />
+                </div>
+              )}
+              {importedJiraList.length > 0 && (
+                <div className="space-y-3">
+                  {importedJiraList.length > 1 && (
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] font-bold text-gray-500 uppercase tracking-wider">
+                        Imported {importedJiraList.length} ticket{importedJiraList.length === 1 ? '' : 's'}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setImportedJiraList([])}
+                        className="text-[11px] text-toon-coral hover:underline font-semibold"
+                      >
+                        Clear all
+                      </button>
+                    </div>
+                  )}
+                  {importedJiraList.map((d) => {
+                    const k = d.core?.key || d.key || ''
+                    return (
+                      <div key={k} className="border border-gray-200 rounded-xl p-3 bg-white">
+                        <JiraTicketCard
+                          detail={d}
+                          compact
+                          onRemove={() =>
+                            setImportedJiraList(list =>
+                              list.filter(x => (x.core?.key || x.key || '') !== k),
+                            )
+                          }
+                        />
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Single primary Context textarea — bound to the agent's
+            primaryFieldKey. If we couldn't resolve a primary field for
+            the agent (no fields at all, e.g. a brand-new agent skeleton)
+            we fall back to a generic context textarea bound to a virtual
+            `__context__` key so the form still renders. */}
+        {primaryField ? (
+          <div ref={(el) => { fieldRefs.current[primaryField.key] = el }}>
+            {renderFieldBody(
+              {
+                ...primaryField,
+                // The label is intentionally rewritten to the friendly
+                // unified name; the placeholder retains the page-level
+                // hint so each agent's textarea still feels purpose-fit.
+                label: 'Context for the agent',
+                hint: jiraConnected
+                  ? 'auto-filled from the Jira ticket above — edit freely or paste your own details'
+                  : 'paste the user story / scope / details the agent needs',
+                rows: Math.max(primaryField.rows || 6, 6),
+              },
+              {
+                shakeStamp: shakeKeys[primaryField.key],
+                values,
+                handleChange,
+                handleTextareaBlur,
+                autoFetchedNotice,
+              },
+            )}
+          </div>
+        ) : (
+          <div className="text-xs text-gray-500">
+            This agent has no primary input declared. Open Advanced details below to fill the form.
+          </div>
+        )}
+      </div>
+
+      {/* ---- Advanced details disclosure --------------------------------
+           Holds every non-primary declared field (required AND optional)
+           plus any extraInput hint. A "N required" badge on the header
+           tells the user when something inside still needs filling — the
+           Generate button also auto-opens this section and scrolls to
+           the first missing required field if they try to submit early.
+      ----------------------------------------------------------------- */}
       {advancedFields.length > 0 && (
         <details
+          ref={advancedDetailsRef}
           className="toon-card !p-0 overflow-hidden"
           open={advancedOpen}
           onToggle={(e) => setAdvancedOpen(e.currentTarget.open)}
@@ -1179,9 +1390,20 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
               ⚙️
             </span>
             <div className="flex-1">
-              <div className="text-sm font-bold text-toon-navy">Advanced (optional)</div>
+              <div className="text-sm font-bold text-toon-navy flex items-center gap-2 flex-wrap">
+                Advanced details
+                {missingAdvanced.length > 0 ? (
+                  <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-rose-50 text-toon-coral border border-rose-200">
+                    {missingAdvanced.length} required
+                  </span>
+                ) : requiredAdvancedFields.length > 0 ? (
+                  <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-emerald-50 text-toon-mint border border-emerald-200">
+                    Required filled
+                  </span>
+                ) : null}
+              </div>
               <div className="text-xs text-gray-500">
-                Fine-tune {advancedFields.length} {advancedFields.length === 1 ? 'field' : 'fields'} — leave blank to let AI infer.
+                {advancedFields.length} {advancedFields.length === 1 ? 'field' : 'fields'} — leave blank to let AI infer where possible.
               </div>
             </div>
             <motion.span
@@ -1195,7 +1417,10 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
           </summary>
           <div className="px-4 pb-4 pt-1 space-y-4 border-t border-gray-100">
             {advancedFields.map((field) => (
-              <div key={field.key}>
+              <div
+                key={field.key}
+                ref={(el) => { fieldRefs.current[field.key] = el }}
+              >
                 {renderFieldBody(field, {
                   shakeStamp: shakeKeys[field.key],
                   values,
@@ -1211,31 +1436,33 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
 
       {/* Action buttons */}
       <div className="flex gap-3">
-        <motion.button
-          whileTap={!loading ? { scale: 0.96 } : {}}
-          whileHover={!loading ? { scale: 1.01 } : {}}
-          onClick={handleRun}
-          disabled={loading}
-          className={`toon-btn toon-btn-blue flex-1 text-lg transition-all ${
-            loading ? 'opacity-80 cursor-wait' : ''
-          } ${!allRequiredFilled && !loading ? 'opacity-70' : ''}`}
-        >
-          {loading ? (
-            <span className="inline-flex items-center justify-center gap-2">
-              <span>Generating</span>
-              <span className="inline-flex items-center gap-1">
-                {[0, 1, 2].map(i => (
-                  <motion.span
-                    key={i}
-                    className="inline-block w-1.5 h-1.5 rounded-full bg-white"
-                    animate={{ y: [0, -4, 0], opacity: [0.6, 1, 0.6] }}
-                    transition={{ duration: 0.7, repeat: Infinity, delay: i * 0.12, ease: 'easeInOut' }}
-                  />
-                ))}
+        <MagneticButton className="flex-1">
+          <motion.button
+            whileTap={!loading ? { scale: 0.96 } : {}}
+            whileHover={!loading ? { scale: 1.01 } : {}}
+            onClick={handleRun}
+            disabled={loading}
+            className={`astound-btn-grad w-full text-lg ${
+              loading ? 'opacity-80 cursor-wait' : ''
+            } ${!allRequiredFilled && !loading ? 'opacity-70' : ''}`}
+          >
+            {loading ? (
+              <span className="inline-flex items-center justify-center gap-2">
+                <span>Generating</span>
+                <span className="inline-flex items-center gap-1">
+                  {[0, 1, 2].map(i => (
+                    <motion.span
+                      key={i}
+                      className="inline-block w-1.5 h-1.5 rounded-full bg-white"
+                      animate={{ y: [0, -4, 0], opacity: [0.6, 1, 0.6] }}
+                      transition={{ duration: 0.7, repeat: Infinity, delay: i * 0.12, ease: 'easeInOut' }}
+                    />
+                  ))}
+                </span>
               </span>
-            </span>
-          ) : '✨ Generate'}
-        </motion.button>
+            ) : 'Generate'}
+          </motion.button>
+        </MagneticButton>
 
         <motion.button
           whileTap={{ scale: 0.95 }}
@@ -1243,7 +1470,7 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
           type="button"
           className="toon-btn bg-gray-100 text-gray-600 hover:bg-gray-200 px-6 text-lg"
         >
-          🔄 Reset
+          Reset
         </motion.button>
       </div>
 
@@ -1269,6 +1496,7 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
           stamp={resultStamp}
           loading={loading}
           jiraContextKey={jiraContextKey}
+          runMeta={runMeta}
         />
       )}
 

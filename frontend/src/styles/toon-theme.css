@@ -9,6 +9,106 @@
   }
 }
 
+/* ---------------------------------------------------------------------- */
+/* Astound co-brand utilities                                              */
+/*                                                                        */
+/* These coexist with the legacy `toon-*` classes; pages migrate one at a */
+/* time. See tailwind.config.js for the underlying palette + gradients.   */
+/* ---------------------------------------------------------------------- */
+
+@layer components {
+  /* Glassmorphism card sitting on the dark Astound surface. Use on the
+     login hero and any panel that overlays the aurora background. */
+  .astound-card {
+    @apply rounded-toon-lg border border-white/10 bg-astound-surface/70 backdrop-blur-xl shadow-astound-card;
+  }
+
+  /* Light surface variant — what most authenticated pages use. Matches
+     the existing `toon-card` weight but with a thin gradient border. */
+  .astound-card-light {
+    position: relative;
+    @apply rounded-toon-lg bg-white/95 backdrop-blur-md p-6 shadow-astound-card;
+    border: 1px solid rgba(123, 97, 255, 0.12);
+  }
+  .astound-card-light::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    padding: 1px;
+    background: linear-gradient(135deg, rgba(123,97,255,0.55), rgba(255,61,139,0.0) 60%);
+    -webkit-mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+            mask-composite: exclude;
+    pointer-events: none;
+  }
+
+  /* Primary gradient pill button. Animated background shimmer on hover.
+     Falls back gracefully when prefers-reduced-motion is set. */
+  .astound-btn-grad {
+    @apply relative inline-flex items-center justify-center gap-2 px-6 py-3 rounded-2xl font-bold text-white shadow-astound;
+    background: linear-gradient(135deg, #7B61FF 0%, #FF3D8B 55%, #43E5F4 100%);
+    background-size: 180% 180%;
+    transition: transform .15s ease, box-shadow .25s ease, background-position .8s ease;
+  }
+  .astound-btn-grad:hover {
+    background-position: 100% 50%;
+    transform: translateY(-1px);
+    box-shadow: 0 24px 60px -18px rgba(123,97,255,0.55);
+  }
+  .astound-btn-grad:active {
+    transform: scale(.97);
+  }
+  .astound-btn-grad:disabled {
+    @apply opacity-50 cursor-not-allowed;
+    transform: none;
+  }
+
+  /* Outline variant for secondary actions that still need brand presence. */
+  .astound-btn-outline {
+    @apply inline-flex items-center justify-center gap-2 px-6 py-3 rounded-2xl font-bold text-astound-violet bg-white border border-astound-violet/30 transition-all;
+  }
+  .astound-btn-outline:hover {
+    @apply bg-astound-mist border-astound-violet/60;
+  }
+
+  /* Gradient text headline — clip-path trick. Use sparingly: page hero
+     headings, marketing copy. Not for body text. */
+  .astound-text-grad {
+    background: linear-gradient(135deg, #7B61FF 0%, #FF3D8B 55%, #43E5F4 100%);
+    -webkit-background-clip: text;
+            background-clip: text;
+    color: transparent;
+    background-size: 180% 180%;
+    animation: gradient-shift 8s ease infinite;
+  }
+
+  /* Soft pill used under hero headings ("Internal QA Portal", etc.). */
+  .astound-pill {
+    @apply inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider;
+    background: rgba(123, 97, 255, 0.12);
+    color: #7B61FF;
+    border: 1px solid rgba(123, 97, 255, 0.25);
+  }
+
+  /* Thin gradient divider used inside dark cards. */
+  .astound-divider {
+    height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(123,97,255,0.6), rgba(255,61,139,0.6), transparent);
+  }
+}
+
+/* Reduced-motion fallback — no shimmering text, no spinning aurora. */
+@media (prefers-reduced-motion: reduce) {
+  .astound-text-grad,
+  .astound-btn-grad {
+    animation: none !important;
+    background-position: 0% 50% !important;
+  }
+}
+
 @layer components {
   .toon-card {
     @apply bg-white rounded-toon p-6 shadow-toon border-2 border-white/50;

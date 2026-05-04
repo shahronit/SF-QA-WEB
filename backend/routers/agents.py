@@ -4,6 +4,12 @@ Both ``/run`` (blocking JSON) and ``/stream`` (Server-Sent Events) endpoints
 execute the synchronous orchestrator inside a thread pool so they never block
 Uvicorn's single-threaded event loop — concurrent users get responsive APIs
 while long LLM calls are in flight.
+
+Per-user agent visibility is enforced here too: when the calling user has
+an ``agent_access`` allow-list configured by an admin, any request for an
+agent outside that list returns 403. The frontend hides those nav items
+already, but server-side enforcement protects against direct URL hits and
+forged requests.
 """
 
 from __future__ import annotations
@@ -18,6 +24,32 @@ from sse_starlette.sse import EventSourceResponse
 from starlette.concurrency import run_in_threadpool
 
 from routers.deps import get_current_user, get_orchestrator
+
+
+def _ensure_agent_access(user: dict, agent_name: str) -> None:
+    """Raise 403 when *user* has an allow-list that excludes *agent_name*.
+
+    ``agent_access`` semantics:
+        * ``None`` (default for new users) — no restriction; user sees
+          every enabled agent.
+        * ``[]`` — explicit empty list = no agents allowed.
+        * ``["agent_a", "agent_b", ...]`` — only those agents allowed.
+
+    Admins bypass the check so they can sanity-test agents they have
+    not added to their own allow-list (their job is to manage access
+    for everyone else).
+    """
+    if user.get("is_admin"):
+        return
+    access = user.get("agent_access")
+    if access is None:
+        return  # no allow-list = full access
+    if agent_name not in access:
+        raise HTTPException(
+            403,
+            f"Your account is not permitted to use the '{agent_name}' agent. "
+            "Ask an administrator to grant access from the admin panel.",
+        )
 
 router = APIRouter()
 
@@ -76,21 +108,44 @@ async def run_agent(
     The synchronous orchestrator is executed in a threadpool so the event
     loop remains free for other requests (health checks, SSE heartbeats,
     parallel agent calls, etc.) while the LLM is working.
+
+    Response shape: ``{result, agent, provider, model, cached, usage}``.
+    ``usage`` is a ``{prompt_tokens, completion_tokens, total_tokens,
+    source}`` envelope (``source`` ∈ {"live","estimated","cached"}).
+    Each request gets its own ``usage_box`` so concurrent runs don't
+    collide on a shared singleton.
     """
+    _ensure_agent_access(user, agent_name)
     orch = get_orchestrator()
     orch.set_project(body.project_slug)
+    usage_box: dict = {}
     try:
         result = await run_in_threadpool(
             orch.run_agent,
             agent_name,
             body.user_input,
             body.system_prompt_override,
+            user.get("username"),
+            usage_box=usage_box,
         )
     except KeyError:
         raise HTTPException(400, f"Unknown agent: {agent_name}")
     except ValueError as exc:
         raise HTTPException(400, str(exc))
-    return {"result": result, "agent": agent_name}
+    return {
+        "result": result,
+        "agent": agent_name,
+        "provider": usage_box.get("provider"),
+        "model": usage_box.get("model"),
+        "cached": usage_box.get("cached", False),
+        # ``repaired`` is True when the orchestrator's auto-repair
+        # pass kicked in (validator on the original output failed and
+        # we re-ran with a strict format clamp). Frontend renders an
+        # "Auto-repaired" chip so users understand why their token
+        # count is higher than usual on this particular run.
+        "repaired": usage_box.get("repaired", False),
+        "usage": usage_box.get("usage"),
+    }
 
 
 @router.post("/{agent_name}/stream")
@@ -103,20 +158,52 @@ async def stream_agent(
     through an ``asyncio.Queue`` so the event loop stays responsive while
     the LLM streams tokens.
     """
+    _ensure_agent_access(user, agent_name)
     orch = get_orchestrator()
     orch.set_project(body.project_slug)
     queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
     loop = asyncio.get_running_loop()
+    # Per-request mutable container the orchestrator fills in with the
+    # resolved (provider, model, usage) tuple when the stream is done.
+    # We then emit a terminal SSE 'usage' event so the frontend can
+    # render the token chip on the report panel.
+    usage_box: dict[str, Any] = {}
 
     def _producer() -> None:
         """Run the sync generator in a worker thread, push chunks to the queue."""
         try:
             for chunk in orch.stream_agent(
-                agent_name, body.user_input, body.system_prompt_override
+                agent_name,
+                body.user_input,
+                body.system_prompt_override,
+                user.get("username"),
+                usage_box=usage_box,
             ):
                 loop.call_soon_threadsafe(
                     queue.put_nowait,
                     {"event": "token", "data": json.dumps({"text": chunk})},
+                )
+            # Emit usage BEFORE done so the client can update the chip
+            # while the "complete" event drives any post-stream UX
+            # (confetti, history refresh, etc.). Only emit when at
+            # least one of the resolution slots is populated — saves
+            # a wasted SSE frame on early-error paths.
+            if usage_box.get("provider"):
+                loop.call_soon_threadsafe(
+                    queue.put_nowait,
+                    {
+                        "event": "usage",
+                        "data": json.dumps({
+                            "provider": usage_box.get("provider"),
+                            "model": usage_box.get("model"),
+                            "cached": bool(usage_box.get("cached", False)),
+                            # Frontend renders an "Auto-repaired" chip
+                            # when this is True (orchestrator ran a
+                            # second LLM call to fix format drift).
+                            "repaired": bool(usage_box.get("repaired", False)),
+                            "usage": usage_box.get("usage"),
+                        }),
+                    },
                 )
             loop.call_soon_threadsafe(
                 queue.put_nowait,

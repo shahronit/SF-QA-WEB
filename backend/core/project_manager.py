@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from core import firebase_storage, firestore_db
+from core import drive_storage, firestore_db, secret_box, secret_fields
 from rag.embedder import SalesforceVectorStore
 from rag.ingestor import SalesforceKnowledgeIngestor
 
@@ -154,10 +154,13 @@ def delete_project(slug: str) -> None:
     """Remove the project folder, its vector store, and its metadata.
 
     Retries up to 3 times with a short delay to handle lingering
-    ChromaDB file locks on Windows. Also wipes the project's Firebase
-    Storage prefix and its Firestore documents subcollection so we don't
-    leave orphaned data behind.
+    ChromaDB file locks on Windows. Also wipes the project's Drive
+    folder and its Firestore documents subcollection so we don't leave
+    orphaned data behind.
     """
+    # Capture display name before we delete metadata — drive_storage
+    # uses it (with the slug suffix) as the folder label.
+    display_name = (get_metadata(slug) or {}).get("name")
     gc.collect()
     for target in (PROJECTS_DIR / slug, _store_dir(slug)):
         if not target.is_dir():
@@ -177,9 +180,9 @@ def delete_project(slug: str) -> None:
         except Exception as exc:  # noqa: BLE001
             log.warning("Failed to clear Firestore documents for %s: %s", slug, exc)
         try:
-            firebase_storage.delete_all(slug)
+            drive_storage.delete_all(slug, display_name=display_name)
         except Exception as exc:  # noqa: BLE001
-            log.warning("Failed to clear Firebase Storage for %s: %s", slug, exc)
+            log.warning("Failed to clear Drive folder for %s: %s", slug, exc)
         try:
             _fs_delete(slug)
         except Exception:
@@ -246,10 +249,14 @@ def claim_ownership(slug: str, username: str) -> bool:
 # Document management
 #
 # Storage strategy:
-#   STORAGE_BACKEND=firestore  -> bytes in Firebase Storage, metadata in
+#   STORAGE_BACKEND=firestore  -> bytes in a Google Workspace Shared Drive
+#                                 (GDRIVE_SHARED_DRIVE_ID), metadata in
 #                                 Firestore subcollection projects/{slug}/documents.
-#                                 Documents persist across restarts and
-#                                 follow the project to every shared user.
+#                                 Drive folder layout:
+#                                   <SharedDrive>/QA Studio Agents/<project>/file
+#                                 Each metadata row carries `drive_file_id`
+#                                 + `web_view_link` so the UI can deep-link
+#                                 and the indexer can stream the bytes.
 #                                 Only `delete_document` ever removes them.
 #   STORAGE_BACKEND=local      -> bytes on local disk under projects/{slug}/documents
 #                                 (dev-only fallback).
@@ -289,39 +296,33 @@ def _fs_delete_documents(slug: str) -> None:
         doc.reference.delete()
 
 
-def _save_to_local_disk(
+def _save_to_local_disk_only(
     slug: str,
     filename: str,
     content: bytes,
     uploader: str | None,
     content_type: str | None,
-    *,
-    local_only: bool = False,
 ) -> dict[str, Any]:
     """Write *content* to the project's on-disk docs folder and return meta.
 
-    Used both as the default backend in dev mode and as a fallback when
-    Firebase Storage is unreachable (missing bucket, lost network) so a
-    flaky cloud config can never block an upload.
+    Used only by the dev-mode ``STORAGE_BACKEND=local`` path. Cloud
+    deployments now go straight to Drive via :func:`save_file`; there is
+    no local-disk fallback when Drive is unreachable — uploads fail loudly
+    so the operator notices and fixes the Drive setup. The IndexedDB
+    sidecar in the browser remains the user-side safety net.
     """
     docs = _docs_dir(slug)
     docs.mkdir(parents=True, exist_ok=True)
     safe_name = filename.replace("\\", "_").replace("/", "_")
     dest = docs / safe_name
     dest.write_bytes(content)
-    meta: dict[str, Any] = {
+    return {
         "filename": safe_name,
         "size": len(content),
         "content_type": content_type or "",
         "uploaded_by": uploader or "",
         "uploaded_at": datetime.now(timezone.utc).isoformat(),
     }
-    if local_only:
-        # Marker so re-index knows to skip the Storage download for this
-        # file and read it straight off local disk. Also surfaces in the
-        # API so the UI can show a "stored locally" badge if it wants.
-        meta["local_only"] = True
-    return meta
 
 
 def save_file(
@@ -333,40 +334,33 @@ def save_file(
 ) -> dict[str, Any]:
     """Persist a document upload.
 
-    Returns the metadata dict written. When Firestore is enabled the bytes
-    normally go to Firebase Storage and the metadata to a Firestore
-    subcollection. If the bucket is unreachable (e.g. Storage hasn't been
-    provisioned in the Firebase project yet) we transparently fall back to
-    local disk and tag the metadata with ``local_only: true`` so callers
-    (re-index, list, delete) know to skip the cloud round-trip.
+    Returns the metadata dict written. When Firestore is enabled the
+    bytes go to a Google Workspace Shared Drive (under
+    ``QA Studio Agents/<project>/<filename>``) and the metadata
+    (``drive_file_id`` + ``web_view_link`` + size / content-type) is
+    written to the Firestore documents subcollection. Drive failures
+    are surfaced to the caller — there is no transparent local-disk
+    fallback. The browser-side IndexedDB sidecar still keeps a copy
+    on the user's device for the no-network case.
     """
     if firestore_db.is_enabled():
-        try:
-            info = firebase_storage.upload(slug, filename, content, content_type)
-        except Exception as exc:  # noqa: BLE001
-            log.warning(
-                "Firebase Storage upload failed for %s/%s (%s) — falling back "
-                "to local disk so the upload still succeeds.",
-                slug, filename, exc,
-            )
-            meta = _save_to_local_disk(
-                slug, filename, content, uploader, content_type, local_only=True,
-            )
-            _fs_save_doc_meta(slug, meta)
-            return meta
-
+        display_name = (get_metadata(slug) or {}).get("name")
+        info = drive_storage.upload(
+            slug, filename, content, content_type, display_name=display_name,
+        )
         meta = {
             "filename": info["filename"],
             "size": info["size"],
             "content_type": info["content_type"],
-            "storage_path": info["storage_path"],
+            "drive_file_id": info.get("drive_file_id", ""),
+            "web_view_link": info.get("web_view_link", ""),
             "uploaded_by": uploader or "",
             "uploaded_at": datetime.now(timezone.utc).isoformat(),
         }
         _fs_save_doc_meta(slug, meta)
         return meta
 
-    return _save_to_local_disk(slug, filename, content, uploader, content_type)
+    return _save_to_local_disk_only(slug, filename, content, uploader, content_type)
 
 
 def list_documents(slug: str) -> list[dict[str, Any]]:
@@ -410,24 +404,16 @@ def list_documents(slug: str) -> list[dict[str, Any]]:
 def delete_document(slug: str, filename: str) -> None:
     """Remove a single document. Only ever called via the explicit DELETE route.
 
-    We always try BOTH Storage and local disk because uploads can land in
-    either place (cloud-stored happy path, or local fallback when Storage
-    is unreachable). Each side is best-effort so a missing blob or file
-    doesn't block the metadata cleanup.
+    Best-effort: a missing Drive object or Firestore row should never
+    block the rest of the cleanup. The browser-side IndexedDB sidecar
+    is cleared by the frontend separately.
     """
     if firestore_db.is_enabled():
+        display_name = (get_metadata(slug) or {}).get("name")
         try:
-            firebase_storage.delete(slug, filename)
+            drive_storage.delete(slug, filename, display_name=display_name)
         except Exception as exc:  # noqa: BLE001
-            log.debug("Storage delete %s/%s skipped: %s", slug, filename, exc)
-        # Always try local disk too — file may have been written locally
-        # because Storage was offline at upload time.
-        local_target = _docs_dir(slug) / filename
-        if local_target.is_file():
-            try:
-                local_target.unlink()
-            except OSError as exc:
-                log.warning("Local delete %s/%s failed: %s", slug, filename, exc)
+            log.debug("Drive delete %s/%s skipped: %s", slug, filename, exc)
         try:
             _fs_delete_doc_meta(slug, filename)
         except Exception as exc:  # noqa: BLE001
@@ -445,60 +431,24 @@ def delete_document(slug: str, filename: str) -> None:
 def _materialize_docs_for_indexing(slug: str) -> tuple[Path, tempfile.TemporaryDirectory | None]:
     """Return a Path the ingestor can scan + an optional tempdir to clean up.
 
-    For Firestore-backed projects we download every blob into a temp dir
-    so existing on-disk loaders (PyPDFLoader, openpyxl, etc.) keep working
-    without each one needing a Firebase-aware variant.
-
-    Two important fallbacks live here:
-
-    1. Documents marked ``local_only`` in Firestore (uploaded while the
-       Storage bucket was unreachable) are read straight off the project's
-       on-disk folder and copied into the same temp dir alongside any
-       cloud-fetched blobs. That way re-index keeps working even if some
-       files never made it to Storage.
-
-    2. If ``download_all_to`` itself fails — e.g. the bucket is gone —
-       we fall back to indexing whatever sits in the local docs folder
-       so the operator at least gets a partial index instead of a 500.
+    For Firestore-backed projects we download every Drive object into a
+    temp dir so existing on-disk loaders (PyPDFLoader, openpyxl, etc.)
+    keep working without each one needing a Drive-aware variant.
 
     For local-disk projects we just point at the existing folder.
     """
     if firestore_db.is_enabled():
         tmp = tempfile.TemporaryDirectory(prefix=f"sf-qa-rag-{slug}-")
-        tmp_path = Path(tmp.name)
+        display_name = (get_metadata(slug) or {}).get("name")
         try:
-            firebase_storage.download_all_to(slug, tmp.name)
+            drive_storage.download_all_to(slug, tmp.name, display_name=display_name)
         except Exception as exc:  # noqa: BLE001
             log.warning(
-                "Storage download for index of %s failed (%s) — using "
-                "local disk fallback. Re-indexing will only see files "
-                "saved locally.", slug, exc,
+                "Drive download for index of %s failed (%s) — re-index "
+                "will return zero chunks until Drive is reachable.",
+                slug, exc,
             )
-        # Copy any local-only files (or every local file as a last-ditch
-        # fallback when Storage failed entirely) into the temp dir so the
-        # ingestor sees the full set in one place.
-        local_dir = _docs_dir(slug)
-        if local_dir.is_dir():
-            try:
-                local_only_names: set[str] = {
-                    m.get("filename", "") for m in _fs_list_doc_meta(slug)
-                    if m.get("local_only")
-                }
-            except Exception:  # noqa: BLE001
-                local_only_names = set()
-            for src in local_dir.iterdir():
-                if not src.is_file():
-                    continue
-                # Always copy local-only files; also copy anything missing
-                # from tmp_path so the bucket-unreachable case still works.
-                dst = tmp_path / src.name
-                if dst.exists() and src.name not in local_only_names:
-                    continue
-                try:
-                    shutil.copy2(src, dst)
-                except OSError as exc:
-                    log.warning("Failed to stage local doc %s: %s", src, exc)
-        return tmp_path, tmp
+        return Path(tmp.name), tmp
     return _docs_dir(slug), None
 
 
@@ -581,6 +531,43 @@ def _write_local_mcp(slug: str, servers: list[dict[str, Any]]) -> None:
     path.write_text(json.dumps(servers, indent=2), encoding="utf-8")
 
 
+def _encrypt_server_for_storage(server: dict[str, Any]) -> dict[str, Any]:
+    """Return a copy of *server* whose ``headers`` is an encrypted JSON blob.
+
+    MCP auth headers (``Authorization: Bearer ...``, signed cookies,
+    etc.) are the most sensitive part of an MCP config. We encrypt the
+    entire dict as a single JSON string so even header *names* are
+    hidden — leaking that a server uses ``X-Internal-Token`` is itself
+    a clue. When encryption is disabled, ``headers`` is left as the
+    plain dict so a fresh dev install keeps working.
+    """
+    out = dict(server)
+    headers = out.get("headers")
+    if headers and isinstance(headers, dict) and secret_box.is_enabled():
+        out["headers"] = secret_fields.encrypt_secret(json.dumps(headers))
+    return out
+
+
+def _decrypt_server_from_storage(server: dict[str, Any]) -> dict[str, Any]:
+    """Inverse of :func:`_encrypt_server_for_storage`.
+
+    Tolerates both shapes (encrypted string or legacy plain dict) so
+    rows written before encryption was enabled still load.
+    """
+    out = dict(server)
+    headers = out.get("headers")
+    if isinstance(headers, str) and secret_box.is_encrypted(headers):
+        try:
+            decoded = secret_fields.decrypt_secret(headers)
+            out["headers"] = json.loads(decoded) if decoded else {}
+        except Exception:
+            log.exception("MCP headers decrypt failed for server %s", server.get("id"))
+            out["headers"] = {}
+    elif headers is None:
+        out["headers"] = {}
+    return out
+
+
 def _normalize_server_payload(payload: dict[str, Any]) -> dict[str, Any]:
     """Coerce a partial server payload to the canonical wire shape.
 
@@ -602,7 +589,11 @@ def _normalize_server_payload(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def list_mcp_servers(slug: str) -> list[dict[str, Any]]:
-    """Return all MCP server configs for a project (oldest first)."""
+    """Return all MCP server configs for a project (oldest first).
+
+    Decrypts any encrypted ``headers`` blobs on the way out so callers
+    (mcp_source, the test endpoint) always see a plain dict.
+    """
     if firestore_db.is_enabled():
         items: list[dict[str, Any]] = []
         for d in _mcp_collection(slug).stream():
@@ -610,10 +601,10 @@ def list_mcp_servers(slug: str) -> list[dict[str, Any]]:
                 continue
             data = d.to_dict() or {}
             data.setdefault("id", d.id)
-            items.append(data)
+            items.append(_decrypt_server_from_storage(data))
         items.sort(key=lambda m: m.get("created_at") or "")
         return items
-    return _read_local_mcp(slug)
+    return [_decrypt_server_from_storage(s) for s in _read_local_mcp(slug)]
 
 
 def add_mcp_server(slug: str, payload: dict[str, Any], created_by: str = "") -> dict[str, Any]:
@@ -639,40 +630,51 @@ def add_mcp_server(slug: str, payload: dict[str, Any], created_by: str = "") -> 
         "created_by": created_by,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
+    persisted = _encrypt_server_for_storage(server)
     if firestore_db.is_enabled():
-        _mcp_collection(slug).document(server["id"]).set(server)
+        _mcp_collection(slug).document(server["id"]).set(persisted)
     else:
         existing = _read_local_mcp(slug)
-        existing.append(server)
+        existing.append(persisted)
         _write_local_mcp(slug, existing)
     _invalidate_mcp_cache(slug)
     return server
 
 
 def update_mcp_server(slug: str, server_id: str, payload: dict[str, Any]) -> dict[str, Any] | None:
-    """Patch an existing server. Returns the merged doc or None if missing."""
+    """Patch an existing server. Returns the merged doc or None if missing.
+
+    The merge happens in plaintext (decrypt the stored row first, then
+    overlay the partial payload, then re-encrypt). This means a PATCH
+    that doesn't touch ``headers`` keeps the existing headers intact
+    rather than reading back the ciphertext as if it were the new
+    plaintext value.
+    """
     norm = _normalize_server_payload(payload)
     if firestore_db.is_enabled():
         ref = _mcp_collection(slug).document(server_id)
         snap = ref.get()
         if not snap.exists:
             return None
-        merged = {**(snap.to_dict() or {}), **norm}
+        existing = _decrypt_server_from_storage(snap.to_dict() or {})
+        merged = {**existing, **norm}
         merged["id"] = server_id
-        ref.set(merged)
+        ref.set(_encrypt_server_for_storage(merged))
         _invalidate_mcp_cache(slug)
         return merged
 
-    existing = _read_local_mcp(slug)
+    existing_list = _read_local_mcp(slug)
     found = None
-    for i, s in enumerate(existing):
-        if s.get("id") == server_id:
-            existing[i] = {**s, **norm, "id": server_id}
-            found = existing[i]
+    for i, raw in enumerate(existing_list):
+        if raw.get("id") == server_id:
+            current = _decrypt_server_from_storage(raw)
+            merged = {**current, **norm, "id": server_id}
+            existing_list[i] = _encrypt_server_for_storage(merged)
+            found = merged
             break
     if found is None:
         return None
-    _write_local_mcp(slug, existing)
+    _write_local_mcp(slug, existing_list)
     _invalidate_mcp_cache(slug)
     return found
 

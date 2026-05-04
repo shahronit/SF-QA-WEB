@@ -23,10 +23,19 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
-from core import firestore_db, gdrive_client
+from core import firestore_db, gdrive_client, secret_fields
 from routers.deps import get_current_user
 
 router = APIRouter()
+
+# Fields in a GDrive session that hold sensitive credential material;
+# everything else (token_uri, scopes, expiry, email, last_folder, etc.)
+# stays plaintext so the operator can still tell which Google account
+# is linked without granting decrypt access.
+_GDRIVE_SESSION_PLAINTEXT_FIELDS = {
+    "token_uri", "scopes", "expiry", "client_id",
+    "user_email", "email", "last_folder", "created", "updated",
+}
 
 # Per-process session and pending-state caches.
 _SESSIONS: dict[str, dict[str, Any]] = {}
@@ -43,19 +52,32 @@ _PENDING_STATES_LOCK = Lock()
 # ---------------------------------------------------------------------------
 
 def _save_session(username: str, session: dict[str, Any]) -> None:
-    """Persist a Google session to memory and (optionally) Firestore."""
+    """Persist a Google session to memory and (optionally) Firestore.
+
+    The in-memory copy stays plaintext for the GDriveClient's hot path;
+    Firestore receives an encrypted copy of every credential field
+    (access/refresh tokens, client_secret) so a database dump on its
+    own does not leak Google OAuth material.
+    """
     with _SESSIONS_LOCK:
         _SESSIONS[username] = session
     if firestore_db.is_enabled():
         try:
             db = firestore_db.get_db()
-            db.collection(firestore_db.GDRIVE_SESSIONS).document(username).set(session)
+            persisted = secret_fields.encrypt_dict_values(
+                session, exclude=_GDRIVE_SESSION_PLAINTEXT_FIELDS,
+            )
+            db.collection(firestore_db.GDRIVE_SESSIONS).document(username).set(persisted)
         except Exception:
             pass
 
 
 def _load_session(username: str) -> dict[str, Any] | None:
-    """Look up a Google session for *username* (memory first, then Firestore)."""
+    """Look up a Google session for *username* (memory first, then Firestore).
+
+    Decrypts any encrypted values pulled from Firestore before caching
+    them in memory so the GDriveClient always sees plaintext credentials.
+    """
     with _SESSIONS_LOCK:
         session = _SESSIONS.get(username)
     if session:
@@ -65,7 +87,10 @@ def _load_session(username: str) -> dict[str, Any] | None:
             db = firestore_db.get_db()
             doc = db.collection(firestore_db.GDRIVE_SESSIONS).document(username).get()
             if doc.exists:
-                session = doc.to_dict()
+                raw = doc.to_dict() or {}
+                session = secret_fields.decrypt_dict_values(
+                    raw, exclude=_GDRIVE_SESSION_PLAINTEXT_FIELDS,
+                )
                 with _SESSIONS_LOCK:
                     _SESSIONS[username] = session
                 return session
