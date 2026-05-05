@@ -1,0 +1,6 @@
+# Force LF line endings on shell scripts so the Docker image (Linux)
+# can execute them. Without this rule a Windows checkout writes CRLF
+# and `/bin/sh` reports `start.sh: not found` because the shebang
+# resolves to `/bin/sh\r`.
+*.sh text eol=lf
+Dockerfile text eol=lf

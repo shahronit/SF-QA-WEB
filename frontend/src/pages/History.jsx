@@ -7,6 +7,7 @@ import MarkdownTableCell from '../components/markdown/MarkdownTableCell'
 import MarkdownTableScroll from '../components/markdown/MarkdownTableScroll'
 import api from '../api/client'
 import toast from 'react-hot-toast'
+import { useAuth } from '../context/AuthContext'
 import PageHeader from '../components/PageHeader'
 import ToonCard from '../components/ToonCard'
 import TestManagementPush from '../components/TestManagementPush'
@@ -32,15 +33,21 @@ function fmtTokens(n) {
 /**
  * Compact horizontal usage badge for a History row.
  *
- * Shape: [ provider · model ]  [ 🪙 1.2k · 891 · 2.1k ]
- * Hidden when the record has no usage data (older runs predate the
- * tracking; cache-hit records always include the replayed counts).
+ * Shape (admin):     [ provider · model ]  [ 🪙 1.2k · 891 · 2.1k ]  [ 🛠 Repaired ]
+ * Shape (non-admin): [ 🛠 Repaired ]
+ *
+ * Cost-side metadata (resolved model + token counts) is admin-only —
+ * the Repaired chip is visible to everyone because it explains a
+ * visible behaviour change for that run. Returns ``null`` when there's
+ * nothing left to show after gating.
  */
-function HistoryUsageBadges({ rec }) {
+function HistoryUsageBadges({ rec, isAdmin }) {
   const provider = rec.provider || ''
   const model = rec.model || ''
   const usage = rec.usage || null
-  if (!provider && !model && !usage) return null
+  const showCostSide = isAdmin && (!!provider || !!model || !!usage)
+  const showRepaired = !!rec.repaired
+  if (!showCostSide && !showRepaired) return null
 
   const source = usage?.source || (rec.cache_hit ? 'cached' : 'live')
   const palette = source === 'cached'
@@ -51,7 +58,7 @@ function HistoryUsageBadges({ rec }) {
 
   return (
     <span className="inline-flex items-center gap-1.5">
-      {(provider || model) && (
+      {showCostSide && (provider || model) && (
         <span
           className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-violet-50 border border-violet-200 text-violet-700 text-[10px] font-bold"
           title={`Routed to ${provider}${model ? ` · ${model}` : ''}`}
@@ -61,7 +68,7 @@ function HistoryUsageBadges({ rec }) {
           {model && <><span className="opacity-40">·</span><span>{model}</span></>}
         </span>
       )}
-      {usage && (
+      {showCostSide && usage && (
         <span
           className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full border ${palette} text-[10px] font-bold tabular-nums`}
           title={`Prompt ${fmtTokens(usage.prompt_tokens)} · Completion ${fmtTokens(usage.completion_tokens)} · Total ${fmtTokens(usage.total_tokens)} (${source})`}
@@ -74,7 +81,7 @@ function HistoryUsageBadges({ rec }) {
           <span className="font-extrabold">{fmtTokens(usage.total_tokens)}</span>
         </span>
       )}
-      {rec.repaired && (
+      {showRepaired && (
         <span
           className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-fuchsia-50 border border-fuchsia-200 text-fuchsia-700 text-[10px] font-bold uppercase tracking-wider"
           title="The orchestrator's auto-repair pass kicked in for this run — the first attempt didn't match the required structure, so a second LLM call ran with a strict format clamp."
@@ -102,6 +109,8 @@ export default function History() {
   const [records, setRecords] = useState([])
   const [agentFilter, setAgentFilter] = useState('')
   const [expanded, setExpanded] = useState(null)
+  const { user } = useAuth()
+  const isAdmin = !!user?.is_admin
 
   const load = useCallback(async () => {
     try {
@@ -256,7 +265,7 @@ export default function History() {
                 <div className="flex items-center gap-3 flex-wrap">
                   <span className="font-bold text-toon-navy">{label}</span>
                   {rec.project && <span className="toon-badge bg-toon-blue/10 text-toon-blue text-xs">📂 {rec.project}</span>}
-                  <HistoryUsageBadges rec={rec} />
+                  <HistoryUsageBadges rec={rec} isAdmin={isAdmin} />
                 </div>
                 <span className="text-xs text-gray-400">{ts}</span>
               </div>

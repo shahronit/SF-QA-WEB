@@ -799,11 +799,90 @@ class JiraClient:
     # Bug creation
     # ------------------------------------------------------------------
 
+    def _fetch_bug_field_whitelist(self, project_key: str) -> dict[str, Any]:
+        """Return which Bug fields the target project actually accepts.
+
+        Returns a dict shaped like::
+
+            {
+                "fields": {"summary", "priority", "labels", "components",
+                           "environment", "versions", ...},
+                "severity_field_id": "customfield_10010" or None,
+            }
+
+        Built from Jira's createmeta endpoint so projects that don't expose
+        a Severity custom field, or projects that have customised which
+        standard fields are required vs hidden, never 400 the create call.
+        Cached per-instance so back-to-back bug pushes only pay one extra
+        round-trip.
+        """
+        cache = getattr(self, "_bug_field_cache", None)
+        if cache is None:
+            cache = {}
+            self._bug_field_cache = cache
+        cached = cache.get(project_key)
+        if cached is not None:
+            return cached
+
+        accepted_ids: set[str] = set()
+        severity_id: str | None = None
+        try:
+            safe_key = urllib.parse.quote(project_key, safe="")
+            data = self._request(
+                "GET",
+                f"/issue/createmeta?projectKeys={safe_key}"
+                f"&issuetypeNames=Bug&expand=projects.issuetypes.fields",
+            )
+            for proj in (data or {}).get("projects", []) or []:
+                for itype in proj.get("issuetypes", []) or []:
+                    if (itype.get("name") or "").lower() != "bug":
+                        continue
+                    for fid, meta in (itype.get("fields") or {}).items():
+                        accepted_ids.add(fid)
+                        if (
+                            severity_id is None
+                            and fid.startswith("customfield_")
+                            and (meta.get("name") or "").strip().lower() == "severity"
+                        ):
+                            severity_id = fid
+        except Exception:  # noqa: BLE001
+            # createmeta requires the "Browse projects" permission, which
+            # most service accounts have but is occasionally missing on
+            # locked-down workspaces. When the lookup fails we leave the
+            # whitelist empty and let the actual create call decide what
+            # to do — the standard fields below are universally accepted
+            # so the bug still lands, just without Severity.
+            log.warning(
+                "createmeta lookup failed for %s; will only send standard Bug fields",
+                project_key,
+            )
+
+        # When createmeta couldn't enumerate the project (empty set), fall
+        # back to the universally-accepted standard Bug field set. Severity
+        # is intentionally absent here because it's a custom field that
+        # only exists when createmeta confirmed it.
+        if not accepted_ids:
+            accepted_ids = {
+                "summary", "issuetype", "project", "description",
+                "priority", "labels", "components", "environment", "versions",
+            }
+
+        result = {"fields": accepted_ids, "severity_field_id": severity_id}
+        cache[project_key] = result
+        return result
+
     def create_bug(
         self,
         project_key: str,
         summary: str,
         description_markdown: str,
+        *,
+        priority: str | None = None,
+        severity: str | None = None,
+        components: list[str] | None = None,
+        labels: list[str] | None = None,
+        environment: str | None = None,
+        affects_versions: list[str] | None = None,
         rich_adf: bool = True,
     ) -> dict[str, str]:
         """Create a Bug issue and return ``{key, url}``.
@@ -815,19 +894,64 @@ class JiraClient:
         fenced code blocks, and bold/italic/code marks - the layout the
         Astound bug-report agent emits. Set *rich_adf* to false to fall
         back to the simple paragraph-only converter.
+
+        Optional structured fields (priority/severity/components/labels/
+        environment/affects_versions) are intersected with the project's
+        Bug createmeta before being added to the payload. Anything the
+        project doesn't accept is silently dropped so a missing custom
+        field never breaks the push.
         """
         if rich_adf:
             description_adf = _markdown_to_adf_rich(description_markdown)
         else:
             description_adf = _markdown_to_adf(description_markdown)
-        payload = {
-            "fields": {
-                "project": {"key": project_key},
-                "summary": summary,
-                "issuetype": {"name": "Bug"},
-                "description": description_adf,
-            }
+
+        whitelist = self._fetch_bug_field_whitelist(project_key)
+        accepted = whitelist["fields"]
+        severity_id = whitelist["severity_field_id"]
+
+        fields: dict[str, Any] = {
+            "project": {"key": project_key},
+            "summary": summary,
+            "issuetype": {"name": "Bug"},
+            "description": description_adf,
         }
+
+        priority_v = (priority or "").strip()
+        if priority_v and "priority" in accepted:
+            fields["priority"] = {"name": priority_v}
+
+        if components and "components" in accepted:
+            cleaned = [c.strip() for c in components if (c or "").strip()]
+            if cleaned:
+                fields["components"] = [{"name": c} for c in cleaned]
+
+        if labels and "labels" in accepted:
+            cleaned = [l.strip() for l in labels if (l or "").strip()]
+            if cleaned:
+                # Jira labels can't contain spaces; collapse to underscores
+                # so a typo like "needs review" doesn't 400 the request.
+                fields["labels"] = [l.replace(" ", "_") for l in cleaned]
+
+        environment_v = (environment or "").strip()
+        if environment_v and "environment" in accepted:
+            # Environment is plain text in most Cloud configs but ADF in
+            # some — send as ADF so both shapes accept it.
+            fields["environment"] = _markdown_to_adf(environment_v)
+
+        if affects_versions and "versions" in accepted:
+            cleaned = [v.strip() for v in affects_versions if (v or "").strip()]
+            if cleaned:
+                fields["versions"] = [{"name": v} for v in cleaned]
+
+        severity_v = (severity or "").strip()
+        if severity_v and severity_id:
+            # Severity is a CUSTOM field that varies per Jira install.
+            # Cloud's "Severity" custom field expects {"value": "<name>"}
+            # for the standard select option shape.
+            fields[severity_id] = {"value": severity_v}
+
+        payload = {"fields": fields}
         result = self._request("POST", "/issue", payload)
         issue_key = result.get("key", "")
         return {

@@ -25,6 +25,7 @@ const QA_MODES = [
 const TABS = [
   { id: 'users', label: 'Users', icon: '👥' },
   { id: 'prompts', label: 'Default Prompts', icon: '📝' },
+  { id: 'usage', label: 'Usage', icon: '🪙' },
 ]
 
 export default function Admin() {
@@ -107,6 +108,7 @@ export default function Admin() {
         />
       )}
       {tab === 'prompts' && <DefaultPromptsTab />}
+      {tab === 'usage' && <UsageTab />}
     </div>
   )
 }
@@ -1191,6 +1193,391 @@ function ModelOverrideRow({
             Clear
           </button>
         </div>
+      </div>
+    </div>
+  )
+}
+
+
+// ===========================================================================
+// Usage tab — admin-only token-spend dashboard across ALL users
+// ===========================================================================
+
+// Local token formatter — same rules as ReportPanel/History formatters.
+// Kept inline because the Admin page is a single-file panel and we
+// don't want to introduce a shared util module just for this.
+function fmtTokens(n) {
+  if (n == null || Number.isNaN(n)) return '—'
+  const v = Number(n)
+  if (v < 1000) return String(v)
+  if (v < 10000) return v.toLocaleString()
+  return `${(v / 1000).toFixed(1).replace(/\.0$/, '')}k`
+}
+
+function fmtTs(ts) {
+  if (!ts) return ''
+  // Normalize "2026-05-04T12:34:56.789Z" to "2026-05-04 12:34:56" so
+  // the table stays narrow without losing the second-precision that
+  // matters when correlating two near-simultaneous runs.
+  return String(ts).slice(0, 19).replace('T', ' ')
+}
+
+function UsageTab() {
+  const [data, setData] = useState({
+    records: [],
+    summary: { totals: {}, per_user: [], per_agent: [], per_model: [] },
+  })
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  // Server-side filters — sent as query params on every reload so the
+  // backend never has to ship the full collection when the admin is
+  // narrowing a question (which user is heaviest? which agent costs
+  // the most?).
+  const [filters, setFilters] = useState({
+    limit: 500,
+    agent: '',
+    username: '',
+    since: '',
+  })
+
+  const reload = async () => {
+    setLoading(true)
+    setError('')
+    try {
+      const params = {}
+      if (filters.limit) params.limit = filters.limit
+      if (filters.agent) params.agent = filters.agent
+      if (filters.username.trim()) params.username = filters.username.trim()
+      if (filters.since) params.since = new Date(filters.since).toISOString()
+      const { data: payload } = await api.get('/admin/usage', { params })
+      setData({
+        records: payload?.records || [],
+        summary: payload?.summary || { totals: {}, per_user: [], per_agent: [], per_model: [] },
+      })
+    } catch (err) {
+      const detail = err?.response?.data?.detail || err?.message || 'Failed to load usage'
+      setError(String(detail))
+      toast.error(detail)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => { reload() }, [])  // initial load only; filter changes apply on Apply click
+
+  const totals = data.summary.totals || {}
+
+  return (
+    <div className="space-y-4">
+      {/* Summary cards */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <SummaryCard
+          icon="🏃"
+          label="Total runs"
+          value={(totals.runs ?? 0).toLocaleString()}
+          gradient="from-toon-blue to-cyan-400"
+        />
+        <SummaryCard
+          icon="⬇️"
+          label="Prompt tokens"
+          value={fmtTokens(totals.prompt_tokens)}
+          subtitle={(totals.prompt_tokens ?? 0).toLocaleString()}
+          gradient="from-emerald-500 to-teal-400"
+        />
+        <SummaryCard
+          icon="⬆️"
+          label="Completion tokens"
+          value={fmtTokens(totals.completion_tokens)}
+          subtitle={(totals.completion_tokens ?? 0).toLocaleString()}
+          gradient="from-amber-500 to-orange-400"
+        />
+        <SummaryCard
+          icon="🪙"
+          label="Total tokens"
+          value={fmtTokens(totals.total_tokens)}
+          subtitle={(totals.total_tokens ?? 0).toLocaleString()}
+          gradient="from-violet-500 to-fuchsia-500"
+        />
+      </div>
+
+      {/* Filters */}
+      <div className="toon-card !py-3">
+        <div className="flex items-end gap-3 flex-wrap">
+          <FilterField label="Agent">
+            <select
+              className="toon-input !py-1.5 !px-2 text-sm"
+              value={filters.agent}
+              onChange={e => setFilters(f => ({ ...f, agent: e.target.value }))}
+            >
+              <option value="">All</option>
+              {ALL_AGENTS.map(a => (
+                <option key={a.slug} value={a.slug}>{a.label}</option>
+              ))}
+            </select>
+          </FilterField>
+          <FilterField label="Username">
+            <input
+              type="text"
+              className="toon-input !py-1.5 !px-2 text-sm"
+              placeholder="exact match"
+              value={filters.username}
+              onChange={e => setFilters(f => ({ ...f, username: e.target.value }))}
+            />
+          </FilterField>
+          <FilterField label="Since">
+            <input
+              type="date"
+              className="toon-input !py-1.5 !px-2 text-sm"
+              value={filters.since}
+              onChange={e => setFilters(f => ({ ...f, since: e.target.value }))}
+            />
+          </FilterField>
+          <FilterField label="Limit">
+            <select
+              className="toon-input !py-1.5 !px-2 text-sm"
+              value={filters.limit}
+              onChange={e => setFilters(f => ({ ...f, limit: Number(e.target.value) }))}
+            >
+              {[100, 250, 500, 1000, 2000].map(n => (
+                <option key={n} value={n}>{n}</option>
+              ))}
+            </select>
+          </FilterField>
+          <button
+            type="button"
+            onClick={reload}
+            disabled={loading}
+            className="toon-btn toon-btn-blue text-sm py-2 px-4"
+          >
+            {loading ? '…' : '↻ Apply'}
+          </button>
+          {(filters.agent || filters.username || filters.since) && (
+            <button
+              type="button"
+              onClick={() => setFilters({ limit: 500, agent: '', username: '', since: '' })}
+              className="text-xs font-semibold text-gray-500 hover:text-toon-coral"
+            >
+              Clear filters
+            </button>
+          )}
+        </div>
+        {error && (
+          <div className="mt-2 text-xs text-toon-coral font-semibold">
+            {error}
+          </div>
+        )}
+      </div>
+
+      {/* Leaderboards */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+        <RankingTable
+          title="By user"
+          rows={data.summary.per_user}
+          nameKey="username"
+          nameLabel="User"
+          emptyHint="No attributed runs yet."
+        />
+        <RankingTable
+          title="By agent"
+          rows={data.summary.per_agent}
+          nameKey="agent"
+          nameLabel="Agent"
+          renderName={(name) => AGENT_LABEL[name] || name}
+          emptyHint="No agent runs in this window."
+        />
+      </div>
+
+      {/* Per-model rollup */}
+      <RankingTable
+        title="By model"
+        rows={data.summary.per_model}
+        nameKey="model"
+        nameLabel="Model"
+        renderName={(_name, row) => (
+          <span>
+            <span className="text-gray-500">{row.provider || '—'}</span>
+            <span className="opacity-40 mx-1">·</span>
+            <span>{row.model || '—'}</span>
+          </span>
+        )}
+        emptyHint="No model usage in this window."
+      />
+
+      {/* Recent runs */}
+      <div className="toon-card !p-0 overflow-hidden">
+        <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <span className="text-sm font-bold text-toon-navy">Recent runs</span>
+            <span className="text-xs text-gray-500">
+              {loading ? 'loading…' : `${data.records.length} rows`}
+            </span>
+          </div>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-gray-50 text-gray-500 text-[11px] uppercase tracking-wider">
+              <tr>
+                <th className="text-left px-3 py-2 font-bold">When</th>
+                <th className="text-left px-3 py-2 font-bold">User</th>
+                <th className="text-left px-3 py-2 font-bold">Agent</th>
+                <th className="text-left px-3 py-2 font-bold">Model</th>
+                <th className="text-right px-3 py-2 font-bold">Prompt</th>
+                <th className="text-right px-3 py-2 font-bold">Completion</th>
+                <th className="text-right px-3 py-2 font-bold">Total</th>
+                <th className="text-center px-3 py-2 font-bold">Flags</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {data.records.map((r, i) => {
+                const usage = r.usage || {}
+                return (
+                  <tr key={i} className="hover:bg-gray-50">
+                    <td className="px-3 py-2 text-gray-500 tabular-nums whitespace-nowrap">
+                      {fmtTs(r.ts)}
+                    </td>
+                    <td className="px-3 py-2 font-semibold text-toon-navy">
+                      {r.username || <span className="text-gray-400">(unknown)</span>}
+                    </td>
+                    <td className="px-3 py-2">
+                      {AGENT_LABEL[r.agent] || r.agent}
+                    </td>
+                    <td className="px-3 py-2 text-gray-600">
+                      <span className="text-gray-400">{r.provider || '—'}</span>
+                      <span className="opacity-40 mx-1">·</span>
+                      <span>{r.model || '—'}</span>
+                    </td>
+                    <td className="px-3 py-2 text-right tabular-nums">
+                      {fmtTokens(usage.prompt_tokens)}
+                    </td>
+                    <td className="px-3 py-2 text-right tabular-nums">
+                      {fmtTokens(usage.completion_tokens)}
+                    </td>
+                    <td className="px-3 py-2 text-right tabular-nums font-extrabold">
+                      {fmtTokens(usage.total_tokens)}
+                    </td>
+                    <td className="px-3 py-2 text-center">
+                      <div className="inline-flex items-center gap-1">
+                        {r.cache_hit && (
+                          <span
+                            title="Replayed from response cache"
+                            className="px-1.5 py-0.5 rounded bg-sky-100 text-sky-700 text-[10px] font-bold"
+                          >
+                            cached
+                          </span>
+                        )}
+                        {r.repaired && (
+                          <span
+                            title="Auto-repair pass kicked in"
+                            className="px-1.5 py-0.5 rounded bg-fuchsia-100 text-fuchsia-700 text-[10px] font-bold"
+                          >
+                            repaired
+                          </span>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                )
+              })}
+              {!loading && data.records.length === 0 && (
+                <tr>
+                  <td colSpan={8} className="px-3 py-6 text-center text-sm text-gray-400">
+                    No runs match the current filters.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function SummaryCard({ icon, label, value, subtitle, gradient }) {
+  return (
+    <div className="toon-card !p-3">
+      <div className="flex items-center gap-3">
+        <span className={`w-10 h-10 rounded-xl bg-gradient-to-br ${gradient} flex items-center justify-center text-white text-base shadow-toon`}>
+          {icon}
+        </span>
+        <div className="min-w-0">
+          <div className="text-[10px] uppercase tracking-wider text-gray-500 font-bold">
+            {label}
+          </div>
+          <div className="text-xl font-extrabold text-toon-navy tabular-nums">
+            {value}
+          </div>
+          {subtitle && (
+            <div className="text-[10px] text-gray-400 tabular-nums">{subtitle}</div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function FilterField({ label, children }) {
+  return (
+    <label className="flex flex-col gap-1">
+      <span className="text-[10px] uppercase tracking-wider text-gray-500 font-bold">
+        {label}
+      </span>
+      {children}
+    </label>
+  )
+}
+
+function RankingTable({ title, rows, nameKey, nameLabel, renderName, emptyHint }) {
+  const safeRows = Array.isArray(rows) ? rows : []
+  return (
+    <div className="toon-card !p-0 overflow-hidden">
+      <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
+        <span className="text-sm font-bold text-toon-navy">{title}</span>
+        <span className="text-xs text-gray-500">{safeRows.length} rows</span>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead className="bg-gray-50 text-gray-500 text-[11px] uppercase tracking-wider">
+            <tr>
+              <th className="text-left px-3 py-2 font-bold">{nameLabel}</th>
+              <th className="text-right px-3 py-2 font-bold">Runs</th>
+              <th className="text-right px-3 py-2 font-bold">Prompt</th>
+              <th className="text-right px-3 py-2 font-bold">Completion</th>
+              <th className="text-right px-3 py-2 font-bold">Total</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-100">
+            {safeRows.map((row, i) => {
+              const name = row[nameKey]
+              return (
+                <tr key={i} className="hover:bg-gray-50">
+                  <td className="px-3 py-2 font-semibold text-toon-navy">
+                    {renderName ? renderName(name, row) : (name || '(unknown)')}
+                  </td>
+                  <td className="px-3 py-2 text-right tabular-nums">
+                    {(row.runs ?? 0).toLocaleString()}
+                  </td>
+                  <td className="px-3 py-2 text-right tabular-nums">
+                    {fmtTokens(row.prompt_tokens)}
+                  </td>
+                  <td className="px-3 py-2 text-right tabular-nums">
+                    {fmtTokens(row.completion_tokens)}
+                  </td>
+                  <td className="px-3 py-2 text-right tabular-nums font-extrabold">
+                    {fmtTokens(row.total_tokens)}
+                  </td>
+                </tr>
+              )
+            })}
+            {safeRows.length === 0 && (
+              <tr>
+                <td colSpan={5} className="px-3 py-6 text-center text-sm text-gray-400">
+                  {emptyHint || 'Nothing to show.'}
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
       </div>
     </div>
   )
