@@ -8,10 +8,12 @@ import MarkdownTableScroll from './markdown/MarkdownTableScroll'
 import api from '../api/client'
 import toast from 'react-hot-toast'
 import { getAgent } from '../config/agentMeta'
+import { useAuth } from '../context/AuthContext'
 import Sparkline from './motion/Sparkline'
 import TestManagementPush from './TestManagementPush'
 import JiraCommentPush from './JiraCommentPush'
 import JiraBugPush from './JiraBugPush'
+import DefectReportCard from './DefectReportCard'
 import ExportColumnPicker, { detectMarkdownTables } from './ExportColumnPicker'
 import ExecutionBars from './insights/ExecutionBars'
 import CoverageDonut from './insights/CoverageDonut'
@@ -226,6 +228,11 @@ export default function ReportPanel({
   const meta = getAgent(agentName)
   const { available: insightsAvailable, visual } = useInsightAvailable(agentName, content)
   const sparklineValues = useMemo(() => buildSparklineFromText(content), [content])
+  // Cost-side metadata (resolved model + token usage) is admin-only.
+  // Non-admins still see the "Auto-repaired" pill — that's a quality
+  // signal that helps them understand why the output is what it is.
+  const { user } = useAuth()
+  const isAdmin = !!user?.is_admin
 
   useEffect(() => {
     if (tab === 'insights' && !insightsAvailable) setTab('formatted')
@@ -329,10 +336,14 @@ export default function ReportPanel({
               the title so users see at a glance which backend produced
               the report and how many tokens it cost. The chips render
               themselves null when the backend hasn't reported usage
-              yet (e.g. while the stream is still in-flight). */}
+              yet (e.g. while the stream is still in-flight).
+
+              Model + token chips are admin-only (cost / governance
+              data). The Auto-repaired pill stays visible to everyone
+              because it explains a visible behaviour change. */}
           <div className="ml-1 flex items-center gap-1.5 flex-wrap">
-            <ModelChip runMeta={runMeta} />
-            <TokenUsageChip runMeta={runMeta} />
+            {isAdmin && <ModelChip runMeta={runMeta} />}
+            {isAdmin && <TokenUsageChip runMeta={runMeta} />}
             <RepairedChip runMeta={runMeta} />
           </div>
         </div>
@@ -374,7 +385,16 @@ export default function ReportPanel({
             animate via the outer state change. */}
         {loading ? (
           <div className="markdown-body">
-            <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]} components={MD_COMPONENTS}>{content}</ReactMarkdown>
+            {agentName === 'bug_report' ? (
+              // Bug-report streams render ONLY the Defect Card so the
+              // user sees a clean Jira-style title + Description forming
+              // live. The raw markdown (with the metadata pipe-table)
+              // would otherwise be visible noise — it's still available
+              // verbatim under the Raw Text tab once streaming finishes.
+              <DefectReportCard markdown={content} />
+            ) : (
+              <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]} components={MD_COMPONENTS}>{content}</ReactMarkdown>
+            )}
             <div className="mt-3 inline-flex items-center gap-2 text-xs text-gray-500">
               <span className="inline-flex items-center gap-1">
                 {[0, 1, 2].map(i => (
@@ -400,7 +420,17 @@ export default function ReportPanel({
                 transition={{ duration: 0.2 }}
                 className="markdown-body"
               >
-                <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]} components={MD_COMPONENTS}>{content}</ReactMarkdown>
+                {agentName === 'bug_report' ? (
+                  // Bug-report formatted view = ONLY the Defect Card.
+                  // Skipping the ReactMarkdown body keeps the metadata
+                  // pipe-table out of the visible report so it reads
+                  // like a real Jira ticket. The pipe-table is still
+                  // parsed silently for the Jira push, and the full
+                  // markdown remains available under the Raw Text tab.
+                  <DefectReportCard markdown={content} />
+                ) : (
+                  <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]} components={MD_COMPONENTS}>{content}</ReactMarkdown>
+                )}
               </motion.div>
             )}
             {tab === 'insights' && insightsAvailable && (

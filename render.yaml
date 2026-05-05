@@ -21,12 +21,29 @@
 #       var wins. With Firestore enabled the persistent disk below is no
 #       longer required (you can remove the `disk:` block to save cost).
 #
+# IMPORTANT — enabling the Cursor CLI provider on Render:
+#   The Docker image installs cursor-agent at /root/.local/bin/, but the
+#   binary needs Cursor credentials to talk to Cursor's inference API.
+#   Cursor Pro has no headless API key (only Enterprise Service Accounts
+#   do), so we hydrate ~/.cursor at container start from a Render Secret
+#   File. Workflow:
+#       1. On a Linux machine (or WSL): `curl https://cursor.com/install -fsS | bash`
+#       2. `cursor-agent login` and complete the browser OAuth.
+#       3. `tar -C ~/.cursor -czf cursor-auth.tgz .`
+#       4. Render dashboard -> service -> Environment -> Secret Files ->
+#          Add file at mount path /etc/secrets/cursor-auth.tgz, upload tgz.
+#       5. Trigger a manual redeploy. Logs should show
+#          "[boot] Cursor credentials hydrated from /etc/secrets/cursor-auth.tgz".
+#   Without that file, Cursor calls fail and the orchestrator falls back
+#   to Gemini automatically. See start.sh for the hydration logic.
+#
 # Notes:
 #  - The app gracefully degrades when RAG is empty, so you can deploy without
 #    Ollama. To enable RAG, run an external Ollama (with the nomic-embed-text
 #    model) and set OLLAMA_HOST in this service.
-#  - The "starter" plan (512 MB) is enough for the API + SPA with cloud LLMs.
-#    Bump to "standard" if you ingest large knowledge bases locally.
+#  - The "starter" plan (512 MB) is enough for Gemini-only workloads. The
+#    cursor-agent subprocess can push memory close to the cap; if you see
+#    OOM kills in the Render logs, bump to "standard" (2 GB).
 # =============================================================================
 
 services:
@@ -55,26 +72,34 @@ services:
       - key: JWT_EXPIRE_MINUTES
         value: "480"
 
-      # ---- LLM provider (OpenAI is default; Gemini is optional) -----------
+      # ---- LLM provider (Gemini + Cursor CLI; OpenAI removed) -------------
+      # Default provider for unattended runs. Per-user/per-agent
+      # routing in the admin panel can override this at request time.
       - key: LLM_PROVIDER
-        value: openai
-      - key: OPENAI_API_KEY
-        sync: false                    # set in dashboard, never committed
-      - key: OPENAI_MODEL
-        value: gpt-4o
-      - key: OPENAI_FALLBACK_MODELS
-        value: gpt-4o-mini,gpt-3.5-turbo
-      - key: OPENAI_MAX_RETRIES
-        value: "3"
+        value: gemini
 
       - key: GEMINI_API_KEY
-        sync: false                    # leave blank if you only use OpenAI
+        sync: false                    # set in dashboard, never committed
       - key: GEMINI_MODEL
         value: gemini-2.5-pro
       - key: GEMINI_FALLBACK_MODELS
         value: gemini-2.5-flash,gemini-2.0-flash
       - key: GEMINI_MAX_RETRIES
         value: "3"
+
+      # Cursor CLI: binary is baked into the Docker image at
+      # /root/.local/bin/cursor-agent and PATH is set so subprocess
+      # finds it. Auto-discovery in backend/routers/deps.py picks it
+      # up; leave CURSOR_AGENT_BIN blank so a stale value never
+      # overrides the discovered path. Authentication is hydrated
+      # from a Render Secret File at /etc/secrets/cursor-auth.tgz —
+      # see the comment block at the top of this file.
+      - key: CURSOR_AGENT_BIN
+        value: ""
+      - key: CURSOR_AGENT_MAX_RETRIES
+        value: "2"
+      - key: CURSOR_AGENT_DISCOVER
+        value: "true"
 
       # ---- RAG ------------------------------------------------------------
       - key: RAG_TOP_K

@@ -142,6 +142,18 @@ class JiraCreateBugRequest(BaseModel):
     # are non-fatal: the bug is still returned, with a ``link_error`` field.
     linked_issue_key: str | None = None
     link_type: str = "Relates"
+    # Optional structured fields lifted out of the agent's metadata table by
+    # the frontend's parseDefectReport helper and edited in the JiraBugPush
+    # modal. Sent as real Jira REST fields when provided; the JiraClient
+    # silently drops any field the target project doesn't accept (createmeta
+    # whitelist) so legacy projects without a Severity custom field don't
+    # 400 the request.
+    priority: str | None = None
+    severity: str | None = None
+    components: list[str] | None = None
+    labels: list[str] | None = None
+    environment: str | None = None
+    affects_versions: list[str] | None = None
     # Legacy clients may still send these — they are accepted but ignored when
     # an active session exists.
     jira_url: str | None = None
@@ -368,7 +380,17 @@ async def create_bug(body: JiraCreateBugRequest, user=Depends(get_current_user))
     else:
         raise HTTPException(401, "Not connected to Jira and no credentials provided.")
     try:
-        created = client.create_bug(body.project_key, body.summary, body.description)
+        created = client.create_bug(
+            body.project_key,
+            body.summary,
+            body.description,
+            priority=body.priority,
+            severity=body.severity,
+            components=body.components,
+            labels=body.labels,
+            environment=body.environment,
+            affects_versions=body.affects_versions,
+        )
     except ConnectionError as e:
         raise HTTPException(400, str(e))
 

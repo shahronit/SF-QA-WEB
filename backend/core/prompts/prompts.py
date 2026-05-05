@@ -1022,48 +1022,64 @@ On the **first generated bug** of the response, tag each atom in parentheses, e.
 
 ## Mandatory output (follow this order verbatim)
 
-The output is rendered in the agent UI **and** pushed to Jira via the rich
-markdown -> ADF converter. Headings, the metadata pipe-table, the Steps /
-Actual / Expected blocks, and the JIRA paste-ready fenced block all appear
-unchanged in the Jira Description field.
+Your response **MUST** contain ONLY the three sections below, in this
+exact order and with NOTHING ELSE:
 
-### 1. Summary line (Astound atoms)
+1. The mandatory leading H1 title
+2. The Bug metadata pipe-table
+3. The Description block (Steps / Actual / Expected / optional Additional)
 
-A single line in this exact shape:
+Do **NOT** emit an atom-tagged summary line, a Priority/Severity rationale
+paragraph, a "JIRA paste-ready" fenced code block, a Confidence Level
+footer, a Reopen vs New footer, or any other commentary. Anything outside
+these three sections is rejected by the post-processor and forces an
+expensive re-generation. The frontend renders the title + Description
+block verbatim and silently lifts the metadata table into real Jira REST
+fields, so the body the user sees stays clean and Jira-like.
 
-`<Requirement ID or Area>. (Q) <quantifier> (N) <name> (T) <type> (A) <address> (A/S) <action/state> (V) <value if any> (C) <condition>`
+### 1. Title (mandatory FIRST line)
 
-- Tag the atoms with their letters in parentheses on the **first** bug only;
-  drop the letters on subsequent bugs.
-- Example: `Cart. The Save (button) on the (Update Information page) is not available.`
+The very first line of your response **MUST** be a markdown H1 (`# `)
+containing the clean, human-readable defect title. No atom letters, no
+leading numbers, no Jira key prefix in the H1. The frontend "Defect Card"
+displays this verbatim as the ticket title and the Jira push uses it as
+the `Summary` field, so it must read like a real bug title.
+
+Example (correct):
+
+`# Save button on Update Information page is unavailable when shipping address is empty`
 
 ### 2. Bug Metadata table (Markdown pipe table)
 
-Render exactly one table titled `### 2. Bug metadata` with these rows in
-this order. Skip any row whose value is genuinely absent from INPUT or
-CONTEXT (do **not** invent placeholders such as fake build numbers or
-fake reporters):
+Render exactly one table with these rows in this exact order and with
+these exact field names. Use a literal `-` for any value you genuinely
+cannot derive from INPUT or CONTEXT — do **not** skip rows and do **not**
+invent placeholders such as fake build numbers or fake reporters. The
+`Priority`, `Severity`, `Component`, `Environment`, `Affects Version`,
+`Labels`, and `Linked Story` rows are parsed by the frontend and lifted
+into real Jira REST fields, so the values must come from the controlled
+vocabulary below:
 
 | Field | Value |
 |-------|-------|
-| Project | `<JIRA project key or full name>` |
-| Component | `<area / module>` |
-| Priority | one of `Blocker / Critical / Major / Minor / Trivial` |
-| Severity | one of `Blocker / Critical / Major / Minor / Trivial` |
-| Environment | `Dev / SIT / UAT / Stage / Prod` (drop `Sandbox` in general mode) |
-| Browser / Device | e.g. `Chrome 124 (Win 11)`, `iPhone 15 Safari` |
-| Build / Version | the build the defect was found on |
-| Found By | reporter name or role |
-| Reporter | the JIRA reporter username |
+| Priority | one of `Highest / High / Medium / Low / Lowest` |
+| Severity | one of `Critical / Major / Minor / Trivial` |
+| Component | comma-separated component names, or `-` |
+| Environment | one of `Production / Staging / UAT / Sandbox / Dev`, or `-` |
+| Affects Version | the build the defect was found on, or `-` |
+| Labels | comma-separated labels, or `-` |
+| Linked Story | the Jira KEY this bug traces back to (e.g. `ABC-123`), or `-` |
+| Reporter | the JIRA reporter username, or `-` |
 | Assignee | proposed owner, or `Unassigned` |
-| Linked Story | the Jira KEY this bug traces back to |
-| Labels | comma-separated labels |
-| Sprint | active sprint ID / name when applicable |
-| Attachment refs | `[ATTACH screenshot showing X]`, `[ATTACH expected design]`, log file refs |
+| Sprint | active sprint ID / name when applicable, or `-` |
+| Browser / Device | e.g. `Chrome 124 (Win 11)`, `iPhone 15 Safari`, or `-` |
+| Project | `<JIRA project key or full name>`, or `-` |
+| Found By | reporter name or role, or `-` |
+| Attachment refs | `[ATTACH screenshot showing X]` / `[ATTACH expected design]` / log file refs, or `-` |
 
-### 3. Description (Pentair template - reproduce ordering verbatim)
+### 3. Description (Steps / Actual / Expected / Additional)
 
-Emit these four headings exactly, each followed by its content. Use bold
+Emit these headings exactly, each followed by its content. Use bold
 markdown (`**Steps to reproduce:**`) for the headings so the Jira ADF
 converter renders them as bold paragraphs:
 
@@ -1086,49 +1102,10 @@ converter renders them as bold paragraphs:
 ```
 
 `Steps to reproduce` is a numbered list; `Actual / Expected / Additional`
-are bulleted lists. Each item is atomic - one user action / observation /
-expectation per line, no HTML, no nested numbering.
-
-### 4. Priority & Severity rationale
-
-One sentence per axis citing the matching ladder row. Example:
-
-> **Priority = Major** - workaround exists (manual address re-entry) but
-> the default checkout flow is broken, matching the Astound *Major* row.
->
-> **Severity = Critical** - secondary functionality returns wrong totals;
-> required for launch per the Astound *Critical* row.
-
-### 5. JIRA paste-ready fenced block
-
-Emit **one** fenced code block (no language tag) titled
-`JIRA Description (paste-ready)` containing the same Steps / Actual /
-Expected / Additional content exactly as above, ready to drop into the
-Jira Description field unchanged. Keep wording identical between the
-section above and this block (no paraphrasing drift):
-
-```
-*Steps to reproduce:*
-1. <step 1>
-2. <step 2>
-
-{{color:red}}*Actual results:*{{color}}
-- <observation 1>
-
-{{color:green}}*Expected results:*{{color}}
-- <expected 1>
-
-{{color:blue}}*Additional information:*{{color}}
-- <env / build / browser>
-- <attachments>
-- <repro rate, possibly-related keys>
-```
-
----
-
-## Closing
-
-End with **Confidence Level:** (Low / Medium / High) plus one sentence rationale, then a single line **Reopen vs New:** with one of `New report` / `Reopen <key>` / `Cannot tell from INPUT — recommend search` based on whether the title or input hints at a regression.""",
+are bulleted lists. Each item is atomic — one user action / observation /
+expectation per line, no HTML, no nested numbering. Stop the response
+immediately after the last description bullet — do not append any
+trailing summary, rationale, paste-ready block, or footer.""",
     "smoke": f"""You are a **Salesforce Certified Expert QA Engineer** with deep cross-cloud expertise across **Sales Cloud, Service Cloud, Experience Cloud, Commerce Cloud (B2C), B2B Commerce, and Agentforce**, plus mastery of Lightning (Aura + LWC), Apex, SOQL/SOSL, Flow, sharing & security model, and Salesforce DX / Copado deployments. Generate a **comprehensive** Smoke Test plan covering **all possible scenarios** derived from the deployment scope and org metadata.
 
 {_SCOPE_ONLY}
@@ -2453,47 +2430,64 @@ On the **first generated bug** of the response, tag each atom in parentheses; dr
 
 ## Mandatory output (follow this order verbatim)
 
-The output is rendered in the agent UI **and** pushed to Jira via the rich
-markdown -> ADF converter. Headings, the metadata pipe-table, the Steps /
-Actual / Expected blocks, and the JIRA paste-ready fenced block all appear
-unchanged in the Jira Description field.
+Your response **MUST** contain ONLY the three sections below, in this
+exact order and with NOTHING ELSE:
 
-### 1. Summary line (Astound atoms)
+1. The mandatory leading H1 title
+2. The Bug metadata pipe-table
+3. The Description block (Steps / Actual / Expected / optional Additional)
 
-A single line in this exact shape:
+Do **NOT** emit an atom-tagged summary line, a Priority/Severity rationale
+paragraph, a "JIRA paste-ready" fenced code block, a Confidence Level
+footer, a Reopen vs New footer, or any other commentary. Anything outside
+these three sections is rejected by the post-processor and forces an
+expensive re-generation. The frontend renders the title + Description
+block verbatim and silently lifts the metadata table into real Jira REST
+fields, so the body the user sees stays clean and Jira-like.
 
-`<Requirement ID or Area>. (Q) <quantifier> (N) <name> (T) <type> (A) <address> (A/S) <action/state> (V) <value if any> (C) <condition>`
+### 1. Title (mandatory FIRST line)
 
-Tag the atoms with their letters in parentheses on the **first** bug only;
-drop the letters on subsequent bugs.
+The very first line of your response **MUST** be a markdown H1 (`# `)
+containing the clean, human-readable defect title. No atom letters, no
+leading numbers, no Jira key prefix in the H1. The frontend "Defect Card"
+displays this verbatim as the ticket title and the Jira push uses it as
+the `Summary` field, so it must read like a real bug title.
+
+Example (correct):
+
+`# Save button on Update Information page is unavailable when shipping address is empty`
 
 ### 2. Bug Metadata table (Markdown pipe table)
 
-Render exactly one table titled `### 2. Bug metadata` with these rows in
-this order. Skip any row whose value is genuinely absent from INPUT or
-CONTEXT (do **not** invent placeholders such as fake build numbers or
-fake reporters):
+Render exactly one table with these rows in this exact order and with
+these exact field names. Use a literal `-` for any value you genuinely
+cannot derive from INPUT or CONTEXT — do **not** skip rows and do **not**
+invent placeholders such as fake build numbers or fake reporters. The
+`Priority`, `Severity`, `Component`, `Environment`, `Affects Version`,
+`Labels`, and `Linked Story` rows are parsed by the frontend and lifted
+into real Jira REST fields, so the values must come from the controlled
+vocabulary below:
 
 | Field | Value |
 |-------|-------|
-| Project | `<JIRA project key or full name>` |
-| Component | `<area / module>` |
-| Priority | one of `Blocker / Critical / Major / Minor / Trivial` |
-| Severity | one of `Blocker / Critical / Major / Minor / Trivial` |
-| Environment | `Dev / Staging / UAT / Prod` |
-| Browser / Device | e.g. `Chrome 124 (Win 11)`, `iPhone 15 Safari` |
-| Build / Version | the build the defect was found on |
-| Found By | reporter name or role |
-| Reporter | the JIRA reporter username |
+| Priority | one of `Highest / High / Medium / Low / Lowest` |
+| Severity | one of `Critical / Major / Minor / Trivial` |
+| Component | comma-separated component names, or `-` |
+| Environment | one of `Production / Staging / UAT / Dev`, or `-` |
+| Affects Version | the build the defect was found on, or `-` |
+| Labels | comma-separated labels, or `-` |
+| Linked Story | the Jira KEY this bug traces back to (e.g. `ABC-123`), or `-` |
+| Reporter | the JIRA reporter username, or `-` |
 | Assignee | proposed owner, or `Unassigned` |
-| Linked Story | the Jira KEY this bug traces back to |
-| Labels | comma-separated labels |
-| Sprint | active sprint ID / name when applicable |
-| Attachment refs | `[ATTACH screenshot showing X]`, `[ATTACH expected design]`, log file refs |
+| Sprint | active sprint ID / name when applicable, or `-` |
+| Browser / Device | e.g. `Chrome 124 (Win 11)`, `iPhone 15 Safari`, or `-` |
+| Project | `<JIRA project key or full name>`, or `-` |
+| Found By | reporter name or role, or `-` |
+| Attachment refs | `[ATTACH screenshot showing X]` / `[ATTACH expected design]` / log file refs, or `-` |
 
-### 3. Description (Pentair template - reproduce ordering verbatim)
+### 3. Description (Steps / Actual / Expected / Additional)
 
-Emit these four headings exactly, each followed by its content. Use bold
+Emit these headings exactly, each followed by its content. Use bold
 markdown (`**Steps to reproduce:**`) for the headings so the Jira ADF
 converter renders them as bold paragraphs:
 
@@ -2516,49 +2510,10 @@ converter renders them as bold paragraphs:
 ```
 
 `Steps to reproduce` is a numbered list; `Actual / Expected / Additional`
-are bulleted lists. Each item is atomic - one user action / observation /
-expectation per line, no HTML, no nested numbering.
-
-### 4. Priority & Severity rationale
-
-One sentence per axis citing the matching ladder row. Example:
-
-> **Priority = Major** - workaround exists but the default checkout flow
-> is broken, matching the Astound *Major* row.
->
-> **Severity = Critical** - secondary functionality returns wrong totals;
-> required for launch per the Astound *Critical* row.
-
-### 5. JIRA paste-ready fenced block
-
-Emit **one** fenced code block (no language tag) titled
-`JIRA Description (paste-ready)` containing the same Steps / Actual /
-Expected / Additional content exactly as above, ready to drop into the
-Jira Description field unchanged. Keep wording identical between the
-section above and this block (no paraphrasing drift):
-
-```
-*Steps to reproduce:*
-1. <step 1>
-2. <step 2>
-
-{{color:red}}*Actual results:*{{color}}
-- <observation 1>
-
-{{color:green}}*Expected results:*{{color}}
-- <expected 1>
-
-{{color:blue}}*Additional information:*{{color}}
-- <env / build / browser>
-- <attachments>
-- <repro rate, possibly-related keys>
-```
-
----
-
-## Closing
-
-End with **Confidence Level:** (Low / Medium / High) plus one sentence rationale, then a single line **Reopen vs New:** with one of `New report` / `Reopen <key>` / `Cannot tell from INPUT — recommend search`.""",
+are bulleted lists. Each item is atomic — one user action / observation /
+expectation per line, no HTML, no nested numbering. Stop the response
+immediately after the last description bullet — do not append any
+trailing summary, rationale, paste-ready block, or footer.""",
 
     "smoke": f"""{_ROLE_GEN} Generate a **comprehensive** Smoke Test plan covering **all possible scenarios** derived from the deployment scope.
 

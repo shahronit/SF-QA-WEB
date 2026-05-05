@@ -124,37 +124,72 @@ def _validate_split_doc(text: str) -> tuple[bool, str]:
 
 
 def _validate_bug_summary(text: str) -> tuple[bool, str]:
-    """Bug-report needs an extractable summary line + a metadata table.
+    """Bug-report needs an H1 title + metadata table + description sections.
 
-    The Jira bug push uses ``deriveSummary`` (frontend) which reads the
-    first ``#`` heading or first non-empty line. We verify that the
-    first meaningful line resolves to something usable AND that the
-    metadata pipe table exists (the prompt promises both).
+    The frontend ``DefectReportCard`` reads:
+        1. The leading H1 as the defect title (and Jira ``Summary`` field).
+        2. The metadata pipe-table for Priority / Severity / Component /
+           Environment / Labels / Affects Version / Linked Story.
+        3. The ``**Steps to reproduce:**`` / ``**Expected results:**`` /
+           ``**Actual results:**`` headings for the structured description.
+
+    All three must be present and parseable, otherwise the auto-repair
+    pass re-asks with the strict format clamp so the next attempt is
+    structured correctly.
     """
     if not text or not text.strip():
         return False, "empty response"
-    # First non-empty line should be a heading OR a one-liner that
-    # could function as a summary. Reject obvious chatter that slipped
-    # past the stripper.
+    # First non-empty line should be the mandatory H1 title.
     first = ""
+    first_three: list[str] = []
     for line in text.splitlines():
-        if line.strip():
-            first = line.strip()
-            break
+        s = line.strip()
+        if s:
+            if not first:
+                first = s
+            first_three.append(s)
+            if len(first_three) >= 3:
+                break
     if not first:
         return False, "no first line found"
     bad_starts = ("sure", "of course", "here is", "here's", "certainly", "okay")
     if first.lower().startswith(bad_starts):
         return False, (
             f"first line is conversational chatter ({first[:40]!r}); "
-            "the bug summary must be the first character of the artifact"
+            "the bug report must start with a markdown H1 title"
+        )
+    # Mandatory leading H1 — accept it if it appears in the first three
+    # non-empty lines so a stray blockquote / horizontal rule above the
+    # title doesn't fail the run, but reject outputs that bury the title
+    # below the metadata table.
+    if not any(re.match(r"^#\s+\S", ln) for ln in first_three):
+        return False, (
+            "no leading `# ` H1 title found in the first three lines — "
+            "the prompt requires the very first content to be a clean "
+            "human-readable title that the Defect Card displays as the "
+            "Jira `Summary`."
         )
     # Need at least one pipe-table row (the metadata block).
     if not re.search(r"^\s*\|.+\|\s*$", text, re.MULTILINE):
         return False, (
             "no markdown pipe table found — the bug-report template "
-            "requires a metadata pipe table (Issue Type / Severity / "
-            "Affected Component / etc.) immediately under the summary line"
+            "requires a metadata pipe table (Priority / Severity / "
+            "Component / Environment / etc.) immediately under the title"
+        )
+    # Need the structured description headings so the Defect Card can
+    # render Steps / Expected / Actual as separate UI blocks instead of
+    # collapsing into one paragraph.
+    if not re.search(r"\*\*Steps to reproduce:\*\*", text):
+        return False, (
+            "missing `**Steps to reproduce:**` heading — the Description "
+            "section must be a Pentair-template block so the UI can "
+            "render Steps as a numbered list"
+        )
+    if not re.search(r"\*\*(?:Expected results|Actual results):\*\*", text):
+        return False, (
+            "missing `**Expected results:**` or `**Actual results:**` "
+            "heading — the Description section must contain at least "
+            "one of them so the UI can render the side-by-side cards"
         )
     return True, ""
 

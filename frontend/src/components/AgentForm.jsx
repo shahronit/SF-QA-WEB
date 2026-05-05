@@ -338,6 +338,14 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
   // generation so the previous run's chip doesn't briefly reappear
   // while the next run is still streaming its first token.
   const [runMeta, setRunMeta] = useState(null)
+  // Mirror runMeta into a ref so the streaming `finally` block can hand
+  // the latest provider/model/usage payload to saveResult(). The plain
+  // `runMeta` closure is captured when handleRunRun starts (where it's
+  // null after the reset on line ~553), which previously caused
+  // AgentResultsContext to be fed `meta: null` and made the token chip
+  // disappear on every navigation away and back.
+  const runMetaRef = useRef(null)
+  useEffect(() => { runMetaRef.current = runMeta }, [runMeta])
   const [projects, setProjects] = useState([])
   // Pinned context — RAG project, Jira project, sprint, user-story key.
   // Lives in SessionPrefsContext so selections persist across pages,
@@ -551,6 +559,7 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
     setLoading(true)
     setResult('')
     setRunMeta(null)
+    runMetaRef.current = null
     setResultStamp(Date.now())
 
     const mergedInput = { ...values, ...extraInput }
@@ -612,14 +621,18 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
             // token envelope. We update local state so ReportPanel
             // renders the chips immediately, AND remember it for
             // AgentResultsContext so other pages can show the same
-            // badges (history, hub, etc.).
-            setRunMeta({
+            // badges (history, hub, etc.). Mirror into the ref in the
+            // same tick so the `finally` block sees the latest value
+            // (state updates are async; the ref is sync).
+            const nextMeta = {
               provider: payload.provider || null,
               model: payload.model || null,
               cached: !!payload.cached,
               repaired: !!payload.repaired,
               usage: payload.usage || null,
-            })
+            }
+            setRunMeta(nextMeta)
+            runMetaRef.current = nextMeta
           } else if (event === 'error') {
             errored = true
             const msg = payload.error || 'Unknown error'
@@ -646,7 +659,10 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
         // Pass the latest run meta into the cross-page results store
         // so chained agents downstream (and the History card) can
         // surface the same provider/model/usage badges they see here.
-        saveResult(agentName, accumulated, runMeta)
+        // Read from the ref (not the closure-captured `runMeta`)
+        // because state updates inside the SSE loop never propagate
+        // into this `finally` block's scope.
+        saveResult(agentName, accumulated, runMetaRef.current)
         setConfettiTrigger(t => t + 1)
       }
       // Notify History + any other listeners to refresh without manual reload.
@@ -660,6 +676,7 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
     setValues({})
     setResult('')
     setRunMeta(null)
+    runMetaRef.current = null
     setLinkedAgent('')
     setShowLinkedPreview(false)
     setShakeKeys({})
@@ -769,13 +786,11 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
     })
   }, [resolvedFields])
 
-  // Submit handler for the new "Jira ticket or URL" input that lives
-  // inside the primary card. Resolves the text via JiraContext, fetches
-  // the rich /full payload, formats it with `jiraIssueToText`, and
-  // funnels through the canonical `handleJiraImport` path so the
-  // imported card and pinned context behave identically to the
-  // JiraIssuePicker flow. Inline status row replaces toasts so the
-  // user can correct typos without losing focus.
+  // Submit handler for the "Jira ticket or URL" input that lives inside
+  // the primary card. Resolves the text via JiraContext, fetches the
+  // rich /full payload, formats it with `jiraIssueToText`, and funnels
+  // through the canonical `handleJiraImport` path. Inline status row
+  // replaces toasts so the user can correct typos without losing focus.
   const handleQuickJiraSubmit = useCallback(async (rawText) => {
     const text = (rawText ?? jiraQuickInput).trim()
     if (!text) return

@@ -2144,6 +2144,10 @@ class SFQAOrchestrator:
                 "provider": provider.name,
                 "model": model,
                 "project": self._active_project,
+                # Stamp the caller so the admin Usage tab can attribute
+                # token totals back to a specific user. Legacy rows
+                # without this field bucket as "(unknown)" in the UI.
+                "username": username,
                 "input": user_input,
                 "output": cached,
                 # Tight 80-char preview so the History UI can show a
@@ -2153,6 +2157,11 @@ class SFQAOrchestrator:
                 "output_preview": cached[:80],
                 "cache_hit": True,
                 "usage": cached_usage,
+                # Cached replays of repaired outputs are still
+                # "repaired" artifacts as far as the chip is concerned,
+                # but we don't track that on the cache row itself —
+                # default to False so the field is always present.
+                "repaired": False,
             })
             return cached
 
@@ -2208,6 +2217,7 @@ class SFQAOrchestrator:
                 "provider": provider.name,
                 "model": model,
                 "project": self._active_project,
+                "username": username,
                 "input": user_input,
                 "output": content,
                 # See the cached-branch comment above — the preview is
@@ -2299,11 +2309,13 @@ class SFQAOrchestrator:
                 "provider": provider.name,
                 "model": model,
                 "project": self._active_project,
+                "username": username,
                 "input": user_input,
                 "output": cached,
                 "output_preview": cached[:500],
                 "cache_hit": True,
                 "usage": cached_usage,
+                "repaired": False,
             })
             return
 
@@ -2385,6 +2397,7 @@ class SFQAOrchestrator:
                     "provider": provider.name,
                     "model": model,
                     "project": self._active_project,
+                    "username": username,
                     "input": user_input,
                     # Persist the FINAL (clean / repaired) artifact, not
                     # the raw streamed buffer — replays should serve the

@@ -1,3 +1,4 @@
+import { lazy, Suspense } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
 import { AuthProvider, useAuth } from './context/AuthContext'
 import { AgentResultsProvider } from './context/AgentResultsContext'
@@ -8,27 +9,49 @@ import { Toaster } from 'react-hot-toast'
 import Layout from './components/Layout'
 import Login from './pages/Login'
 import Hub from './pages/Hub'
-import Requirements from './pages/Requirements'
-import TestCases from './pages/TestCases'
-import BugReports from './pages/BugReports'
-import SmokeTests from './pages/SmokeTests'
-import Regression from './pages/Regression'
-import Estimation from './pages/Estimation'
-import Projects from './pages/Projects'
-import History from './pages/History'
-import TestPlanDoc from './pages/TestPlanDoc'
-import AutomationPlan from './pages/AutomationPlan'
-import CopadoScript from './pages/CopadoScript'
-import TestData from './pages/TestData'
-import RTM from './pages/RTM'
-import UATPlan from './pages/UATPlan'
-import ExecutionReport from './pages/ExecutionReport'
-import RCA from './pages/RCA'
-import ClosureReport from './pages/ClosureReport'
-import StlcPack from './pages/StlcPack'
-import ResultView from './pages/ResultView'
-import TestCaseEditor from './pages/TestCaseEditor'
-import Admin from './pages/Admin'
+
+// Every other page is code-split. Login + Hub stay eager because:
+//   - Login is the entrypoint (no route to navigate from yet).
+//   - Hub is the post-login landing page (loaded on every fresh login).
+// Everything else is a per-agent surface that the user reaches by
+// clicking the sidebar; lazy-loading them slashes the initial bundle
+// from ~all 23 pages down to ~2, so first paint is dramatically faster
+// and each page chunk only loads when actually visited (browser caches
+// it for subsequent navigations). Vite emits one chunk per dynamic
+// import, no extra config required.
+const Requirements    = lazy(() => import('./pages/Requirements'))
+const TestCases       = lazy(() => import('./pages/TestCases'))
+const BugReports      = lazy(() => import('./pages/BugReports'))
+const SmokeTests      = lazy(() => import('./pages/SmokeTests'))
+const Regression      = lazy(() => import('./pages/Regression'))
+const Estimation      = lazy(() => import('./pages/Estimation'))
+const Projects        = lazy(() => import('./pages/Projects'))
+const History         = lazy(() => import('./pages/History'))
+const TestPlanDoc     = lazy(() => import('./pages/TestPlanDoc'))
+const AutomationPlan  = lazy(() => import('./pages/AutomationPlan'))
+const CopadoScript    = lazy(() => import('./pages/CopadoScript'))
+const TestData        = lazy(() => import('./pages/TestData'))
+const RTM             = lazy(() => import('./pages/RTM'))
+const UATPlan         = lazy(() => import('./pages/UATPlan'))
+const ExecutionReport = lazy(() => import('./pages/ExecutionReport'))
+const RCA             = lazy(() => import('./pages/RCA'))
+const ClosureReport   = lazy(() => import('./pages/ClosureReport'))
+const StlcPack        = lazy(() => import('./pages/StlcPack'))
+const ResultView      = lazy(() => import('./pages/ResultView'))
+const TestCaseEditor  = lazy(() => import('./pages/TestCaseEditor'))
+const Admin           = lazy(() => import('./pages/Admin'))
+
+// Tiny fallback that paints immediately while the chunk loads. We
+// deliberately avoid framer-motion here so the very first frame is
+// cheap — chunks usually arrive in <150ms on a warm cache and the
+// fallback is barely visible.
+function RouteFallback() {
+  return (
+    <div className="flex items-center justify-center py-16">
+      <div className="text-toon-blue/70 font-bold animate-pulse">Loading…</div>
+    </div>
+  )
+}
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth()
@@ -56,6 +79,7 @@ export default function App() {
         <TestManagementProvider>
           <AgentResultsProvider>
           <Toaster position="top-right" toastOptions={{ duration: 3000, style: { borderRadius: '16px', fontFamily: 'Nunito' } }} />
+          <Suspense fallback={<RouteFallback />}>
           <Routes>
           <Route path="/login" element={<Login />} />
           {/* Standalone, chrome-less result viewer opened from History in a
@@ -94,6 +118,7 @@ export default function App() {
             />
           </Route>
         </Routes>
+        </Suspense>
           </AgentResultsProvider>
         </TestManagementProvider>
       </JiraProvider>

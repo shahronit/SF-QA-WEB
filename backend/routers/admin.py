@@ -41,7 +41,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from core import notifications, prompt_store, user_auth
+from core import firestore_db, notifications, prompt_store, user_auth
 from core.prompts.prompts import PROMPTS_GEN, PROMPTS_SF
 from routers.deps import get_admin_user, get_orchestrator
 
@@ -397,3 +397,139 @@ async def mark_all_notifications_read(admin: dict = Depends(get_admin_user)):
     """Mark every unread notification for the calling admin as read."""
     count = notifications.mark_all_read(admin["username"])
     return {"marked_read": count}
+
+
+# ---------------------------------------------------------------------------
+# /usage — admin-only token usage feed (across ALL users)
+# ---------------------------------------------------------------------------
+
+@router.get("/usage")
+async def list_usage(
+    limit: int = 500,
+    since: str | None = None,
+    username: str | None = None,
+    agent: str | None = None,
+    _admin: dict = Depends(get_admin_user),
+):
+    """Return cross-user agent run records plus per-user / per-agent / per-model token rollups.
+
+    The Admin "Usage" tab uses this to surface which users + agents are
+    burning the most tokens, which is otherwise invisible because the
+    base ``/history`` endpoint never aggregates and is per-record only.
+
+    Sensitive ``input`` / ``output`` fields are deliberately *not*
+    decrypted here — admins only need metadata (timestamps, agent,
+    provider/model, token counts) to investigate spend, and skipping
+    the GCM unwrap keeps the endpoint cheap on big collections.
+
+    Filters:
+        * ``limit``     newest-first cap (default 500)
+        * ``since``     ISO-8601 timestamp; rows older than this are dropped
+        * ``username``  exact match (legacy rows without username are
+                        bucketed as ``"(unknown)"`` and only returned
+                        when ``username`` is empty)
+        * ``agent``     exact match on the agent slug (e.g. ``testcase``)
+    """
+    from routers.history import _read_firestore, _read_local
+
+    if firestore_db.is_enabled():
+        try:
+            records = _read_firestore(int(limit))
+        except Exception:
+            records = _read_local(int(limit))
+    else:
+        records = _read_local(int(limit))
+
+    if since:
+        records = [r for r in records if (r.get("ts") or "") >= since]
+    if agent:
+        records = [r for r in records if r.get("agent") == agent]
+    if username:
+        records = [r for r in records if (r.get("username") or "") == username]
+
+    # Build the lightweight payload (no input/output) and the rollups
+    # in a single pass so we don't iterate twice on large logs.
+    by_user: dict[str, dict[str, Any]] = {}
+    by_agent: dict[str, dict[str, Any]] = {}
+    by_model: dict[str, dict[str, Any]] = {}
+    totals = {"runs": 0, "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+    out_records: list[dict[str, Any]] = []
+
+    def _bump(bucket: dict[str, Any], usage: dict[str, Any] | None) -> None:
+        bucket["runs"] += 1
+        if not usage:
+            return
+        for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+            try:
+                bucket[key] += int(usage.get(key) or 0)
+            except (TypeError, ValueError):
+                pass
+
+    for r in records:
+        usage = r.get("usage") or None
+        uname = r.get("username") or "(unknown)"
+        ag = r.get("agent") or "(unknown)"
+        provider = r.get("provider") or ""
+        model = r.get("model") or ""
+        # Compose a stable model bucket key so the table groups
+        # rows by (provider, model) consistently across runs.
+        model_key = f"{provider}|{model}"
+
+        user_bucket = by_user.setdefault(
+            uname,
+            {"username": uname, "runs": 0, "prompt_tokens": 0,
+             "completion_tokens": 0, "total_tokens": 0},
+        )
+        agent_bucket = by_agent.setdefault(
+            ag,
+            {"agent": ag, "runs": 0, "prompt_tokens": 0,
+             "completion_tokens": 0, "total_tokens": 0},
+        )
+        model_bucket = by_model.setdefault(
+            model_key,
+            {"provider": provider, "model": model, "runs": 0,
+             "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+        )
+        _bump(user_bucket, usage)
+        _bump(agent_bucket, usage)
+        _bump(model_bucket, usage)
+
+        totals["runs"] += 1
+        if usage:
+            for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+                try:
+                    totals[key] += int(usage.get(key) or 0)
+                except (TypeError, ValueError):
+                    pass
+
+        out_records.append({
+            "ts": r.get("ts"),
+            "username": uname,
+            "agent": ag,
+            "provider": provider,
+            "model": model,
+            "project": r.get("project") or "",
+            "cache_hit": bool(r.get("cache_hit", False)),
+            "repaired": bool(r.get("repaired", False)),
+            "usage": usage,
+            "output_preview": r.get("output_preview") or "",
+        })
+
+    def _ranked(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        # Sort by total_tokens desc, then runs desc, so the heaviest
+        # spenders surface at the top of each leaderboard.
+        return sorted(
+            items,
+            key=lambda x: (x.get("total_tokens", 0), x.get("runs", 0)),
+            reverse=True,
+        )
+
+    return {
+        "records": out_records,
+        "summary": {
+            "totals": totals,
+            "per_user":  _ranked(list(by_user.values())),
+            "per_agent": _ranked(list(by_agent.values())),
+            "per_model": _ranked(list(by_model.values())),
+        },
+    }
