@@ -289,6 +289,7 @@ export const PATH_TO_AGENT = {
   '/smoke': 'smoke',
   '/regression': 'regression',
   '/bugs': 'bug_report',
+  '/quick-pack': 'quick_pack',
   '/closure-report': 'closure_report',
   '/estimation': 'estimation',
   '/automation-plan': 'automation_plan',
@@ -327,6 +328,33 @@ export function userCanAccessPath(user, path) {
 
 export function getAgent(name) {
   return AGENT_META[name] || null
+}
+
+/**
+ * Return the ordered list of agent slugs the Quick Pack page should
+ * actually run for *user*. Filters AGENT_META by:
+ *   - dropping deprecated entries (e.g. legacy `test_strategy`),
+ *   - dropping composite/non-runnable agents (`stlc_pack` —
+ *     it's a pipeline, not a single LLM call backed by PROMPTS_*),
+ *   - intersecting with `user.agent_access` using the same semantics
+ *     `userCanAccessPath` enforces (admin bypass; null = full access;
+ *     [] = none; [...] = explicit allow-list).
+ * Order follows the `AGENT_META` declaration order so tab strips on
+ * Quick Pack read top-down through the STLC phases.
+ */
+export function getRunnableAgentsForUser(user) {
+  if (!user) return []
+  const slugs = Object.keys(AGENT_META)
+  return slugs.filter(slug => {
+    const meta = AGENT_META[slug]
+    if (!meta) return false
+    if (meta.deprecated) return false
+    if (slug === 'stlc_pack') return false
+    if (user.is_admin) return true
+    const allow = user.agent_access
+    if (allow == null) return true
+    return Array.isArray(allow) && allow.includes(slug)
+  })
 }
 
 /**

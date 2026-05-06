@@ -9,9 +9,15 @@ import logo from '../assets/logo.png'
 import Icon3D from './icons/Icon3D'
 
 const utilityItems = [
-  { path: '/',         label: 'Dashboard', iconKey3d: 'home' },
-  { path: '/projects', label: 'Projects',  iconKey3d: 'folder' },
-  { path: '/history',  label: 'History',   iconKey3d: 'history' },
+  { path: '/',           label: 'Dashboard',    iconKey3d: 'home' },
+  // QA Workbench (slug `quick_pack` in admin access) lives at the top
+  // alongside the utility tiles so users hit the headline action first.
+  // The render below filters this entry out via userCanAccessPath when
+  // the admin has revoked access, while Dashboard/Projects/History stay
+  // unconditionally visible.
+  { path: '/quick-pack', label: 'QA Workbench', iconKey3d: 'sparkles' },
+  { path: '/projects',   label: 'Projects',     iconKey3d: 'folder' },
+  { path: '/history',    label: 'History',      iconKey3d: 'history' },
 ]
 
 const navGroups = [
@@ -273,7 +279,14 @@ export default function Sidebar() {
 
       <nav className="flex-1 space-y-1 overflow-y-auto min-h-0 pr-1">
         <div className="space-y-0.5">
-          {utilityItems.map((item) => (
+          {utilityItems
+            // Dashboard/Projects/History stay unconditionally visible;
+            // only QA Workbench is gated by the admin-managed
+            // `quick_pack` access slug. Anything else added here that
+            // is missing from PATH_TO_AGENT also passes through (the
+            // helper returns true for unmapped utility paths).
+            .filter((item) => userCanAccessPath(user, item.path))
+            .map((item) => (
             <NavLink
               key={item.path}
               to={item.path}

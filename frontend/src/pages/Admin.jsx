@@ -7,15 +7,23 @@ import api from '../api/client'
 import { useAuth } from '../context/AuthContext'
 import { AGENT_META } from '../config/agentMeta'
 
-// Stable, ordered list of (agent_slug, label) pairs so the admin always
-// sees the same column order. Skips agents flagged deprecated in
-// AGENT_META so the panel doesn't expose deleted agents to grant access
-// to. Also exposed as a label-lookup helper for the prompt editor.
-const ALL_AGENTS = Object.entries(AGENT_META)
+// Stable, ordered list of real runnable agents sourced from AGENT_META.
+// Used by prompt/model override tabs (which should only show true
+// backend agent slugs backed by prompts/providers).
+const RUNNABLE_AGENTS = Object.entries(AGENT_META)
   .filter(([, meta]) => !meta.deprecated)
   .map(([slug, meta]) => ({ slug, label: meta.label || slug }))
 
-const AGENT_LABEL = Object.fromEntries(ALL_AGENTS.map(a => [a.slug, a.label]))
+// Access matrix shown in the "Access & Roles" tab. Includes the
+// Quick Pack page as its own togglable permission so admins can grant/
+// revoke the page independently of Dashboard/Projects/History utility
+// links and independently of per-agent backend prompt/model overrides.
+const ACCESS_ENTRIES = [
+  ...RUNNABLE_AGENTS,
+  { slug: 'quick_pack', label: 'QA Workbench' },
+]
+
+const AGENT_LABEL = Object.fromEntries(RUNNABLE_AGENTS.map(a => [a.slug, a.label]))
 
 const QA_MODES = [
   { id: 'salesforce', label: 'Salesforce QA' },
@@ -191,7 +199,7 @@ function UsersTab({ currentUser, onSelfChanged, autoOpenUsername, onAutoOpenCons
               const isSelf = u.username === currentUser?.username
               const accessLabel = u.agent_access == null
                 ? 'All'
-                : `${u.agent_access.length}/${ALL_AGENTS.length}`
+                : `${u.agent_access.length}/${ACCESS_ENTRIES.length}`
               return (
                 <tr key={u.username} className="border-t border-gray-100 hover:bg-gray-50">
                   <td className="px-4 py-2 font-mono text-xs text-toon-navy">
@@ -286,7 +294,7 @@ function UserSlideOver({ user, currentUser, onClose, onSaved, onDeleted }) {
 
   const toggleAgent = (slug) => {
     setDraft(prev => {
-      const cur = prev.agent_access == null ? ALL_AGENTS.map(a => a.slug) : [...prev.agent_access]
+      const cur = prev.agent_access == null ? ACCESS_ENTRIES.map(a => a.slug) : [...prev.agent_access]
       const idx = cur.indexOf(slug)
       if (idx >= 0) cur.splice(idx, 1)
       else cur.push(slug)
@@ -297,7 +305,7 @@ function UserSlideOver({ user, currentUser, onClose, onSaved, onDeleted }) {
   const setAllAgents = (mode) => {
     setDraft(prev => ({
       ...prev,
-      agent_access: mode === 'all' ? null : mode === 'none' ? [] : ALL_AGENTS.map(a => a.slug),
+      agent_access: mode === 'all' ? null : mode === 'none' ? [] : ACCESS_ENTRIES.map(a => a.slug),
     }))
   }
 
@@ -533,7 +541,7 @@ function UserSlideOver({ user, currentUser, onClose, onSaved, onDeleted }) {
                 </p>
                 {!allowAll && (
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
-                    {ALL_AGENTS.map(a => {
+                    {ACCESS_ENTRIES.map(a => {
                       const checked = draft.agent_access?.includes(a.slug)
                       return (
                         <label
@@ -639,7 +647,7 @@ function UserPromptOverrides({ username }) {
         empty falls through to the global default (or the baked-in prompt).
       </p>
       <div className="space-y-2">
-        {ALL_AGENTS.map(a => {
+        {RUNNABLE_AGENTS.map(a => {
           const sf = overrides[a.slug]?.salesforce
           const gen = overrides[a.slug]?.general
           return (
@@ -753,7 +761,7 @@ function DefaultPromptsTab() {
 
   // Stable order: follow AGENT_META insertion order, then any unknowns.
   const sorted = useMemo(() => {
-    const order = ALL_AGENTS.map(a => a.slug)
+    const order = RUNNABLE_AGENTS.map(a => a.slug)
     const ranked = [...agents].sort((a, b) => {
       const ai = order.indexOf(a.agent)
       const bi = order.indexOf(b.agent)
@@ -1074,7 +1082,7 @@ function UserModelOverrides({ username }) {
       )}
 
       <div className="space-y-2">
-        {ALL_AGENTS.map(a => {
+        {RUNNABLE_AGENTS.map(a => {
           const current = overrides[a.slug] || null
           return (
             <ModelOverrideRow
@@ -1310,7 +1318,7 @@ function UsageTab() {
               onChange={e => setFilters(f => ({ ...f, agent: e.target.value }))}
             >
               <option value="">All</option>
-              {ALL_AGENTS.map(a => (
+              {RUNNABLE_AGENTS.map(a => (
                 <option key={a.slug} value={a.slug}>{a.label}</option>
               ))}
             </select>
