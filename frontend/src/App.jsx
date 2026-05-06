@@ -37,6 +37,7 @@ const ExecutionReport = lazy(() => import('./pages/ExecutionReport'))
 const RCA             = lazy(() => import('./pages/RCA'))
 const ClosureReport   = lazy(() => import('./pages/ClosureReport'))
 const StlcPack        = lazy(() => import('./pages/StlcPack'))
+const QuickPack       = lazy(() => import('./pages/QuickPack'))
 const ResultView      = lazy(() => import('./pages/ResultView'))
 const TestCaseEditor  = lazy(() => import('./pages/TestCaseEditor'))
 const Admin           = lazy(() => import('./pages/Admin'))
@@ -110,6 +111,7 @@ export default function App() {
             <Route path="rca" element={<RCA />} />
             <Route path="closure-report" element={<ClosureReport />} />
             <Route path="stlc-pack" element={<StlcPack />} />
+            <Route path="quick-pack" element={<QuickPack />} />
             <Route path="projects" element={<Projects />} />
             <Route path="history" element={<History />} />
             <Route

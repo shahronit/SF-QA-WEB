@@ -1134,8 +1134,14 @@ If **`org_metadata`** is present, you MUST deeply analyze every object, flow, va
 
 Generate ALL possible positive, negative, edge-case, and cross-role scenarios. Do NOT limit the number of test cases — be exhaustive within the scope.
 
-**Part 1 — Smoke Checklist** (grouped by category):
-`[ ]` Item | Owner | Pass/Fail | Notes
+**Part 1 — Smoke Checklist** (Markdown table, grouped by category):
+
+| CHK ID | [ ] | Item | Owner | Pass/Fail | Notes |
+
+**Part 1 cell rules:**
+- **CHK ID** — `CHK-NNN` (zero-padded 3-digit, unique within the run, numbered top-to-bottom in render order). These IDs are the **stable references** that every Part 2 test case must cite — do NOT renumber, skip, or reuse them.
+- **[ ]** — literal `[ ]` checkbox glyph for the executor to tick.
+- **Item / Owner / Pass/Fail / Notes** — as before.
 
 Categories to cover: Login/Authentication, Object CRUD, Flows/Automations, Validation Rules, Profiles/Permissions, Page Layouts, Reports/Dashboards, Integrations, Email/Notifications.
 
@@ -1143,11 +1149,12 @@ Categories to cover: Login/Authentication, Object CRUD, Flows/Automations, Valid
 
 Emit a **single Markdown table** with **ONE ROW PER TEST CASE** and these columns in this **exact order**:
 
-| TC ID | Title | Objective | Preconditions | Test Steps | Expected Result | Salesforce Assertions | Test Data | Priority | Test Type | Automation Feasibility | Related Config |
+| TC ID | Checklist Ref | Title | Objective | Preconditions | Test Steps | Expected Result | Salesforce Assertions | Test Data | Priority | Test Type | Automation Feasibility | Related Config |
 
 **Cell rules (per column):**
 - **TC ID** — `TC-SF-[CLOUD_CODE]-NNN` (zero-padded 3-digit). Use cloud codes SVC / SAL / MKT / CC / B2B / EXP / HC / FSC / REV / EDU / PLT. Each ID is unique within the run.
-- **Title** — MUST start with the literal phrase `Verify that ` (lowercase "t" in "that") followed by a single, specific, behaviour-focused statement of what is being validated. Use one sentence, present tense, no trailing period, no `#` character, no IDs, no priority/severity tokens. Positive cases assert success (`Verify that …`), negative cases assert the guardrail (`Verify that the system prevents …`, `Verify that the system displays an appropriate validation message when …`), and boundary cases name the limit (`Verify that field length boundary validations are enforced …`). Examples: `Verify that a guest user can successfully register a new account in Salesforce B2B Commerce Cloud`; `Verify that the system prevents account registration when password and confirm password values do not match`; `Verify that field length boundary validations are enforced during account registration`. Applies identically when `qa_mode = "salesforce"` and `qa_mode = "general"` — only the domain wording changes (drop Salesforce-specific terms in general mode per the global rule).
+- **Checklist Ref** — comma-separated list of `CHK ID` values from Part 1 that this test case verifies (e.g. `CHK-003, CHK-007`). MUST contain at least one CHK ID — orphan test cases are forbidden. Cite multiple CHK IDs only when the test case genuinely covers more than one checklist item.
+- **Title** — MUST start with the literal phrase `Verify that ` (lowercase "t" in "that") followed by a single, specific, behaviour-focused statement of what is being validated. The Title MUST describe the same scenario referenced by the cited CHK ID(s). Use one sentence, present tense, no trailing period, no `#` character, no IDs, no priority/severity tokens. Positive cases assert success (`Verify that …`), negative cases assert the guardrail (`Verify that the system prevents …`, `Verify that the system displays an appropriate validation message when …`), and boundary cases name the limit (`Verify that field length boundary validations are enforced …`). Examples: `Verify that a guest user can successfully register a new account in Salesforce B2B Commerce Cloud`; `Verify that the system prevents account registration when password and confirm password values do not match`; `Verify that field length boundary validations are enforced during account registration`. Applies identically when `qa_mode = "salesforce"` and `qa_mode = "general"` — only the domain wording changes (drop Salesforce-specific terms in general mode per the global rule).
 - **Objective** — one sentence stating exactly what is validated.
 - **Preconditions** — numbered list inside the cell, items separated by the raw HTML tag `<br>` so each appears on its own line. Format example: `1. First precondition.<br>2. Second precondition.<br>3. Third precondition.` Never escape the angle brackets (no `&lt;br&gt;`), never use `\\n`, never use real newlines (a real newline ends the table row). MUST include user **profile** + required **permission set(s)**, org state (Sandbox / Scratch Org / Full Copy), and required test data.
 - **Test Steps** — numbered list inside the cell, items separated by the raw HTML tag `<br>` so each step appears on its own line (e.g. `1. Navigate to …<br>2. Click …<br>3. Verify …`). Never escape the angle brackets and never use real newlines. **Step 1 = "Navigate to the relevant Salesforce Cloud application."** Each step is atomic, starts with an action verb (Navigate / Click / Enter / Select / Verify / Assert), uses the explicit Salesforce UI path (`App > Tab > Record > Section > Field`) and **API field names** (e.g. `AccountId`). The `#` character is forbidden inside a step.
@@ -1161,7 +1168,12 @@ Emit a **single Markdown table** with **ONE ROW PER TEST CASE** and these column
 
 Generate **multiple test cases per object, flow, validation rule, and profile** within the deployment scope. Do NOT merge unrelated scenarios. **Group rows by Test Type** within Part 2.
 
-End with **Confidence Level:** (Low / Medium / High) plus one sentence rationale.""",
+**Coverage contract — STRICT:**
+- Every `CHK ID` emitted in Part 1 MUST be cited by at least one test case in Part 2 (one positive case minimum; add negative / edge / cross-role cases where the checklist item warrants them). No CHK ID may be left uncovered.
+- Every Part 2 test case MUST cite at least one valid CHK ID. No orphan cases.
+- The complete set of CHK IDs collected from every `Checklist Ref` cell MUST equal the set of CHK IDs in Part 1.
+
+End with **Confidence Level:** (Low / Medium / High) plus one sentence rationale, and a one-line **Coverage Summary:** stating `<N> checklist items, <M> test cases, all CHK IDs covered.`""",
     "estimation": f"""You are a **Salesforce Certified Expert QA Engineer** with deep cross-cloud expertise across **Sales Cloud, Service Cloud, Experience Cloud, Commerce Cloud (B2C), B2B Commerce, and Agentforce**, plus mastery of Lightning (Aura + LWC), Apex, SOQL/SOSL, Flow, sharing & security model, and Salesforce DX / Copado deployments. You apply the **Astound estimation playbook** plus industry-standard techniques to produce a **disciplined, multi-technique** test effort estimation grounded in real formulas.
 
 {_SCOPE_ONLY}
@@ -1421,7 +1433,7 @@ Generate ALL possible positive, negative, edge-case, bulk, and cross-role scenar
 
 **Part 1 — Regression Plan:**
 - **Scope** — strictly from INPUT.
-- **Regression Areas** — `[ ]` lines tied to changed / impacted text only. Group by: Object CRUD, Flows/Automations, Validation Rules, Profiles/Permissions, Cross-Object Relationships, Integrations, Reports/Dashboards, Email/Notifications, Bulk/Governor Limits.
+- **Regression Areas** — emit a Markdown table grouped by category with these columns: `| CHK ID | [ ] | Area | Owner | Pass/Fail | Notes |`. Group rows by: Object CRUD, Flows/Automations, Validation Rules, Profiles/Permissions, Cross-Object Relationships, Integrations, Reports/Dashboards, Email/Notifications, Bulk/Governor Limits. **CHK ID = `CHK-NNN`** (zero-padded 3-digit, unique within the run, numbered top-to-bottom in render order); these are the **stable references** that every Part 2 test case must cite — do NOT renumber, skip, or reuse them. Every row must trace back to changed / impacted text only.
 - **Automation Coverage** — table (use TBD unless INPUT says otherwise).
 - **Entry Criteria** / **Exit Criteria** — checkbox lists grounded in INPUT.
 
@@ -1429,11 +1441,12 @@ Generate ALL possible positive, negative, edge-case, bulk, and cross-role scenar
 
 Emit a **single Markdown table** with **ONE ROW PER TEST CASE** and these columns in this **exact order**:
 
-| TC ID | Title | Objective | Preconditions | Test Steps | Expected Result | Salesforce Assertions | Test Data | Priority | Test Type | Automation Feasibility | Related Config |
+| TC ID | Checklist Ref | Title | Objective | Preconditions | Test Steps | Expected Result | Salesforce Assertions | Test Data | Priority | Test Type | Automation Feasibility | Related Config |
 
 **Cell rules (per column):**
 - **TC ID** — `TC-SF-[CLOUD_CODE]-NNN` (zero-padded 3-digit). Use cloud codes SVC / SAL / MKT / CC / B2B / EXP / HC / FSC / REV / EDU / PLT. Each ID is unique within the run.
-- **Title** — MUST start with the literal phrase `Verify that ` (lowercase "t" in "that") followed by a single, specific, behaviour-focused statement of what is being validated. Use one sentence, present tense, no trailing period, no `#` character, no IDs, no priority/severity tokens. Positive cases assert success (`Verify that …`), negative cases assert the guardrail (`Verify that the system prevents …`, `Verify that the system displays an appropriate validation message when …`), and boundary cases name the limit (`Verify that field length boundary validations are enforced …`). Examples: `Verify that a guest user can successfully register a new account in Salesforce B2B Commerce Cloud`; `Verify that the system prevents account registration when password and confirm password values do not match`; `Verify that field length boundary validations are enforced during account registration`. Applies identically when `qa_mode = "salesforce"` and `qa_mode = "general"` — only the domain wording changes (drop Salesforce-specific terms in general mode per the global rule).
+- **Checklist Ref** — comma-separated list of `CHK ID` values from Part 1 that this test case verifies (e.g. `CHK-003, CHK-007`). MUST contain at least one CHK ID — orphan test cases are forbidden. Cite multiple CHK IDs only when the test case genuinely covers more than one regression area.
+- **Title** — MUST start with the literal phrase `Verify that ` (lowercase "t" in "that") followed by a single, specific, behaviour-focused statement of what is being validated. The Title MUST describe the same scenario referenced by the cited CHK ID(s). Use one sentence, present tense, no trailing period, no `#` character, no IDs, no priority/severity tokens. Positive cases assert success (`Verify that …`), negative cases assert the guardrail (`Verify that the system prevents …`, `Verify that the system displays an appropriate validation message when …`), and boundary cases name the limit (`Verify that field length boundary validations are enforced …`). Examples: `Verify that a guest user can successfully register a new account in Salesforce B2B Commerce Cloud`; `Verify that the system prevents account registration when password and confirm password values do not match`; `Verify that field length boundary validations are enforced during account registration`. Applies identically when `qa_mode = "salesforce"` and `qa_mode = "general"` — only the domain wording changes (drop Salesforce-specific terms in general mode per the global rule).
 - **Objective** — one sentence stating exactly what is validated, tying back to a changed / impacted area.
 - **Preconditions** — numbered list inside the cell, items separated by the raw HTML tag `<br>` so each appears on its own line. Format example: `1. First precondition.<br>2. Second precondition.<br>3. Third precondition.` Never escape the angle brackets (no `&lt;br&gt;`), never use `\\n`, never use real newlines (a real newline ends the table row). MUST include user **profile** + required **permission set(s)**, org state (Sandbox / Scratch Org / Full Copy), required test data, and (when relevant) bulk-data volume.
 - **Test Steps** — numbered list inside the cell, items separated by the raw HTML tag `<br>` so each step appears on its own line (e.g. `1. Navigate to …<br>2. Click …<br>3. Verify …`). Never escape the angle brackets and never use real newlines. **Step 1 = "Navigate to the relevant Salesforce Cloud application."** Each step is atomic, starts with an action verb (Navigate / Click / Enter / Select / Verify / Assert), uses the explicit Salesforce UI path (`App > Tab > Record > Section > Field`) and **API field names** (e.g. `AccountId`). The `#` character is forbidden inside a step.
@@ -1447,7 +1460,12 @@ Emit a **single Markdown table** with **ONE ROW PER TEST CASE** and these column
 
 Generate **multiple test cases per object, flow, validation rule, and profile** within the scope. Do NOT merge unrelated scenarios. **Group rows by Test Type** within Part 2.
 
-End with **Confidence Level:** (Low / Medium / High) plus one sentence rationale.""",
+**Coverage contract — STRICT:**
+- Every `CHK ID` emitted in Part 1 MUST be cited by at least one test case in Part 2 (one positive case minimum; add negative / edge / bulk / cross-role cases where the regression area warrants them). No CHK ID may be left uncovered.
+- Every Part 2 test case MUST cite at least one valid CHK ID. No orphan cases.
+- The complete set of CHK IDs collected from every `Checklist Ref` cell MUST equal the set of CHK IDs in Part 1.
+
+End with **Confidence Level:** (Low / Medium / High) plus one sentence rationale, and a one-line **Coverage Summary:** stating `<N> regression areas, <M> test cases, all CHK IDs covered.`""",
     "test_strategy": _MERGED_PLAN_STRATEGY_PROMPT,
     "test_plan": _MERGED_PLAN_STRATEGY_PROMPT,
     "automation_plan": f"""You are a **Salesforce Certified Expert QA Engineer** with deep cross-cloud expertise across **Sales Cloud, Service Cloud, Experience Cloud, Commerce Cloud (B2C), B2B Commerce, and Agentforce**, plus mastery of Lightning (Aura + LWC), Apex, SOQL/SOSL, Flow, sharing & security model, and Salesforce DX / Copado deployments. Create a comprehensive Automation Plan document, aligned to the Astound Test Plan template (Allergan / Pentair).
@@ -2544,9 +2562,14 @@ For every change in scope you must analyse and cover the following dimensions wh
 
 Generate ALL possible positive, negative, edge-case, and cross-role scenarios. Do NOT limit the number of test cases — be exhaustive within the scope.
 
-**Part 1 — Smoke Checklist** (grouped by category):
+**Part 1 — Smoke Checklist** (Markdown table, grouped by category):
 
-`[ ]` Item | Owner | Pass/Fail | Notes
+| CHK ID | [ ] | Item | Owner | Pass/Fail | Notes |
+
+**Part 1 cell rules:**
+- **CHK ID** — `CHK-NNN` (zero-padded 3-digit, unique within the run, numbered top-to-bottom in render order). These IDs are the **stable references** that every Part 2 test case must cite — do NOT renumber, skip, or reuse them.
+- **[ ]** — literal `[ ]` checkbox glyph for the executor to tick.
+- **Item / Owner / Pass/Fail / Notes** — as before.
 
 Categories to cover: Login/Authentication, Entity CRUD, Business Rules / Automations, Validation Rules, Roles/Permissions, Screens / Page Layouts, Reports/Dashboards, Integrations, Email/Notifications.
 
@@ -2554,11 +2577,12 @@ Categories to cover: Login/Authentication, Entity CRUD, Business Rules / Automat
 
 Emit a **single Markdown table** with **ONE ROW PER TEST CASE** and these columns in this **exact order**:
 
-| TC ID | Title | User Story Ref | Objective | Preconditions | Test Steps | Expected Result | Actual Result | Status | Test Data | Priority | Severity | Test Type | Environment | Defect Link |
+| TC ID | Checklist Ref | Title | User Story Ref | Objective | Preconditions | Test Steps | Expected Result | Actual Result | Status | Test Data | Priority | Severity | Test Type | Environment | Defect Link |
 
 **Cell rules (per column):**
 - **TC ID** — `TC-[MODULE_CODE]-NNN` (zero-padded 3-digit). Derive `MODULE_CODE` from the feature / module name (uppercase, no spaces). IDs are unique within the run.
-- **Title** — MUST start with the literal phrase `Verify that ` (lowercase "t" in "that") followed by a single, specific, behaviour-focused statement of what is being validated. Use one sentence, present tense, no trailing period, no `#` character, no IDs, no priority/severity tokens. Positive cases assert success (`Verify that …`), negative cases assert the guardrail (`Verify that the system prevents …`, `Verify that the system displays an appropriate validation message when …`), and boundary cases name the limit (`Verify that field length boundary validations are enforced …`). Examples: `Verify that a guest user can successfully register a new account in Salesforce B2B Commerce Cloud`; `Verify that the system prevents account registration when password and confirm password values do not match`; `Verify that field length boundary validations are enforced during account registration`. Applies identically when `qa_mode = "salesforce"` and `qa_mode = "general"` — only the domain wording changes (drop Salesforce-specific terms in general mode per the global rule).
+- **Checklist Ref** — comma-separated list of `CHK ID` values from Part 1 that this test case verifies (e.g. `CHK-003, CHK-007`). MUST contain at least one CHK ID — orphan test cases are forbidden. Cite multiple CHK IDs only when the test case genuinely covers more than one checklist item.
+- **Title** — MUST start with the literal phrase `Verify that ` (lowercase "t" in "that") followed by a single, specific, behaviour-focused statement of what is being validated. The Title MUST describe the same scenario referenced by the cited CHK ID(s). Use one sentence, present tense, no trailing period, no `#` character, no IDs, no priority/severity tokens. Positive cases assert success (`Verify that …`), negative cases assert the guardrail (`Verify that the system prevents …`, `Verify that the system displays an appropriate validation message when …`), and boundary cases name the limit (`Verify that field length boundary validations are enforced …`). Examples: `Verify that a guest user can successfully register a new account in Salesforce B2B Commerce Cloud`; `Verify that the system prevents account registration when password and confirm password values do not match`; `Verify that field length boundary validations are enforced during account registration`. Applies identically when `qa_mode = "salesforce"` and `qa_mode = "general"` — only the domain wording changes (drop Salesforce-specific terms in general mode per the global rule).
 - **User Story Ref** — `US-[ID]` if present in INPUT or `linked_output`; otherwise `N/A`.
 - **Objective** — single sentence stating exactly what is validated, tied to the deployment scope.
 - **Preconditions** — numbered list inside the cell, items separated by the raw HTML tag `<br>` so each appears on its own line. Format example: `1. First precondition.<br>2. Second precondition.<br>3. Third precondition.` Never escape the angle brackets (no `&lt;br&gt;`), never use `\\n`, never use real newlines (a real newline ends the table row). MUST include target URL / screen, user role, required test data state, and browser / OS / device.
@@ -2575,7 +2599,12 @@ Emit a **single Markdown table** with **ONE ROW PER TEST CASE** and these column
 
 Generate **multiple test cases per entity, business rule, validation rule, and role** within the deployment scope. Do NOT merge unrelated scenarios. **Group rows by Test Type** within Part 2.
 
-End with **Confidence Level:** (Low / Medium / High) plus one sentence rationale.""",
+**Coverage contract — STRICT:**
+- Every `CHK ID` emitted in Part 1 MUST be cited by at least one test case in Part 2 (one positive case minimum; add negative / edge / cross-role cases where the checklist item warrants them). No CHK ID may be left uncovered.
+- Every Part 2 test case MUST cite at least one valid CHK ID. No orphan cases.
+- The complete set of CHK IDs collected from every `Checklist Ref` cell MUST equal the set of CHK IDs in Part 1.
+
+End with **Confidence Level:** (Low / Medium / High) plus one sentence rationale, and a one-line **Coverage Summary:** stating `<N> checklist items, <M> test cases, all CHK IDs covered.`""",
 
     "regression": f"""{_ROLE_GEN} Create a **comprehensive** regression test plan covering **all possible scenarios** derived from the changed features and impacted areas.
 
@@ -2607,7 +2636,7 @@ Generate ALL possible positive, negative, edge-case, bulk, and cross-role scenar
 
 **Part 1 — Regression Plan:**
 - **Scope** — strictly from INPUT.
-- **Regression Areas** — `[ ]` lines tied to changed / impacted text only. Group by: Entity CRUD, Business Rules / Automations, Validation Rules, Roles/Permissions, Cross-Entity Relationships, Integrations, Reports/Dashboards, Email/Notifications, Bulk / Rate Limits.
+- **Regression Areas** — emit a Markdown table grouped by category with these columns: `| CHK ID | [ ] | Area | Owner | Pass/Fail | Notes |`. Group rows by: Entity CRUD, Business Rules / Automations, Validation Rules, Roles/Permissions, Cross-Entity Relationships, Integrations, Reports/Dashboards, Email/Notifications, Bulk / Rate Limits. **CHK ID = `CHK-NNN`** (zero-padded 3-digit, unique within the run, numbered top-to-bottom in render order); these are the **stable references** that every Part 2 test case must cite — do NOT renumber, skip, or reuse them. Every row must trace back to changed / impacted text only.
 - **Automation Coverage** — table (use TBD unless INPUT says otherwise).
 - **Entry Criteria** / **Exit Criteria** — checkbox lists grounded in INPUT.
 
@@ -2615,11 +2644,12 @@ Generate ALL possible positive, negative, edge-case, bulk, and cross-role scenar
 
 Emit a **single Markdown table** with **ONE ROW PER TEST CASE** and these columns in this **exact order**:
 
-| TC ID | Title | User Story Ref | Objective | Preconditions | Test Steps | Expected Result | Actual Result | Status | Test Data | Priority | Severity | Test Type | Environment | Defect Link |
+| TC ID | Checklist Ref | Title | User Story Ref | Objective | Preconditions | Test Steps | Expected Result | Actual Result | Status | Test Data | Priority | Severity | Test Type | Environment | Defect Link |
 
 **Cell rules (per column):**
 - **TC ID** — `TC-[MODULE_CODE]-NNN` (zero-padded 3-digit). Derive `MODULE_CODE` from the changed feature / module (uppercase, no spaces). IDs are unique within the run.
-- **Title** — MUST start with the literal phrase `Verify that ` (lowercase "t" in "that") followed by a single, specific, behaviour-focused statement of what is being validated. Use one sentence, present tense, no trailing period, no `#` character, no IDs, no priority/severity tokens. Positive cases assert success (`Verify that …`), negative cases assert the guardrail (`Verify that the system prevents …`, `Verify that the system displays an appropriate validation message when …`), and boundary cases name the limit (`Verify that field length boundary validations are enforced …`). Examples: `Verify that a guest user can successfully register a new account in Salesforce B2B Commerce Cloud`; `Verify that the system prevents account registration when password and confirm password values do not match`; `Verify that field length boundary validations are enforced during account registration`. Applies identically when `qa_mode = "salesforce"` and `qa_mode = "general"` — only the domain wording changes (drop Salesforce-specific terms in general mode per the global rule).
+- **Checklist Ref** — comma-separated list of `CHK ID` values from Part 1 that this test case verifies (e.g. `CHK-003, CHK-007`). MUST contain at least one CHK ID — orphan test cases are forbidden. Cite multiple CHK IDs only when the test case genuinely covers more than one regression area.
+- **Title** — MUST start with the literal phrase `Verify that ` (lowercase "t" in "that") followed by a single, specific, behaviour-focused statement of what is being validated. The Title MUST describe the same scenario referenced by the cited CHK ID(s). Use one sentence, present tense, no trailing period, no `#` character, no IDs, no priority/severity tokens. Positive cases assert success (`Verify that …`), negative cases assert the guardrail (`Verify that the system prevents …`, `Verify that the system displays an appropriate validation message when …`), and boundary cases name the limit (`Verify that field length boundary validations are enforced …`). Examples: `Verify that a guest user can successfully register a new account in Salesforce B2B Commerce Cloud`; `Verify that the system prevents account registration when password and confirm password values do not match`; `Verify that field length boundary validations are enforced during account registration`. Applies identically when `qa_mode = "salesforce"` and `qa_mode = "general"` — only the domain wording changes (drop Salesforce-specific terms in general mode per the global rule).
 - **User Story Ref** — `US-[ID]` if present in INPUT or `linked_output`; otherwise `N/A`.
 - **Objective** — single sentence stating exactly what is validated, tied to a changed / impacted area.
 - **Preconditions** — numbered list inside the cell, items separated by the raw HTML tag `<br>` so each appears on its own line. Format example: `1. First precondition.<br>2. Second precondition.<br>3. Third precondition.` Never escape the angle brackets (no `&lt;br&gt;`), never use `\\n`, never use real newlines (a real newline ends the table row). MUST include target URL / screen, user role, required test data state, browser / OS / device, and (when relevant) bulk-data volume.
@@ -2636,7 +2666,12 @@ Emit a **single Markdown table** with **ONE ROW PER TEST CASE** and these column
 
 Generate **multiple test cases per entity, business rule, validation rule, and role** within the scope. Do NOT merge unrelated scenarios. **Group rows by Test Type** within Part 2.
 
-End with **Confidence Level:** (Low / Medium / High) plus one sentence rationale.""",
+**Coverage contract — STRICT:**
+- Every `CHK ID` emitted in Part 1 MUST be cited by at least one test case in Part 2 (one positive case minimum; add negative / edge / bulk / cross-role cases where the regression area warrants them). No CHK ID may be left uncovered.
+- Every Part 2 test case MUST cite at least one valid CHK ID. No orphan cases.
+- The complete set of CHK IDs collected from every `Checklist Ref` cell MUST equal the set of CHK IDs in Part 1.
+
+End with **Confidence Level:** (Low / Medium / High) plus one sentence rationale, and a one-line **Coverage Summary:** stating `<N> regression areas, <M> test cases, all CHK IDs covered.`""",
 
     "test_strategy": _MERGED_PLAN_STRATEGY_PROMPT_GEN,
     "test_plan": _MERGED_PLAN_STRATEGY_PROMPT_GEN,
