@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from threading import Lock
 
@@ -12,6 +14,11 @@ from core import firestore_db, secret_fields
 from core.jira_client import JiraClient
 from core.jira_links import extract_jira_key
 from routers.deps import get_current_user
+
+# Bare project key shape: 2+ uppercase letters/digits/underscores, no dash.
+# Mirrors the frontend `PROJECT_KEY_RE` in utils/jiraDetect.js so token
+# classification stays consistent on both sides.
+PROJECT_KEY_RE = re.compile(r"^[A-Z][A-Z0-9_]{1,9}$")
 
 # Fields in a Jira session dict that hold sensitive material and should
 # be encrypted at rest. Everything else (jira_url, email, last_project,
@@ -124,6 +131,18 @@ class JiraSearchRequest(BaseModel):
 class JiraResolveRequest(BaseModel):
     """Free-form text in which we look for a single Jira issue key/URL."""
     text: str
+
+
+class JiraImportBatchRequest(BaseModel):
+    """Resolve a list of Jira tokens (issue keys, epic keys, project keys, URLs).
+
+    Each token is classified server-side and dispatched in a thread pool so
+    the browser only pays for one round-trip even when the user pastes
+    dozens of references at once. ``max_per_group`` caps how many child
+    issues we pull per epic / project token (default 100).
+    """
+    tokens: list[str]
+    max_per_group: int = 100
 
 
 class JiraAddCommentRequest(BaseModel):
@@ -349,6 +368,138 @@ async def search_jira(body: JiraSearchRequest, user=Depends(get_current_user)):
     except ConnectionError as e:
         raise HTTPException(400, str(e))
     return {"issues": issues}
+
+
+@router.post("/import-batch")
+async def import_batch(
+    body: JiraImportBatchRequest, user=Depends(get_current_user),
+):
+    """Resolve a list of Jira tokens and return one entry per token.
+
+    Each entry has the shape:
+      ``{token, kind, key?, primary?, children?, error?}``
+    where ``kind`` is one of ``'issue'``, ``'epic'``, ``'project'``, or
+    ``'unknown'``. ``primary`` is the rich `/full` payload for issue/epic
+    tokens; ``children`` is a list of summary rows (key/summary/status/
+    issuetype/...) for epic children and project bulk imports.
+
+    Per-token failures are isolated — one bad token records an ``error``
+    string in its slot and does not abort the rest of the batch.
+    """
+    client = _get_client(user["username"])
+    raw_tokens = [t.strip() for t in (body.tokens or []) if t and t.strip()]
+    # Preserve the user's input order while de-duplicating identical tokens.
+    seen: set[str] = set()
+    tokens: list[str] = []
+    for t in raw_tokens:
+        if t in seen:
+            continue
+        seen.add(t)
+        tokens.append(t)
+    if not tokens:
+        return {"items": []}
+
+    cap = max(1, min(int(body.max_per_group or 100), 100))
+
+    # Optional GDrive auto-attach for issue / epic primaries (mirrors the
+    # /issue/{key}/full endpoint). Silent failure when the user has not
+    # connected Drive — the resolved issue still includes detected URLs.
+    gdrive_client = None
+    try:
+        from routers.gdrive import try_get_client_optional
+        gdrive_client = try_get_client_optional(user["username"])
+    except Exception:
+        gdrive_client = None
+
+    def classify(token: str) -> tuple[str, str]:
+        """Return ``(kind, value)`` where kind ∈ {issue, project, unknown}.
+
+        URLs and bare ``ABC-12``-style references map to ``issue`` (epic
+        promotion happens later, after we've fetched the issue and seen
+        its issuetype). Bare ``ABC`` strings map to ``project``.
+        Anything else is ``unknown`` and surfaces as an error in the response.
+        """
+        key = extract_jira_key(token)
+        if key:
+            return ("issue", key)
+        if PROJECT_KEY_RE.match(token):
+            return ("project", token)
+        return ("unknown", token)
+
+    def resolve(token: str) -> dict:
+        kind, value = classify(token)
+        if kind == "unknown":
+            return {
+                "token": token,
+                "kind": "unknown",
+                "error": "Unrecognised token — expected an issue key (ABC-12), "
+                         "Jira URL, or project key (ABC).",
+            }
+        if kind == "project":
+            try:
+                children = client.list_issues(
+                    project_key=value, max_results=cap,
+                )
+            except ConnectionError as exc:
+                return {
+                    "token": token, "kind": "project", "key": value,
+                    "error": str(exc),
+                }
+            except Exception as exc:  # noqa: BLE001
+                return {
+                    "token": token, "kind": "project", "key": value,
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+            return {
+                "token": token, "kind": "project", "key": value,
+                "primary": None, "children": children,
+            }
+        # kind == "issue" — fetch full detail; promote to "epic" if needed.
+        try:
+            primary = client.get_full_issue(value, gdrive_client=gdrive_client)
+        except ConnectionError as exc:
+            return {
+                "token": token, "kind": "issue", "key": value,
+                "error": str(exc),
+            }
+        except Exception as exc:  # noqa: BLE001
+            return {
+                "token": token, "kind": "issue", "key": value,
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+        issuetype = ((primary or {}).get("core", {}) or {}).get("issuetype", "")
+        if isinstance(issuetype, str) and issuetype.lower() == "epic":
+            try:
+                children = client.list_epic_children(value, max_results=cap)
+            except Exception:  # noqa: BLE001 - children are best-effort
+                children = []
+            return {
+                "token": token, "kind": "epic", "key": value,
+                "primary": primary, "children": children,
+            }
+        return {
+            "token": token, "kind": "issue", "key": value,
+            "primary": primary, "children": [],
+        }
+
+    # Fan out across tokens. Cap at 8 workers to mirror /full's pattern and
+    # stay under Atlassian's per-user concurrency budget.
+    workers = max(1, min(len(tokens), 8))
+    results_by_token: dict[str, dict] = {}
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = {executor.submit(resolve, t): t for t in tokens}
+        for future in as_completed(futures):
+            t = futures[future]
+            try:
+                results_by_token[t] = future.result()
+            except Exception as exc:  # noqa: BLE001 - never abort the batch
+                results_by_token[t] = {
+                    "token": t, "kind": "unknown",
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+
+    items = [results_by_token[t] for t in tokens]
+    return {"items": items}
 
 
 # ---------------------------------------------------------------------------

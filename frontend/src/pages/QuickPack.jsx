@@ -26,7 +26,7 @@ import {
   getMissingRequiredKeys,
   isReadyToRun,
 } from '../config/agentInputs'
-import { extractJiraKey } from '../utils/jiraDetect'
+import { splitJiraTokens, classifyJiraToken } from '../utils/jiraDetect'
 
 // Status vocabulary used by the tab strip dots and per-tab banner.
 // Mirrors the language on the STLC pack page so users see consistent
@@ -69,6 +69,122 @@ function jiraPayloadToText(issue) {
     }
   }
   return lines.join('\n')
+}
+
+// One-line summary of a child issue (epic child or project bulk import
+// row). Capped at 200 chars so a 100-row project import still fits in
+// the shared Context box without overwhelming the agents.
+function childRowLine(c) {
+  const tags = [c?.issuetype, c?.status].filter(Boolean).join('/')
+  const head = `- ${c?.key || '?'}${tags ? ` [${tags}]` : ''} ${c?.summary || ''}`.trim()
+  return head.length > 200 ? `${head.slice(0, 197)}…` : head
+}
+
+// Compose seed text for the shared Context box from a batch of resolved
+// items. Issue/Epic primaries use the existing `jiraPayloadToText`;
+// epic children and project rows are rendered as compact `KEY [type/
+// status] summary` lines. Sections separated by `\n\n---\n\n` so the
+// downstream agents see clean boundaries between tickets.
+function seedTextFromBatch(items) {
+  const sections = []
+  for (const item of items) {
+    if (item.kind === 'project') {
+      const children = item.children || []
+      const lines = [`Jira Project ${item.token} — ${children.length} issue(s):`]
+      for (const c of children) lines.push(childRowLine(c))
+      sections.push(lines.join('\n'))
+      continue
+    }
+    const head = item.primary ? jiraPayloadToText(item.primary) : ''
+    if (item.kind === 'epic' && item.children?.length) {
+      const lines = [head, '', `Epic ${item.key} child issues (${item.children.length}):`]
+      for (const c of item.children) lines.push(childRowLine(c))
+      sections.push(lines.filter(Boolean).join('\n'))
+      continue
+    }
+    if (head) sections.push(head)
+  }
+  return sections.join('\n\n---\n\n')
+}
+
+// Compact card used when the resolved batch item has no rich primary
+// payload — i.e. for project-key tokens. Mirrors `JiraTicketCard`'s
+// header (key chip + remove button) without the meta grid / sub-tabs
+// since there is no single "ticket" to show.
+function ProjectChildrenCard({ token, kind, items, onRemove }) {
+  const label = kind === 'project' ? 'Project' : 'Epic'
+  return (
+    <div className="flex items-start gap-3">
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2 mb-1">
+          <span className="inline-flex items-center gap-1 text-[11px] font-extrabold uppercase tracking-wider text-violet-700 bg-violet-50 border border-violet-200 px-2 py-0.5 rounded-md">
+            {label}
+          </span>
+          <span className="font-mono font-extrabold text-toon-navy">{token}</span>
+          <span className="text-xs text-gray-500">
+            {items.length} issue{items.length === 1 ? '' : 's'}
+          </span>
+        </div>
+        <ChildIssueList items={items} />
+      </div>
+      {onRemove && (
+        <button
+          type="button"
+          onClick={onRemove}
+          className="text-xs font-bold text-gray-400 hover:text-red-500 transition-colors"
+          aria-label={`Remove ${token}`}
+        >
+          ✕
+        </button>
+      )}
+    </div>
+  )
+}
+
+// Children list rendered under an Epic's primary `JiraTicketCard`.
+function EpicChildrenList({ items, epicKey }) {
+  if (!items?.length) return null
+  return (
+    <div className="mt-3 pl-3 border-l-2 border-violet-200">
+      <div className="text-[11px] font-extrabold uppercase tracking-wider text-violet-700 mb-1.5">
+        Epic {epicKey} children ({items.length})
+      </div>
+      <ChildIssueList items={items} />
+    </div>
+  )
+}
+
+// Compact rows used by both Project and Epic children. Truncates to
+// 10 rows by default with a "Show all N" toggle so a 100-issue project
+// import doesn't blow out the card height.
+function ChildIssueList({ items }) {
+  const [showAll, setShowAll] = useState(false)
+  if (!items?.length) return <div className="text-xs text-gray-400 italic">No child issues.</div>
+  const visible = showAll ? items : items.slice(0, 10)
+  return (
+    <div className="space-y-0.5">
+      {visible.map((c) => (
+        <div key={c.key} className="flex items-baseline gap-2 text-xs">
+          <span className="font-mono font-bold text-violet-700">{c.key}</span>
+          {(c.issuetype || c.status) && (
+            <span className="text-[10px] uppercase tracking-wider font-bold text-gray-500 bg-white border border-gray-200 px-1.5 py-0.5 rounded">
+              {[c.issuetype, c.status].filter(Boolean).join(' • ')}
+            </span>
+          )}
+          <span className="truncate text-gray-700">{c.summary || ''}</span>
+        </div>
+      ))}
+      {items.length > 10 && (
+        <button
+          type="button"
+          onClick={() => setShowAll((v) => !v)}
+          className="mt-1 text-[11px] font-extrabold text-violet-600 hover:text-violet-800"
+        >
+          {showAll ? 'Show fewer' : `Show all ${items.length}`}
+        </button>
+      )}
+    </div>
+  )
 }
 
 // Resolve the primary input field key for a given agent. AGENT_META
@@ -283,13 +399,16 @@ function QuickPackTab({
 export default function QuickPack() {
   const { user } = useAuth()
   const { qaProjectSlug, setQaProjectSlug, userStoryKey, setUserStoryKey, setJiraProjectKey } = useSessionPrefs()
-  const { connected: jiraConnected, getFullIssue, resolveFromText } = useJira()
+  const { connected: jiraConnected, importBatch } = useJira()
   const [qaMode, setQaMode] = useQaMode()
   const [projects, setProjects] = useState([])
   const [context, setContext] = useState('')
   const [jiraInput, setJiraInput] = useState('')
   const [jiraFetching, setJiraFetching] = useState(false)
-  const [importedIssue, setImportedIssue] = useState(null)
+  // Array of resolved batch items: { token, kind, key?, primary?, children?, error? }.
+  // Replaces the previous single-ticket model so the user can paste a
+  // comma-separated list of issue keys, epic keys, and project keys at once.
+  const [importedIssues, setImportedIssues] = useState([])
   const [perAgentValues, setPerAgentValues] = useState({})
   const [statuses, setStatuses] = useState({})
   const [activeSlug, setActiveSlug] = useState(null)
@@ -324,10 +443,30 @@ export default function QuickPack() {
     }
   }, [accessibleAgents, activeSlug])
 
-  // Auto-pin the user-story key when the user types a recognizable
-  // Jira key/URL into the seed input. Mirrors the StlcPack page so
-  // Jira pushes from per-tab ReportPanels default to this story.
-  const detectedKey = useMemo(() => extractJiraKey(jiraInput), [jiraInput])
+  // Classify every comma-separated token in the input so we can both
+  // pin the first detected story key (mirrors the StlcPack page so
+  // per-tab Jira pushes default to it) and render a "Detected:" chip
+  // summarising what the user typed.
+  const classifiedTokens = useMemo(
+    () => splitJiraTokens(jiraInput).map(classifyJiraToken),
+    [jiraInput],
+  )
+  const detectedKey = useMemo(() => {
+    const firstIssue = classifiedTokens.find(t => t.kind === 'issue')
+    return firstIssue ? firstIssue.value : null
+  }, [classifiedTokens])
+  const tokenSummary = useMemo(() => {
+    const counts = { issue: 0, project: 0, unknown: 0 }
+    for (const t of classifiedTokens) counts[t.kind] = (counts[t.kind] || 0) + 1
+    const parts = []
+    if (counts.issue) parts.push(`${counts.issue} issue${counts.issue === 1 ? '' : 's'}`)
+    if (counts.project) parts.push(`${counts.project} project key${counts.project === 1 ? '' : 's'}`)
+    if (counts.unknown) parts.push(`${counts.unknown} unrecognised`)
+    return {
+      total: classifiedTokens.length,
+      label: parts.join(', ') || '—',
+    }
+  }, [classifiedTokens])
   useEffect(() => {
     if (!detectedKey) return
     setUserStoryKey(detectedKey)
@@ -437,71 +576,84 @@ export default function QuickPack() {
     setStatuses({})
     setBulkSkipped(new Set())
     setTriggerMap({})
-    setImportedIssue(null)
+    setImportedIssues([])
     setJiraInput('')
     setContext('')
   }
 
+  // Seed the bug_report tab from a single primary Jira payload. Same
+  // behaviour as before: title-style one-liner for `bug_description`,
+  // best-effort environment match against the agent's select options.
+  // Pulled into a helper so the multi-import handler can call it on
+  // just the FIRST primary issue without duplicating the body.
+  const seedBugReportTab = useCallback((payload, key) => {
+    if (!accessibleAgents.includes('bug_report')) return
+    const core = payload?.core || payload || {}
+    const summary = (core.summary || '').trim()
+    const issueEnv = (core.environment || '').trim()
+    setPerAgentValues(prev => {
+      const next = { ...prev }
+      const tab = { ...(next['bug_report'] || {}) }
+      if (!tab.bug_description || !tab.bug_description.trim()) {
+        tab.bug_description = key
+          ? `${key}: ${summary}`.trim().replace(/:\s*$/, '')
+          : summary
+      }
+      if (!tab.environment && issueEnv) {
+        const envField = AGENT_FIELDS.bug_report.find(f => f.key === 'environment')
+        const opts = envField?.optionsByMode?.[qaMode] || envField?.options || []
+        const needle = issueEnv.toLowerCase()
+        const hit = opts.find(o => {
+          const label = typeof o === 'string' ? o : o.value
+          return needle.includes(String(label).toLowerCase())
+        })
+        if (hit) tab.environment = typeof hit === 'string' ? hit : hit.value
+      }
+      next['bug_report'] = tab
+      return next
+    })
+  }, [accessibleAgents, qaMode])
+
   const handleJiraFetch = async () => {
-    const text = jiraInput.trim()
-    if (!text || jiraFetching || !jiraConnected) return
+    if (jiraFetching || !jiraConnected) return
+    const tokens = splitJiraTokens(jiraInput)
+    if (tokens.length === 0) return
     setJiraFetching(true)
     try {
-      const resp = await resolveFromText(text)
-      const key = resp?.key
-      let payload = null
-      if (key) {
-        try { payload = await getFullIssue(key) } catch { payload = resp?.issue || null }
-      } else {
-        payload = resp?.issue || null
-      }
-      if (!payload) {
-        toast.error('Could not find that Jira ticket.')
+      const { items = [] } = await importBatch(tokens)
+      // Keep entries that produced something usable: a primary payload
+      // (issue/epic) or at least one child row (project/epic). Errors
+      // and "unknown" tokens are surfaced via toast counters but not
+      // rendered as cards.
+      const ok = items.filter(i => !i.error && (i.primary || (i.children && i.children.length)))
+      const failed = items.length - ok.length
+      if (!ok.length) {
+        toast.error('No matching Jira tickets found.')
         return
       }
-      setImportedIssue(payload)
-      const core = payload?.core || payload || {}
-      const summary = (core.summary || '').trim()
-      const issueEnv = (core.environment || '').trim()
-      const seedText = jiraPayloadToText(payload)
-      // Seed the shared Context: replace whatever was there so the
-      // user clearly sees the fetched story in front of them. The
-      // context-watching effect then auto-fills every empty primary
-      // field across the tabs. Preserves manual edits made AFTER the
-      // fetch (only blank primary fields get filled).
-      setContext(seedText)
-      // bug_report is special-cased: defects are best filed as a
-      // one-line title (`KEY: summary`) rather than the full Jira
-      // body, so the user can hit Generate immediately and let the
-      // agent infer Steps / Expected / Actual. The generic context
-      // effect won't overwrite this because it only fills the
-      // primary field when blank.
-      if (accessibleAgents.includes('bug_report')) {
-        setPerAgentValues(prev => {
-          const next = { ...prev }
-          const tab = { ...(next['bug_report'] || {}) }
-          if (!tab.bug_description || !tab.bug_description.trim()) {
-            tab.bug_description = key
-              ? `${key}: ${summary}`.trim().replace(/:\s*$/, '')
-              : summary
-          }
-          if (!tab.environment && issueEnv) {
-            const envField = AGENT_FIELDS.bug_report.find(f => f.key === 'environment')
-            const opts = envField?.optionsByMode?.[qaMode] || envField?.options || []
-            const needle = issueEnv.toLowerCase()
-            const hit = opts.find(o => {
-              const label = typeof o === 'string' ? o : o.value
-              return needle.includes(String(label).toLowerCase())
-            })
-            if (hit) tab.environment = typeof hit === 'string' ? hit : hit.value
-          }
-          next['bug_report'] = tab
-          return next
-        })
+      setImportedIssues(ok)
+      // Replace the shared Context with the merged seed text so the
+      // user clearly sees what was imported and the per-tab primary
+      // fields auto-fill via the existing context effect (only blank
+      // primary fields get filled — manual edits are preserved).
+      setContext(seedTextFromBatch(ok))
+      // bug_report stays a single-defect tab on QA Workbench: seed it
+      // from the FIRST primary issue we received, ignoring children
+      // and additional tickets.
+      const firstIssue = ok.find(i => i.primary)
+      if (firstIssue) seedBugReportTab(firstIssue.primary, firstIssue.key)
+      const headlineKey = firstIssue?.key
+      const summary = (firstIssue?.primary?.core?.summary || '').trim()
+      const detail = ok.length === 1 && headlineKey
+        ? `Imported Jira ${headlineKey}${summary ? ` — ${summary}` : ''}`
+        : `Imported ${ok.length} Jira items${failed ? ` (${failed} skipped)` : ''}`
+      if (failed > 0) {
+        toast(detail, { icon: '⚠️' })
+      } else {
+        toast.success(detail)
       }
-      toast.success(key ? `Imported Jira ${key}${summary ? ` — ${summary}` : ''}` : 'Imported Jira ticket')
     } catch (err) {
-      toast.error(err?.message || 'Failed to fetch Jira ticket')
+      toast.error(err?.message || 'Failed to fetch Jira tickets')
     } finally {
       setJiraFetching(false)
     }
@@ -650,17 +802,17 @@ export default function QuickPack() {
           </div>
           <div>
             <label className="text-sm font-bold text-toon-navy mb-1.5 block">
-              Jira ticket
+              Jira tickets
               <span className="font-normal text-gray-400 ml-2">
                 {jiraConnected
-                  ? '(paste a key or URL — we auto-fetch the full details)'
+                  ? '(paste keys, URLs, epics, or project keys — separate with commas)'
                   : '(Jira not connected — fill the Context box below directly)'}
               </span>
             </label>
             <div className="flex gap-2">
               <input
                 className="toon-input flex-1"
-                placeholder={jiraConnected ? 'ABC-123 or https://acme.atlassian.net/browse/ABC-123' : 'Connect Jira from the Hub to enable auto-fetch'}
+                placeholder={jiraConnected ? 'ABC-123, DEF-456, or ABC for a whole project (comma-separated)' : 'Connect Jira from the Hub to enable auto-fetch'}
                 value={jiraInput}
                 onChange={(e) => setJiraInput(e.target.value)}
                 onKeyDown={(e) => {
@@ -677,35 +829,54 @@ export default function QuickPack() {
                 disabled={!jiraConnected || jiraFetching || !jiraInput.trim() || isRunning}
                 className="toon-btn toon-btn-blue text-sm px-4 py-2 whitespace-nowrap"
               >
-                {jiraFetching ? '…' : 'Fetch'}
+                {jiraFetching ? '…' : tokenSummary.total > 1 ? `Fetch ${tokenSummary.total}` : 'Fetch'}
               </button>
             </div>
-            {detectedKey && (
+            {tokenSummary.total > 0 && (
               <div className="mt-1.5 text-xs font-bold text-violet-600">
-                Detected: {detectedKey}
+                Detected: {tokenSummary.label}
               </div>
             )}
           </div>
         </div>
 
-        {/* Imported Jira preview */}
-        <AnimatePresence>
-          {importedIssue && (
+        {/* Imported Jira preview — one card per resolved batch item */}
+        <AnimatePresence initial={false}>
+          {importedIssues.length > 0 && (
             <motion.div
-              key="imported-jira"
+              key="imported-jira-list"
               initial={{ opacity: 0, height: 0 }}
               animate={{ opacity: 1, height: 'auto' }}
               exit={{ opacity: 0, height: 0 }}
               transition={{ duration: 0.2 }}
               className="overflow-hidden mb-4"
             >
-              <div className="rounded-2xl border border-gray-200 bg-gray-50 p-3">
-                <JiraTicketCard
-                  detail={importedIssue}
-                  compact
-                  defaultExpanded={false}
-                  onRemove={() => setImportedIssue(null)}
-                />
+              <div className="space-y-2">
+                {importedIssues.map((item, idx) => (
+                  <div
+                    key={`${item.token}-${idx}`}
+                    className="rounded-2xl border border-gray-200 bg-gray-50 p-3"
+                  >
+                    {item.primary ? (
+                      <JiraTicketCard
+                        detail={item.primary}
+                        compact
+                        defaultExpanded={false}
+                        onRemove={() => setImportedIssues(prev => prev.filter((_, i) => i !== idx))}
+                      />
+                    ) : (
+                      <ProjectChildrenCard
+                        token={item.token}
+                        kind={item.kind}
+                        items={item.children || []}
+                        onRemove={() => setImportedIssues(prev => prev.filter((_, i) => i !== idx))}
+                      />
+                    )}
+                    {item.kind === 'epic' && item.children?.length > 0 && (
+                      <EpicChildrenList items={item.children} epicKey={item.key} />
+                    )}
+                  </div>
+                ))}
               </div>
             </motion.div>
           )}

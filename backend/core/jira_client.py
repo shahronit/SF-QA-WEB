@@ -239,6 +239,25 @@ class JiraClient:
         jql = " AND ".join(jql_parts) + " ORDER BY updated DESC"
         return self.search_issues(jql, max_results=max_results)
 
+    def list_epic_children(
+        self, epic_key: str, max_results: int = 100,
+    ) -> list[dict[str, Any]]:
+        """Return summary rows for issues whose Epic Link / parent is *epic_key*.
+
+        Covers both the legacy "Epic Link" custom field (classic projects) and
+        the newer ``parent`` linkage (next-gen / team-managed projects). Capped
+        at *max_results* (default 100) and ordered by most-recently-updated so
+        in-flight work surfaces first.
+        """
+        safe_key = epic_key.replace('"', '').strip()
+        if not safe_key:
+            return []
+        jql = (
+            f'("Epic Link" = {safe_key} OR parent = {safe_key}) '
+            f'ORDER BY updated DESC'
+        )
+        return self.search_issues(jql, max_results=max_results)
+
     def search_issues(self, jql: str, max_results: int = 50) -> list[dict[str, Any]]:
         """Run a JQL search and return simplified issue dicts.
 

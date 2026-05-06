@@ -145,6 +145,22 @@ export function JiraProvider({ children }) {
     }
   }, [])
 
+  // Resolve a list of Jira tokens (issue keys, epic keys, bare project
+  // keys, or browse URLs) in a single round-trip. Used by QA Workbench's
+  // multi-import field. The server fans out the fetches in parallel and
+  // promotes issue keys to "epic" automatically when the resolved
+  // issuetype is Epic. Per-token failures surface as `error` strings on
+  // the corresponding item — the call itself never throws on partial
+  // failure.
+  const importBatch = useCallback(async (tokens, { maxPerGroup = 100 } = {}) => {
+    if (!Array.isArray(tokens) || tokens.length === 0) return { items: [] }
+    const { data } = await api.post('/jira/import-batch', {
+      tokens,
+      max_per_group: maxPerGroup,
+    })
+    return data || { items: [] }
+  }, [])
+
   return (
     <JiraContext.Provider
       value={{
@@ -161,6 +177,7 @@ export function JiraProvider({ children }) {
         getIssue,
         getFullIssue,
         resolveFromText,
+        importBatch,
       }}
     >
       {children}
