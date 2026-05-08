@@ -465,11 +465,21 @@ class JiraClient:
 
         # Core is fetched first — other categories are independent and only
         # need the issue key, so they can all run in parallel after this.
-        core: dict[str, Any] = {}
+        # If core fails we abort: every downstream extractor reads from
+        # core's `_raw_fields`, so without it the response would be an
+        # empty-shell dict that the UI displays as a "fetched but blank"
+        # ticket. Better to surface the real error to the caller.
         try:
             core = self._fetch_core(issue_key)
+        except ConnectionError:
+            # Already a useful, user-facing error message — let it bubble
+            # up to the route handler unchanged so the UI can show it.
+            raise
         except Exception as exc:  # noqa: BLE001
-            errors.append({"category": "core", "reason": "NETWORK_ERROR", "message": str(exc)})
+            raise ConnectionError(
+                f"Could not load core fields for {issue_key} "
+                f"({type(exc).__name__}): {exc}"
+            ) from exc
 
         parallel_tasks: dict[str, Any] = {
             "comments":     self._fetch_comments,

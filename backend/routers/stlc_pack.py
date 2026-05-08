@@ -62,6 +62,12 @@ class StlcRunRequest(BaseModel):
     # Optional companion keys: ``blocked``, ``defects_summary``,
     # ``coverage_notes``, ``cycle_name``.
     execution_data: dict[str, Any] | None = None
+    # Optional list of pack-agent slugs to actually run. ``None`` is
+    # treated as "every phase" for back-compat with older clients.
+    # Phases not in this list are emitted as ``agent_skipped`` with
+    # reason "Excluded by user selection." — distinct from the
+    # implicit Phase 4/5 skip when ``execution_data`` is null.
+    selected_agents: list[str] | None = None
 
 
 def _has_exec_data(data: dict[str, Any] | None) -> bool:
@@ -394,9 +400,16 @@ def _log_pack_run(
     jira_key: str | None,
     seed_text: str,
     outputs: dict[str, str],
+    selected_agents: list[str] | None = None,
 ) -> None:
     """Persist a single combined ``stlc_pack`` history record alongside the
     per-agent logs that the orchestrator already writes.
+
+    ``selected_agents`` reflects the explicit subset the user picked on
+    the page. ``None`` means "all phases were eligible" (the default);
+    audit logs need both pieces of data to reconstruct what actually
+    fired versus what was skipped, since exec_report / closure_report
+    can also be skipped implicitly when no execution data was given.
     """
     record = {
         "ts": datetime.now(timezone.utc).isoformat(),
@@ -407,6 +420,11 @@ def _log_pack_run(
         "jira_key": jira_key,
         "input": {"seed_preview": seed_text[:500]},
         "agents": [a["agent"] for a in PACK_AGENTS],
+        "selected_agents": (
+            list(selected_agents)
+            if selected_agents is not None
+            else [a["agent"] for a in PACK_AGENTS]
+        ),
         "output_preview": "\n\n".join(
             f"## {a['phase']} — {a['label']}\n\n{(outputs.get(a['agent']) or '')[:200]}"
             for a in PACK_AGENTS
@@ -467,9 +485,37 @@ async def run_stlc_pack(body: StlcRunRequest, user=Depends(get_current_user)):
             "Execution details not provided. Add Executed / Passed / Failed "
             "counts on the STLC Pack page to generate this report."
         )
+        # Normalise the user's selection: ``None`` means "run every
+        # phase" (older clients), an empty list means "skip everything".
+        # We compare raw slugs only — labels and phase descriptors are
+        # frontend-only.
+        selected_set: set[str] | None = (
+            set(body.selected_agents)
+            if body.selected_agents is not None
+            else None
+        )
+        excluded_reason = "Excluded by user selection."
 
         for index, step in enumerate(PACK_AGENTS, start=1):
             agent = step["agent"]
+            # Explicit user opt-out wins over the exec-data skip so the
+            # SSE reason reflects what the user did, not what the data
+            # implies. ``prior_output`` deliberately stays whatever the
+            # last successful agent produced — chained agents behind a
+            # skip still get the most recent upstream output, matching
+            # the existing exec-data skip's behaviour.
+            if selected_set is not None and agent not in selected_set:
+                yield _sse("agent_skipped", {
+                    "pack_id": pack_id,
+                    "index": index,
+                    "total": total,
+                    "agent": agent,
+                    "label": step["label"],
+                    "phase": step["phase"],
+                    "reason": excluded_reason,
+                })
+                outputs[agent] = ""
+                continue
             if agent in ("exec_report", "closure_report") and not exec_ok:
                 # Tell the UI we deliberately skipped these phases so it can
                 # render a clear "Skipped" card instead of a fake report.
@@ -546,8 +592,11 @@ async def run_stlc_pack(body: StlcRunRequest, user=Depends(get_current_user)):
         def _section(step: dict[str, str]) -> str:
             agent = step["agent"]
             content = outputs.get(agent, "")
-            if not content and agent in ("exec_report", "closure_report") and not exec_ok:
-                content = f"_Skipped — {skipped_reason}_"
+            if not content:
+                if selected_set is not None and agent not in selected_set:
+                    content = f"_Skipped — {excluded_reason}_"
+                elif agent in ("exec_report", "closure_report") and not exec_ok:
+                    content = f"_Skipped — {skipped_reason}_"
             return f"## {step['phase']} — {step['label']}\n\n{content}\n\n---\n"
 
         combined = "\n\n".join(_section(step) for step in PACK_AGENTS)
@@ -558,6 +607,7 @@ async def run_stlc_pack(body: StlcRunRequest, user=Depends(get_current_user)):
             jira_key=jira_key,
             seed_text=seed_text,
             outputs=outputs,
+            selected_agents=body.selected_agents,
         )
         yield _sse("pack_done", {
             "pack_id": pack_id,

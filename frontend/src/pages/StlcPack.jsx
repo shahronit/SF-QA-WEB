@@ -154,6 +154,8 @@ export default function StlcPack() {
     userStoryKey,
     setUserStoryKey,
     setJiraProjectKey,
+    stlcPackTargets,
+    setStlcPackTargets,
   } = useSessionPrefs()
   const selectedProject = qaProjectSlug
   const setSelectedProject = setQaProjectSlug
@@ -180,6 +182,31 @@ export default function StlcPack() {
     defects_summary: '',
     coverage_notes: '',
   })
+  // Subset of STLC_PACK_AGENTS the user wants this run to actually
+  // execute. Persists across reload via SessionPrefsContext.stlcPackTargets
+  // — ``null`` in storage means "default to every phase" (first-run /
+  // never picked). Unchecked phases are explicitly skipped by the
+  // backend with reason "Excluded by user selection." — distinct from
+  // the implicit Phase 4/5 skip when execution_data is null.
+  const selectedAgents = useMemo(() => {
+    if (stlcPackTargets === null || stlcPackTargets === undefined) {
+      return new Set(STLC_PACK_AGENTS)
+    }
+    return new Set(stlcPackTargets.filter(s => STLC_PACK_AGENTS.includes(s)))
+  }, [stlcPackTargets])
+  const toggleSelectedAgent = useCallback((slug) => {
+    const current = stlcPackTargets === null || stlcPackTargets === undefined
+      ? new Set(STLC_PACK_AGENTS)
+      : new Set(stlcPackTargets.filter(s => STLC_PACK_AGENTS.includes(s)))
+    if (current.has(slug)) current.delete(slug)
+    else current.add(slug)
+    setStlcPackTargets(current)
+  }, [stlcPackTargets, setStlcPackTargets])
+  const setAllAgentsSelected = useCallback((all) => {
+    setStlcPackTargets(all ? STLC_PACK_AGENTS : [])
+  }, [setStlcPackTargets])
+  const allSelected = selectedAgents.size === STLC_PACK_AGENTS.length
+  const noneSelected = selectedAgents.size === 0
   const updateExec = (key) => (e) =>
     setExecutionData(prev => ({ ...prev, [key]: e.target.value }))
   const hasAnyExec = (d) => Object.values(d || {}).some(v => String(v ?? '').trim().length > 0)
@@ -204,7 +231,9 @@ export default function StlcPack() {
   }, [fetchProjects])
 
   const detectedKey = useMemo(() => extractJiraKey(jiraInput), [jiraInput])
-  const canRun = !running && (jiraInput.trim().length > 0 || userStory.trim().length > 0)
+  const canRun = !running
+    && (jiraInput.trim().length > 0 || userStory.trim().length > 0)
+    && selectedAgents.size > 0
 
   // Auto-pin the user-story key (and project key prefix) whenever the
   // user types a recognisable Jira key/URL into the seed input. Keeps
@@ -268,6 +297,13 @@ export default function StlcPack() {
           // Only forward execution data when the user has actually filled
           // something in. Backend treats ``null`` as "skip Phase 4 + 5".
           execution_data: hasAnyExec(executionData) ? executionData : null,
+          // The user may have unchecked some phases above. Send the
+          // explicit list — backend skips any agent missing from this
+          // array with reason "Excluded by user selection." Sending
+          // ``null`` keeps the default (run every phase) for back-compat.
+          selected_agents: selectedAgents.size === STLC_PACK_AGENTS.length
+            ? null
+            : [...selectedAgents],
         }),
       })
       if (!resp.ok || !resp.body) {
@@ -397,6 +433,84 @@ export default function StlcPack() {
                     <span aria-hidden="true">{opt.icon}</span>
                     {opt.label}
                   </span>
+                </button>
+              )
+            })}
+          </div>
+        </div>
+
+        {/* Phase picker — pick which STLC phases this run should
+            execute. Defaults to all five. Unchecked phases are skipped
+            by the backend with reason "Excluded by user selection."
+            Phases 4/5 still also implicitly skip when no execution
+            data is filled in below — the two skip reasons are visually
+            distinct on the timeline (gray dashed border for both, but
+            the agent_skipped frame's reason differs). */}
+        <div className="mb-4 bg-gray-50 rounded-2xl p-3 border border-gray-200">
+          <div className="flex items-center justify-between gap-3 mb-2">
+            <div>
+              <div className="text-sm font-bold text-toon-navy">Run these phases</div>
+              <div className="text-xs text-gray-500">
+                {noneSelected
+                  ? 'No phases selected — Generate is disabled.'
+                  : `${selectedAgents.size}/${STLC_PACK_AGENTS.length} phases will run. Skipping a middle phase routes its inputs to whatever upstream phase ran last.`}
+              </div>
+            </div>
+            <div className="flex items-center gap-1.5 text-[11px] font-bold">
+              <button
+                type="button"
+                onClick={() => setAllAgentsSelected(true)}
+                disabled={running || allSelected}
+                className={`px-2.5 py-1 rounded-lg border transition-colors ${
+                  allSelected
+                    ? 'border-violet-200 text-violet-300 bg-white cursor-default'
+                    : 'border-violet-200 text-violet-700 bg-white hover:bg-violet-50'
+                } ${running ? 'opacity-50 cursor-not-allowed' : ''}`}
+              >
+                All
+              </button>
+              <button
+                type="button"
+                onClick={() => setAllAgentsSelected(false)}
+                disabled={running || noneSelected}
+                className={`px-2.5 py-1 rounded-lg border transition-colors ${
+                  noneSelected
+                    ? 'border-gray-200 text-gray-300 bg-white cursor-default'
+                    : 'border-gray-200 text-gray-600 bg-white hover:bg-gray-100'
+                } ${running ? 'opacity-50 cursor-not-allowed' : ''}`}
+              >
+                None
+              </button>
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {STLC_PACK_AGENTS.map(slug => {
+              const meta = getAgent(slug)
+              const phase = PHASE_LABELS[slug]
+              const checked = selectedAgents.has(slug)
+              return (
+                <button
+                  key={slug}
+                  type="button"
+                  onClick={() => toggleSelectedAgent(slug)}
+                  disabled={running}
+                  aria-pressed={checked}
+                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl border text-xs font-bold transition-all ${
+                    checked
+                      ? 'bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white border-transparent shadow-sm'
+                      : 'bg-white text-gray-600 border-gray-200 hover:border-violet-300'
+                  } ${running ? 'opacity-60 cursor-not-allowed' : ''}`}
+                  title={
+                    checked
+                      ? `${phase?.phase || ''} ${meta?.label || slug} — click to skip this phase`
+                      : `${phase?.phase || ''} ${meta?.label || slug} — click to include this phase`
+                  }
+                >
+                  <span aria-hidden="true">{meta?.icon || '✨'}</span>
+                  <span>{meta?.label || slug}</span>
+                  {!checked && (
+                    <span className="text-[9px] uppercase tracking-wider text-gray-400">off</span>
+                  )}
                 </button>
               )
             })}

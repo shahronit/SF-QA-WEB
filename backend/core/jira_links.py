@@ -9,10 +9,16 @@ from __future__ import annotations
 import re
 from urllib.parse import urlparse
 
-# Standard Jira Cloud key shape: 2+ uppercase letters/digits + '-' + digits.
-# Examples that match: ABC-1, ABC123-99, AB12-7
-# Examples that do NOT match (intentional): A-1, abc-1, ABC_1
-JIRA_KEY_RE = re.compile(r"\b([A-Z][A-Z0-9]+-\d+)\b")
+# Jira Cloud key shape: a project key (letter then 1+ letters/digits/_) + '-'
+# + digits. Real Jira project keys are conventionally uppercase and may
+# contain underscores (e.g. ``MY_PROJ``); we accept either case here and
+# normalise to upper-case at the call site so downstream API calls always
+# use the canonical form Jira expects.
+#
+# Examples that match: ABC-1, ABC123-99, AB12-7, ket-1, MY_PROJ-42
+# Examples that do NOT match (intentional): A-1 (single-char prefix is
+# not a valid Jira project key), 9-1 (must start with a letter).
+JIRA_KEY_RE = re.compile(r"\b([A-Za-z][A-Za-z0-9_]+-\d+)\b")
 
 
 def extract_jira_key(text: str | None, base_url: str | None = None) -> str | None:
@@ -21,6 +27,11 @@ def extract_jira_key(text: str | None, base_url: str | None = None) -> str | Non
     Recognises:
       - Bare keys, e.g. "blocked by ABC-123 today".
       - Browse URLs, e.g. "https://acme.atlassian.net/browse/ABC-123".
+
+    Matching is case-insensitive — pasted lower-case keys (``abc-12``) are
+    accepted and the result is normalised to upper-case so downstream
+    Jira REST calls always use the canonical key shape. Project keys
+    containing underscores (``MY_PROJ-42``) are also accepted.
 
     When *base_url* is supplied, URLs whose host does not match the connected
     Jira instance are still accepted (we trust the embedded key) — this keeps
@@ -39,9 +50,9 @@ def extract_jira_key(text: str | None, base_url: str | None = None) -> str | Non
                 continue
             path_match = JIRA_KEY_RE.search(parsed.path or "")
             if path_match:
-                return path_match.group(1)
+                return path_match.group(1).upper()
 
     bare_match = JIRA_KEY_RE.search(text)
     if bare_match:
-        return bare_match.group(1)
+        return bare_match.group(1).upper()
     return None

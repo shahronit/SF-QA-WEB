@@ -1,45 +1,27 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeRaw from 'rehype-raw'
 import MarkdownTableCell from './markdown/MarkdownTableCell'
 import MarkdownTableScroll from './markdown/MarkdownTableScroll'
-import toast from 'react-hot-toast'
 import api from '../api/client'
 import ReportPanel from './ReportPanel'
 import { useAgentResults, AGENT_LABELS } from '../context/AgentResultsContext'
 import { useJira } from '../context/JiraContext'
-import JiraTicketCard from './JiraTicketCard'
 import CustomPromptEditor from './CustomPromptEditor'
 import ProjectContextPicker from './ProjectContextPicker'
 import Confetti from './motion/Confetti'
 import GeneratingScene from './motion/GeneratingScene'
 import MagneticButton from './motion/MagneticButton'
-import { extractJiraKey } from '../utils/jiraDetect'
+import { extractJiraKey, splitJiraTokens, classifyJiraToken } from '../utils/jiraDetect'
+import { seedTextFromBatch, summarizeBatchError } from '../utils/jiraSeed'
+import BatchPreview from './jira/BatchPreview'
 import { useQaMode, QA_MODE_OPTIONS } from '../hooks/useQaMode'
 import { useSessionPrefs } from '../context/SessionPrefsContext'
 import { resolvePrimaryField } from '../config/agentMeta'
 
 const LINK_PREVIEW_MD_COMPONENTS = { td: MarkdownTableCell, table: MarkdownTableScroll }
-
-// Agents whose scope can legitimately span multiple Jira tickets — they
-// generate test artifacts that derive from one or more user stories /
-// requirements. Other agents (Bug Reports, RCA, Exec Report, Closure
-// Report, Copado Script) are about a single ticket / single incident, so
-// they stay single-select to keep the picker semantics honest.
-const MULTI_SELECT_AGENTS = new Set([
-  'testcase',
-  'smoke',
-  'regression',
-  'test_plan',
-  'requirement',
-  'uat_plan',
-  'automation_plan',
-  'rtm',
-  'test_data',
-  'estimation',
-])
 
 // Format a Jira issue payload as plain text for an LLM seed.
 //
@@ -357,7 +339,6 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
     setJiraProjectKey: setPinnedJiraProjectKey,
     sprintId: pinnedSprintId,
     sprintName: pinnedSprintName,
-    setSprint: setPinnedSprint,
     userStoryKey: pinnedUserStoryKey,
     setUserStoryKey: setPinnedUserStoryKey,
     clearPin,
@@ -382,14 +363,12 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
   // auto-fills it on every other Jira surface.
   const jiraContextKey = pinnedUserStoryKey
   const setJiraContextKey = setPinnedUserStoryKey
-  // Rich payload(s) of the most recent Jira import. Rendered below the picker
-  // as a confirmation card via `<JiraTicketCard />` so the user keeps full
-  // visibility of what was pulled in even after closing the picker.
-  // Single-import sets `importedJira` and clears `importedJiraList`; multi-
-  // import / sprint-scope does the opposite. `Remove` on a card clears the
-  // corresponding entry without touching textarea contents.
-  const [importedJira, setImportedJira] = useState(null)
-  const [importedJiraList, setImportedJiraList] = useState([])
+  // Resolved /api/jira/import-batch entries from the most recent fetch. Each
+  // entry has shape `{ token, kind, key?, primary?, children?, error? }` —
+  // identical to QuickPack's flow so the same `<BatchPreview />` component
+  // renders cards here. Single-token paste produces a one-element array;
+  // multi-token paste shows one card per resolved item.
+  const [importedIssues, setImportedIssues] = useState([])
   const [qaMode, setQaMode] = useQaMode()
 
   const { saveResult, getAvailableResults } = useAgentResults()
@@ -397,30 +376,49 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
   const {
     connected: jiraConnected,
     resolveFromText,
-    getIssue: jiraGetIssue,
     getFullIssue: jiraGetFullIssue,
-    listIssues: jiraListIssues,
+    importBatch: jiraImportBatch,
   } = useJira()
 
   // Multi-select + sprint-scope CTAs are enabled on the artifact-generation
   // agents that benefit from multi-ticket scope. Single-select agents
   // (Bug Reports, RCA, Exec Report, Closure Report, Copado Script) are
   // conceptually about a single ticket so they stay focused on one.
-  const allowMultiPick = MULTI_SELECT_AGENTS.has(agentName)
-
   // Per-field set of Jira keys we have already auto-imported, so on-blur
   // doesn't re-fetch the same ticket every time the user clicks elsewhere.
   const importedKeysRef = useRef({})
   const [autoFetchedNotice, setAutoFetchedNotice] = useState({})
 
-  // Inline "Jira ticket or URL" input that lives in the primary card.
-  // Independent of the textarea contents so users can keep editing the
-  // Context box freely after the import lands. Empty unless the user
-  // is actively typing a key — we deliberately do NOT mirror imported
-  // keys here so the input doesn't become a stale parrot of the chip
-  // already shown above.
-  const [jiraQuickInput, setJiraQuickInput] = useState('')
+  // Inline "Jira tickets" input that lives in the primary card. Accepts
+  // comma- or newline-separated tokens (issue keys, browse URLs, epic
+  // keys, project keys) — same syntax QuickPack uses — so the user can
+  // import several tickets into the agent's Context in one round-trip.
+  // Empty unless the user is actively typing — we deliberately do NOT
+  // mirror imported keys here so the input doesn't become a stale parrot
+  // of the chip / cards already shown above.
+  const [jiraInput, setJiraInput] = useState('')
+  const [jiraFetching, setJiraFetching] = useState(false)
   const [jiraQuickStatus, setJiraQuickStatus] = useState({ kind: 'idle', message: '' })
+
+  // Live classification of the comma-separated input — drives the
+  // "Detected: N issues, M projects" chip below the row and the
+  // "Fetch N" button label that mirrors QuickPack.
+  const classifiedTokens = useMemo(
+    () => splitJiraTokens(jiraInput).map(classifyJiraToken),
+    [jiraInput],
+  )
+  const tokenSummary = useMemo(() => {
+    const counts = { issue: 0, project: 0, unknown: 0 }
+    for (const t of classifiedTokens) counts[t.kind] = (counts[t.kind] || 0) + 1
+    const parts = []
+    if (counts.issue) parts.push(`${counts.issue} issue${counts.issue === 1 ? '' : 's'}`)
+    if (counts.project) parts.push(`${counts.project} project key${counts.project === 1 ? '' : 's'}`)
+    if (counts.unknown) parts.push(`${counts.unknown} unrecognised`)
+    return {
+      total: classifiedTokens.length,
+      label: parts.join(', ') || '—',
+    }
+  }, [classifiedTokens])
 
   // Refs for the Advanced disclosure body so we can scroll to + focus
   // the first missing required field when the user clicks Generate
@@ -680,9 +678,9 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
     setLinkedAgent('')
     setShowLinkedPreview(false)
     setShakeKeys({})
-    setImportedJira(null)
-    setImportedJiraList([])
-    setJiraQuickInput('')
+    setImportedIssues([])
+    setJiraInput('')
+    setJiraFetching(false)
     setJiraQuickStatus({ kind: 'idle', message: '' })
     // Clear the user-story pin so the next agent run starts fresh.
     // RAG project, Jira project, and sprint are kept pinned — they
@@ -740,60 +738,86 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
     }
   }, [jiraConnected, resolveFromText, jiraGetFullIssue])
 
-  const handleJiraImport = useCallback((issue) => {
-    if (!issue) return
-    // Picker now passes the rich `/full` payload, where the headline fields
-    // live under `core.*`. Fall back to the flat shape for back-compat.
-    const core = issue.core || issue
-    const issueKey = core.key || ''
-    const issueSummary = core.summary || ''
-    const issueUrl = core.url || issue.url || ''
-    if (issueKey) {
-      setJiraContextKey(issueKey)
-      // Project key is the prefix before the dash (e.g. "ABC" from
-      // "ABC-123"). Pin it so every downstream Jira-push surface
-      // pre-selects the same project unless the user changes it.
-      const projKey = issueKey.split('-')[0] || ''
-      if (projKey) setPinnedJiraProjectKey(projKey)
-    }
-    setImportedJira(issue)
-    setImportedJiraList([])
-    const text = jiraIssueToText(issue)
+  // Compose the per-agent post-processor that the multi-token fetch shares
+  // with any caller that needs to seed the form from a single resolved
+  // /full payload. Walks `resolvedFields`, fills the title-style field if
+  // empty (e.g. bug_report.bug_title), appends seed text into the primary
+  // textarea (replaces today's `handleJiraImport` body), and appends a
+  // one-line note per imported key into any additional_context field.
+  //
+  // Marker pattern matches today's on-blur auto-import so a key that's
+  // already been imported via blur won't be duplicated by an explicit
+  // Fetch round-trip.
+  const writeBatchIntoForm = useCallback((items, seedText) => {
+    if (!items?.length || !seedText) return
+    const firstPrimary = items.find(i => i.primary)?.primary
+    const firstCore = firstPrimary?.core || firstPrimary || {}
+    const firstKey = firstCore.key || items.find(i => i.key)?.key || ''
+    const firstSummary = firstCore.summary || ''
+
     setValues(prev => {
       const next = { ...prev }
       const textareaFields = resolvedFields.filter(f => f.type === 'textarea')
       const textFields = resolvedFields.filter(f => f.type !== 'textarea' && f.type !== 'select')
-      const titleField = textFields.find(f =>
-        /title|summary|name/i.test(f.key)
-      )
-      if (titleField && !next[titleField.key]?.trim?.()) {
-        next[titleField.key] = `${issueKey}: ${issueSummary}`.trim()
+
+      // Title-style field (bug_report.bug_title etc.) — only set when blank.
+      const titleField = textFields.find(f => /title|summary|name/i.test(f.key))
+      if (titleField && !next[titleField.key]?.trim?.() && firstSummary) {
+        next[titleField.key] = `${firstKey ? firstKey + ': ' : ''}${firstSummary}`.trim()
       }
+
+      // Primary textarea — prefer the agent-declared primary, fall back to
+      // the legacy heuristic and the first textarea, mirroring resolvePrimaryField.
       const primaryArea =
-        textareaFields.find(f => /requirement|story|description|scope|test_cases|test_cases_or_scope/i.test(f.key)) ||
-        textareaFields[0]
+        primaryField && primaryField.type === 'textarea'
+          ? primaryField
+          : textareaFields.find(f =>
+              /requirement|story|description|scope|test_cases|test_cases_or_scope/i.test(f.key),
+            ) || textareaFields[0]
       if (primaryArea) {
         const existing = next[primaryArea.key]?.trim?.() || ''
-        next[primaryArea.key] = existing ? `${existing}\n\n${text}` : text
+        const marker = items.length === 1 && firstKey
+          ? `--- Imported from Jira ${firstKey} ---`
+          : `--- Imported from Jira (${items.length} item${items.length === 1 ? '' : 's'}) ---`
+        if (!existing.includes(marker)) {
+          const block = `${marker}\n${seedText}`
+          next[primaryArea.key] = existing ? `${existing}\n\n${block}` : block
+        }
       }
+
+      // Additional context field (one note line per imported key).
       const ctxArea = textareaFields.find(f => /additional_context|context/i.test(f.key))
       if (ctxArea && primaryArea && ctxArea.key !== primaryArea.key) {
         const ex = next[ctxArea.key]?.trim?.() || ''
-        const note = `Imported from Jira ${issueKey} (${issueUrl})`
-        next[ctxArea.key] = ex ? `${ex}\n${note}` : note
+        const noteLines = items.map(i => {
+          const k = i.primary?.core?.key || i.key || i.token
+          const u = i.primary?.core?.url || i.primary?.url || ''
+          return `Imported from Jira ${k}${u ? ` (${u})` : ''}`
+        })
+        const note = noteLines.join('\n')
+        if (!ex.endsWith(note)) {
+          next[ctxArea.key] = ex ? `${ex}\n${note}` : note
+        }
       }
       return next
     })
-  }, [resolvedFields])
 
-  // Submit handler for the "Jira ticket or URL" input that lives inside
-  // the primary card. Resolves the text via JiraContext, fetches the
-  // rich /full payload, formats it with `jiraIssueToText`, and funnels
-  // through the canonical `handleJiraImport` path. Inline status row
-  // replaces toasts so the user can correct typos without losing focus.
-  const handleQuickJiraSubmit = useCallback(async (rawText) => {
-    const text = (rawText ?? jiraQuickInput).trim()
-    if (!text) return
+    // Pin the first imported key as the user-story / project so every
+    // downstream Jira-push surface inherits the same parent ticket.
+    if (firstKey) {
+      setJiraContextKey(firstKey)
+      const projKey = firstKey.split('-')[0] || ''
+      if (projKey) setPinnedJiraProjectKey(projKey)
+    }
+  }, [resolvedFields, primaryField, setJiraContextKey, setPinnedJiraProjectKey])
+
+  // Multi-token Jira fetch — same pipeline QuickPack uses. Accepts comma-
+  // / newline-separated issue keys, browse URLs, epic keys, and project
+  // keys; routes them through /api/jira/import-batch in one round-trip;
+  // surfaces per-token errors when nothing came back; appends consolidated
+  // seed text into the agent's primary textarea via writeBatchIntoForm.
+  const handleJiraFetch = useCallback(async () => {
+    if (jiraFetching) return
     if (!jiraConnected) {
       setJiraQuickStatus({
         kind: 'error',
@@ -801,147 +825,53 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
       })
       return
     }
-    setJiraQuickStatus({ kind: 'loading', message: 'Fetching Jira ticket…' })
+    const tokens = splitJiraTokens(jiraInput)
+    if (tokens.length === 0) return
+    setJiraFetching(true)
+    setJiraQuickStatus({
+      kind: 'loading',
+      message: tokens.length > 1
+        ? `Fetching ${tokens.length} Jira items…`
+        : 'Fetching Jira ticket…',
+    })
     try {
-      const resp = await resolveFromText(text)
-      if (!resp?.key) {
+      const { items = [] } = await jiraImportBatch(tokens)
+      const ok = items.filter(i => !i.error && (i.primary || (i.children && i.children.length)))
+      if (!ok.length) {
+        const { reason, tokenLabel } = summarizeBatchError(items, tokens)
         setJiraQuickStatus({
           kind: 'error',
-          message: 'Could not parse a Jira ticket key from that input.',
+          message: `Could not fetch ${tokenLabel}: ${reason}`,
         })
         return
       }
-      let payload = null
-      try {
-        payload = await jiraGetFullIssue(resp.key)
-      } catch {
-        payload = resp.issue || null
-      }
-      if (!payload) {
-        setJiraQuickStatus({
-          kind: 'error',
-          message: `Jira returned no detail for ${resp.key}.`,
-        })
-        return
-      }
-      handleJiraImport(payload)
-      setJiraQuickInput('')
-      setJiraQuickStatus({ kind: 'success', message: `Imported ${resp.key}` })
+      setImportedIssues(ok)
+      writeBatchIntoForm(ok, seedTextFromBatch(ok))
+      setJiraInput('')
+      const failed = items.length - ok.length
+      const headline = ok.length === 1
+        ? `Imported ${ok[0].primary?.core?.key || ok[0].key || ok[0].token}`
+        : `Imported ${ok.length} Jira items`
+      setJiraQuickStatus({
+        kind: failed > 0 ? 'warn' : 'success',
+        message: failed > 0 ? `${headline} (${failed} skipped)` : headline,
+      })
       setTimeout(() => {
-        setJiraQuickStatus(prev => (prev.kind === 'success' ? { kind: 'idle', message: '' } : prev))
-      }, 2500)
+        setJiraQuickStatus(prev =>
+          prev.kind === 'success' || prev.kind === 'warn'
+            ? { kind: 'idle', message: '' }
+            : prev,
+        )
+      }, 3500)
     } catch (err) {
       setJiraQuickStatus({
         kind: 'error',
-        message: err?.message || 'Failed to fetch Jira ticket.',
+        message: err?.response?.data?.detail || err?.message || 'Failed to fetch Jira tickets.',
       })
+    } finally {
+      setJiraFetching(false)
     }
-  }, [jiraQuickInput, jiraConnected, resolveFromText, jiraGetFullIssue, handleJiraImport])
-
-  // Fetch full detail for a list of issues with bounded concurrency, then
-  // format the consolidated scope block. Used by both `handleJiraImportMany`
-  // (user checked rows) and `handleSprintScope` (Use entire sprint CTA).
-  //
-  // We pull the rich /full payload per ticket so the consolidated block
-  // includes sub-tasks, linked issues, attachments, sprint/epic, comments
-  // preview, and tenant custom fields (Acceptance Criteria etc.) for each
-  // ticket — not just the trimmed lite summary.
-  const fetchAndFormatScope = useCallback(async (issueKeys, headerLine) => {
-    const concurrency = 5
-    const results = new Array(issueKeys.length)
-    let cursor = 0
-    const worker = async () => {
-      while (cursor < issueKeys.length) {
-        const i = cursor++
-        try {
-          results[i] = await jiraGetFullIssue(issueKeys[i])
-        } catch {
-          // Fall back to the lite endpoint so a single 403/timeout on /full
-          // doesn't drop the ticket from the consolidated scope.
-          try {
-            results[i] = await jiraGetIssue(issueKeys[i])
-          } catch {
-            results[i] = null
-          }
-        }
-      }
-    }
-    await Promise.all(Array.from({ length: Math.min(concurrency, issueKeys.length) }, worker))
-    const ok = results.filter(Boolean)
-    const lines = []
-    if (headerLine) lines.push(headerLine, '')
-    lines.push(`Tickets in scope (${ok.length}):`, '')
-    for (const payload of ok) {
-      const c = payload.core || payload  // works for both rich and lite shapes
-      lines.push(`### ${c.key || ''} — ${c.summary || '(no summary)'}`)
-      lines.push(jiraIssueToText(payload))
-      lines.push('')
-    }
-    return { block: lines.join('\n').trimEnd(), count: ok.length, payloads: ok }
-  }, [jiraGetFullIssue, jiraGetIssue])
-
-  // Write a consolidated scope block into the primary textarea
-  // (replacing whatever was there — multi-import is a "set scope" gesture,
-  // not an append, otherwise the form fills with stacked sprint dumps).
-  const writeScopeBlock = useCallback((block) => {
-    const textareaFields = resolvedFields.filter(f => f.type === 'textarea')
-    const primaryArea =
-      textareaFields.find(f => /requirement|story|description|scope|test_cases|test_cases_or_scope/i.test(f.key)) ||
-      textareaFields[0]
-    if (!primaryArea) return
-    setValues(prev => ({ ...prev, [primaryArea.key]: block }))
-  }, [resolvedFields])
-
-  const handleJiraImportMany = useCallback(async (issuesList) => {
-    if (!issuesList?.length) return
-    const t = toast.loading(`Importing ${issuesList.length} ticket${issuesList.length === 1 ? '' : 's'}…`)
-    try {
-      const { block, count, payloads } = await fetchAndFormatScope(
-        issuesList.map(it => it.key),
-        null,
-      )
-      writeScopeBlock(block)
-      setImportedJira(null)
-      setImportedJiraList(payloads || [])
-      // Pin the project key from the first imported ticket (same
-      // project for all in a multi-import). User story stays whatever
-      // it was — multi-import doesn't have a single "parent" story.
-      const firstKey = issuesList[0]?.key || ''
-      const projKey = firstKey.split('-')[0] || ''
-      if (projKey) setPinnedJiraProjectKey(projKey)
-      toast.success(`Loaded ${count} ticket${count === 1 ? '' : 's'} into scope`, { id: t })
-    } catch (err) {
-      toast.error(err?.response?.data?.detail || 'Failed to import tickets', { id: t })
-    }
-  }, [fetchAndFormatScope, writeScopeBlock])
-
-  const handleSprintScope = useCallback(async ({ projectKey, sprintId, sprintName }) => {
-    if (!projectKey || !sprintId) return
-    if (projectKey) setPinnedJiraProjectKey(projectKey)
-    if (sprintId) setPinnedSprint(sprintId, sprintName || '')
-    const t = toast.loading(`Fetching sprint "${sprintName}"…`)
-    try {
-      const list = await jiraListIssues(projectKey, {
-        sprintId,
-        maxResults: 200,
-      })
-      if (!list.length) {
-        toast.error(`Sprint "${sprintName}" has no tickets`, { id: t })
-        return
-      }
-      const header = `Sprint scope: ${sprintName} (project ${projectKey}) — ${list.length} ticket${list.length === 1 ? '' : 's'}`
-      const { block, count, payloads } = await fetchAndFormatScope(
-        list.map(it => it.key),
-        header,
-      )
-      writeScopeBlock(block)
-      setImportedJira(null)
-      setImportedJiraList(payloads || [])
-      toast.success(`Loaded ${count} ticket${count === 1 ? '' : 's'} from "${sprintName}" — click Generate`, { id: t })
-    } catch (err) {
-      toast.error(err?.response?.data?.detail || 'Failed to load sprint', { id: t })
-    }
-  }, [jiraListIssues, fetchAndFormatScope, writeScopeBlock])
+  }, [jiraInput, jiraFetching, jiraConnected, jiraImportBatch, writeBatchIntoForm])
 
   const activeProject = projects.find(p => p.slug === selectedProject)
 
@@ -1203,11 +1133,8 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
       </div>
 
       {/* Jira issue picker removed by request — every agent now uses the
-          unified "Jira ticket or URL" quick-fetch input rendered inside
-          the primary card below. The picker's multi-select / sprint-
-          scope helpers (handleJiraImportMany / handleSprintScope) stay
-          defined above in case any future surface needs them, but they
-          are no longer mounted in the form. */}
+          unified multi-token "Jira tickets" quick-fetch input rendered
+          inside the primary card below. */}
 
       {/* Test Case Development users can override the system prompt for
           their session. Persisted to localStorage; the default prompt on
@@ -1220,13 +1147,16 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
       )}
 
       {/* ---- Unified PRIMARY card ----------------------------------------
-           This is the redesigned "Jira ticket + one Context box" surface
+           This is the redesigned "Jira tickets + one Context box" surface
            shared by every agent. It contains:
-             1. A quick "Jira ticket key or URL" input (Enter or arrow
-                button to fetch). Reuses `handleQuickJiraSubmit` which
-                funnels through the canonical `handleJiraImport` flow.
-             2. The imported `<JiraTicketCard />`(s), so the user keeps
-                the rich confirmation card right next to the Context box.
+             1. A multi-token "Jira tickets" input (Enter or button to
+                fetch). Mirrors QuickPack's syntax — comma-separated
+                issue keys, browse URLs, epic keys, or project keys. The
+                "Detected: ..." chip below the row classifies what the
+                user typed in real time.
+             2. The imported batch preview (`<BatchPreview />`) — one
+                card per resolved item — so the user keeps the rich
+                confirmation right next to the Context box.
              3. The single primary `Context` textarea bound to the field
                 resolved by `resolvePrimaryField()` — required-by-default
                 for most agents, prominently rendered.
@@ -1234,7 +1164,7 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
            the Advanced details disclosure below the Generate button.
       ----------------------------------------------------------------- */}
       <div className="toon-card !p-4 space-y-4">
-        {/* Jira quick-fetch row */}
+        {/* Jira multi-token fetch row */}
         <div>
           <div className="flex items-center gap-3">
             <span className="w-9 h-9 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white text-sm shadow-toon flex-shrink-0">
@@ -1242,43 +1172,52 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
             </span>
             <div className="flex-1 min-w-0">
               <label className="block text-sm font-bold text-toon-navy mb-1.5">
-                Jira ticket
+                Jira tickets
                 <span className="font-normal text-gray-400 ml-2">
                   {jiraConnected
-                    ? '(paste a key or URL — we auto-fetch the full details)'
+                    ? '(paste keys, URLs, epics, or project keys — separate with commas)'
                     : '(Jira not connected — fill the Context box below directly)'}
                 </span>
               </label>
               <div className="flex gap-2">
                 <input
                   className="toon-input flex-1"
-                  placeholder={jiraConnected ? 'ABC-123 or https://acme.atlassian.net/browse/ABC-123' : 'Connect Jira from the Hub to enable auto-fetch'}
-                  value={jiraQuickInput}
+                  placeholder={jiraConnected ? 'ABC-123, DEF-456, or ABC for a whole project (comma-separated)' : 'Connect Jira from the Hub to enable auto-fetch'}
+                  value={jiraInput}
                   onChange={(e) => {
-                    setJiraQuickInput(e.target.value)
-                    if (jiraQuickStatus.kind !== 'idle') {
+                    setJiraInput(e.target.value)
+                    if (jiraQuickStatus.kind !== 'idle' && jiraQuickStatus.kind !== 'loading') {
                       setJiraQuickStatus({ kind: 'idle', message: '' })
                     }
                   }}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') {
                       e.preventDefault()
-                      handleQuickJiraSubmit()
+                      handleJiraFetch()
                     }
                   }}
-                  disabled={!jiraConnected || jiraQuickStatus.kind === 'loading'}
+                  disabled={!jiraConnected || jiraFetching}
                 />
                 <button
                   type="button"
-                  onClick={() => handleQuickJiraSubmit()}
-                  disabled={!jiraConnected || !jiraQuickInput.trim() || jiraQuickStatus.kind === 'loading'}
+                  onClick={handleJiraFetch}
+                  disabled={!jiraConnected || !jiraInput.trim() || jiraFetching}
                   className={`toon-btn toon-btn-blue px-4 text-sm whitespace-nowrap ${
-                    !jiraConnected || !jiraQuickInput.trim() ? 'opacity-50 cursor-not-allowed' : ''
+                    !jiraConnected || !jiraInput.trim() ? 'opacity-50 cursor-not-allowed' : ''
                   }`}
                 >
-                  {jiraQuickStatus.kind === 'loading' ? '⏳ Fetching…' : '🔍 Fetch'}
+                  {jiraFetching
+                    ? '⏳ Fetching…'
+                    : tokenSummary.total > 1
+                      ? `🔍 Fetch ${tokenSummary.total}`
+                      : '🔍 Fetch'}
                 </button>
               </div>
+              {tokenSummary.total > 0 && (
+                <div className="mt-1.5 text-xs font-bold text-violet-600">
+                  Detected: {tokenSummary.label}
+                </div>
+              )}
               {jiraQuickStatus.kind !== 'idle' && (
                 <div
                   className={`mt-1.5 text-xs font-bold ${
@@ -1286,6 +1225,8 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
                       ? 'text-toon-coral'
                       : jiraQuickStatus.kind === 'success'
                       ? 'text-toon-mint'
+                      : jiraQuickStatus.kind === 'warn'
+                      ? 'text-amber-600'
                       : 'text-gray-500'
                   }`}
                 >
@@ -1295,58 +1236,20 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
             </div>
           </div>
 
-          {/* Imported ticket card(s) — pinned beside the Context box so
-              the user keeps full visibility while editing freely. The
-              single-import card uses `compact` + `defaultExpanded` so it
-              opens by default for confirmation but the user can collapse
-              the long meta + comments + custom-fields block once they've
-              skimmed it (matches the multi-import row behaviour). */}
-          {(importedJira || importedJiraList.length > 0) && (
+          {/* Imported ticket cards — one per resolved batch item. The
+              user can remove individual entries (slices the array) or
+              "Clear all" via the BatchPreview header. Removing a card
+              does NOT touch textarea contents — same behaviour the
+              picker had before. */}
+          {importedIssues.length > 0 && (
             <div className="mt-3 ml-12">
-              {importedJira && (
-                <div className="border border-gray-200 rounded-xl p-3 bg-white">
-                  <JiraTicketCard
-                    detail={importedJira}
-                    compact
-                    defaultExpanded
-                    onRemove={() => { setImportedJira(null); setJiraContextKey('') }}
-                  />
-                </div>
-              )}
-              {importedJiraList.length > 0 && (
-                <div className="space-y-3">
-                  {importedJiraList.length > 1 && (
-                    <div className="flex items-center justify-between">
-                      <span className="text-[11px] font-bold text-gray-500 uppercase tracking-wider">
-                        Imported {importedJiraList.length} ticket{importedJiraList.length === 1 ? '' : 's'}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => setImportedJiraList([])}
-                        className="text-[11px] text-toon-coral hover:underline font-semibold"
-                      >
-                        Clear all
-                      </button>
-                    </div>
-                  )}
-                  {importedJiraList.map((d) => {
-                    const k = d.core?.key || d.key || ''
-                    return (
-                      <div key={k} className="border border-gray-200 rounded-xl p-3 bg-white">
-                        <JiraTicketCard
-                          detail={d}
-                          compact
-                          onRemove={() =>
-                            setImportedJiraList(list =>
-                              list.filter(x => (x.core?.key || x.key || '') !== k),
-                            )
-                          }
-                        />
-                      </div>
-                    )
-                  })}
-                </div>
-              )}
+              <BatchPreview
+                items={importedIssues}
+                onRemoveIndex={(idx) =>
+                  setImportedIssues(prev => prev.filter((_, i) => i !== idx))
+                }
+                onClearAll={() => setImportedIssues([])}
+              />
             </div>
           )}
         </div>
