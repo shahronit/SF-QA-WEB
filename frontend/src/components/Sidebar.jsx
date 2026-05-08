@@ -18,6 +18,10 @@ const utilityItems = [
   { path: '/quick-pack', label: 'QA Workbench', iconKey3d: 'sparkles' },
   { path: '/projects',   label: 'Projects',     iconKey3d: 'folder' },
   { path: '/history',    label: 'History',      iconKey3d: 'history' },
+  // "My Usage" is unconditional — every authenticated user can audit
+  // their own token spend. The cross-user dashboard at /admin remains
+  // gated by `is_admin`.
+  { path: '/me/usage',   label: 'My Usage',     iconKey3d: 'history' },
 ]
 
 const navGroups = [

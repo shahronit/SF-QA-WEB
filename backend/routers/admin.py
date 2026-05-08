@@ -400,6 +400,100 @@ async def mark_all_notifications_read(admin: dict = Depends(get_admin_user)):
 
 
 # ---------------------------------------------------------------------------
+# Token-usage rollup helpers
+#
+# Lifted to module scope so the per-user `/api/me/usage` endpoint
+# (`backend/routers/me.py`) can produce identical math without forking
+# the bookkeeping. Both surfaces show TOTAL = PROMPT + COMPLETION +
+# REASONING, so the same `_reasoning_for` floor and the same key set
+# need to drive every bucket.
+# ---------------------------------------------------------------------------
+
+USAGE_BUCKET_KEYS: tuple[str, ...] = (
+    "prompt_tokens",
+    "completion_tokens",
+    "reasoning_tokens",
+    "total_tokens",
+)
+
+
+def reasoning_for(usage: dict[str, Any]) -> int:
+    """Return the reasoning-token residual for one usage envelope.
+
+    Uses the wire-format ``reasoning_tokens`` field when present
+    (records written by the patched ``_coerce_usage``), and recomputes
+    ``total - prompt - completion`` for legacy records so historical
+    rows still reconcile. Floored at 0 so a broken provider report can't
+    produce a negative bucket sum.
+    """
+    try:
+        r = int(usage.get("reasoning_tokens") or 0)
+    except (TypeError, ValueError):
+        r = 0
+    if r > 0:
+        return r
+    try:
+        t = int(usage.get("total_tokens") or 0)
+        p = int(usage.get("prompt_tokens") or 0)
+        c = int(usage.get("completion_tokens") or 0)
+    except (TypeError, ValueError):
+        return 0
+    return max(0, t - p - c)
+
+
+def usage_bump(bucket: dict[str, Any], usage: dict[str, Any] | None) -> None:
+    """Add one record's usage into a leaderboard bucket."""
+    bucket["runs"] += 1
+    if not usage:
+        return
+    for key in USAGE_BUCKET_KEYS:
+        try:
+            if key == "reasoning_tokens":
+                bucket[key] += reasoning_for(usage)
+            else:
+                bucket[key] += int(usage.get(key) or 0)
+        except (TypeError, ValueError):
+            pass
+
+
+def usage_new_bucket(name_field: str, name_value: str, **extra: Any) -> dict[str, Any]:
+    """Build an empty leaderboard bucket with all four token fields zeroed."""
+    return {
+        name_field: name_value,
+        "runs": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "reasoning_tokens": 0,
+        "total_tokens": 0,
+        **extra,
+    }
+
+
+def usage_empty_totals() -> dict[str, int]:
+    """Initialiser for the headline totals strip."""
+    return {
+        "runs": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "reasoning_tokens": 0,
+        "total_tokens": 0,
+    }
+
+
+def usage_ranked(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Sort buckets by (total_tokens desc, runs desc).
+
+    Same ordering used by the admin Usage tab so the My Usage page
+    surfaces the heaviest agents/models at the top too.
+    """
+    return sorted(
+        items,
+        key=lambda x: (x.get("total_tokens", 0), x.get("runs", 0)),
+        reverse=True,
+    )
+
+
+# ---------------------------------------------------------------------------
 # /usage — admin-only token usage feed (across ALL users)
 # ---------------------------------------------------------------------------
 
@@ -448,22 +542,14 @@ async def list_usage(
         records = [r for r in records if (r.get("username") or "") == username]
 
     # Build the lightweight payload (no input/output) and the rollups
-    # in a single pass so we don't iterate twice on large logs.
+    # in a single pass so we don't iterate twice on large logs. The
+    # rollup helpers live at module scope so `routers.me` can mirror
+    # the math without forking the bookkeeping.
     by_user: dict[str, dict[str, Any]] = {}
     by_agent: dict[str, dict[str, Any]] = {}
     by_model: dict[str, dict[str, Any]] = {}
-    totals = {"runs": 0, "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+    totals = usage_empty_totals()
     out_records: list[dict[str, Any]] = []
-
-    def _bump(bucket: dict[str, Any], usage: dict[str, Any] | None) -> None:
-        bucket["runs"] += 1
-        if not usage:
-            return
-        for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
-            try:
-                bucket[key] += int(usage.get(key) or 0)
-            except (TypeError, ValueError):
-                pass
 
     for r in records:
         usage = r.get("usage") or None
@@ -475,32 +561,23 @@ async def list_usage(
         # rows by (provider, model) consistently across runs.
         model_key = f"{provider}|{model}"
 
-        user_bucket = by_user.setdefault(
-            uname,
-            {"username": uname, "runs": 0, "prompt_tokens": 0,
-             "completion_tokens": 0, "total_tokens": 0},
-        )
-        agent_bucket = by_agent.setdefault(
-            ag,
-            {"agent": ag, "runs": 0, "prompt_tokens": 0,
-             "completion_tokens": 0, "total_tokens": 0},
-        )
+        user_bucket = by_user.setdefault(uname, usage_new_bucket("username", uname))
+        agent_bucket = by_agent.setdefault(ag, usage_new_bucket("agent", ag))
         model_bucket = by_model.setdefault(
             model_key,
-            {"provider": provider, "model": model, "runs": 0,
-             "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+            usage_new_bucket("model", model, provider=provider),
         )
-        _bump(user_bucket, usage)
-        _bump(agent_bucket, usage)
-        _bump(model_bucket, usage)
+        usage_bump(user_bucket, usage)
+        usage_bump(agent_bucket, usage)
+        usage_bump(model_bucket, usage)
+        usage_bump(totals, usage)
 
-        totals["runs"] += 1
-        if usage:
-            for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
-                try:
-                    totals[key] += int(usage.get(key) or 0)
-                except (TypeError, ValueError):
-                    pass
+        # Make sure each emitted record carries reasoning_tokens too,
+        # even when the underlying usage envelope was written before
+        # _coerce_usage learned about the field. The frontend can rely
+        # on the four-field shape without sprinkling fallbacks.
+        if usage and "reasoning_tokens" not in usage:
+            usage = {**usage, "reasoning_tokens": reasoning_for(usage)}
 
         out_records.append({
             "ts": r.get("ts"),
@@ -515,21 +592,12 @@ async def list_usage(
             "output_preview": r.get("output_preview") or "",
         })
 
-    def _ranked(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        # Sort by total_tokens desc, then runs desc, so the heaviest
-        # spenders surface at the top of each leaderboard.
-        return sorted(
-            items,
-            key=lambda x: (x.get("total_tokens", 0), x.get("runs", 0)),
-            reverse=True,
-        )
-
     return {
         "records": out_records,
         "summary": {
             "totals": totals,
-            "per_user":  _ranked(list(by_user.values())),
-            "per_agent": _ranked(list(by_agent.values())),
-            "per_model": _ranked(list(by_model.values())),
+            "per_user":  usage_ranked(list(by_user.values())),
+            "per_agent": usage_ranked(list(by_agent.values())),
+            "per_model": usage_ranked(list(by_model.values())),
         },
     }

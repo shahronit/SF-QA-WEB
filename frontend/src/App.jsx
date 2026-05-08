@@ -41,6 +41,7 @@ const QuickPack       = lazy(() => import('./pages/QuickPack'))
 const ResultView      = lazy(() => import('./pages/ResultView'))
 const TestCaseEditor  = lazy(() => import('./pages/TestCaseEditor'))
 const Admin           = lazy(() => import('./pages/Admin'))
+const MyUsage         = lazy(() => import('./pages/MyUsage'))
 
 // Tiny fallback that paints immediately while the chunk loads. We
 // deliberately avoid framer-motion here so the very first frame is
@@ -114,6 +115,7 @@ export default function App() {
             <Route path="quick-pack" element={<QuickPack />} />
             <Route path="projects" element={<Projects />} />
             <Route path="history" element={<History />} />
+            <Route path="me/usage" element={<MyUsage />} />
             <Route
               path="admin"
               element={<AdminRoute><Admin /></AdminRoute>}

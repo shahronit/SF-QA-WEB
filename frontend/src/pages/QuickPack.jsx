@@ -17,6 +17,7 @@ import {
   AGENT_META,
   getAgent,
   getRunnableAgentsForUser,
+  pickAutoRunnableAgents,
   userCanAccessPath,
 } from '../config/agentMeta'
 import {
@@ -313,7 +314,12 @@ export default function QuickPack() {
   // Subset of `accessibleAgents` the user wants the next Jira import
   // and the next bulk Generate to apply to. Persists across reload via
   // SessionPrefsContext.quickPackTargets — ``null`` in storage means
-  // "default to every accessible agent" (first-run / never picked).
+  // "first-run / never picked", and we then default to the auto-runnable
+  // subset (i.e. accessible agents minus the ones that need post-cycle
+  // manual input — Defect Reports, Test Execution Report, Root Cause
+  // Analysis, Test Closure Report). Seeding those from a Jira story
+  // would produce fictional output, so they're left unchecked until the
+  // user explicitly opts them in via the tab pill or the "All" toggle.
   // Unselecting an agent here:
   //   1. Skips it during the shared-Context auto-fill effect.
   //   2. Excludes it from `handleBulkGenerate` (no fire, no Needs input
@@ -321,23 +327,27 @@ export default function QuickPack() {
   // The choice survives `Reset all` so the user doesn't have to re-pick
   // their target set every run; clearing the import doesn't mean
   // forgetting which agents they care about.
+  const defaultTargets = useMemo(
+    () => pickAutoRunnableAgents(accessibleAgents),
+    [accessibleAgents],
+  )
   const selectedAgents = useMemo(() => {
     if (quickPackTargets === null || quickPackTargets === undefined) {
-      return new Set(accessibleAgents)
+      return new Set(defaultTargets)
     }
     // Filter against the current allow-list — admin grants/revokes mid-
     // session shouldn't leave stale slugs in the active set.
     return new Set(quickPackTargets.filter(s => accessibleAgents.includes(s)))
-  }, [quickPackTargets, accessibleAgents])
+  }, [quickPackTargets, accessibleAgents, defaultTargets])
 
   const toggleSelectedAgent = useCallback((slug) => {
     const current = quickPackTargets === null || quickPackTargets === undefined
-      ? new Set(accessibleAgents)
+      ? new Set(defaultTargets)
       : new Set(quickPackTargets.filter(s => accessibleAgents.includes(s)))
     if (current.has(slug)) current.delete(slug)
     else current.add(slug)
     setQuickPackTargets(current)
-  }, [quickPackTargets, accessibleAgents, setQuickPackTargets])
+  }, [quickPackTargets, accessibleAgents, defaultTargets, setQuickPackTargets])
   const setAllAgentsSelected = useCallback((all) => {
     setQuickPackTargets(all ? accessibleAgents : [])
   }, [accessibleAgents, setQuickPackTargets])

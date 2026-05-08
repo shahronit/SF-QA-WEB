@@ -18,16 +18,20 @@ SHA-256 over a canonical JSON blob of:
         "agent": <slug>,
         "qa_mode": "salesforce" | "general",
         "project": <project_slug or "">,
+        "rag_version": <opaque token bumped on every re-ingest, "" when none>,
         "input":  <user_input dict, sorted-keys>,
         "system_prompt": <effective_system_prompt>,
         "provider": <provider name>,   # e.g. "gemini" / "openai"
         "model":    <model id>,        # e.g. "gpt-4o" / "claude-..."
     }
 
-We deliberately do NOT include the RAG context blob in the key — for
-identical (project, input) the retriever returns the same context, so
-mixing it in would just be noise. We also do NOT include the username
-in the key directly: per-user prompt overrides already mutate the
+We deliberately do NOT include the raw RAG context blob in the key —
+for identical (project, input, rag_version) the retriever returns the
+same context, so mixing it in would just be noise. ``rag_version`` is
+the lightweight stand-in: it changes whenever ``build_project_index``
+rebuilds the corpus, which is the only condition under which the
+retrieved chunks could change. We also do NOT include the username in
+the key directly: per-user prompt overrides already mutate the
 ``system_prompt`` field, which is in the key.
 
 ``provider`` and ``model`` are part of the key so swapping models
@@ -75,20 +79,28 @@ def make_key(
     *,
     provider: str = "",
     model: str = "",
+    rag_version: str = "",
 ) -> str:
     """Return a stable SHA-256 hex digest of the canonical request shape.
 
-    ``provider`` and ``model`` are keyword-only so legacy callers that
-    don't yet pass them keep working. Adding these fields changes the
-    canonical JSON shape, so existing cache entries created before the
-    multi-provider rollout will become orphaned (a one-time cold
-    cache); this is intentional — cached output from one model should
-    never replay for a request that's now routed to a different one.
+    ``provider``, ``model`` and ``rag_version`` are keyword-only so
+    legacy callers that don't pass them keep working. Adding these
+    fields changes the canonical JSON shape, so existing cache entries
+    created before each was introduced become orphaned (one-time cold
+    cache per rollout); this is intentional — cached output from one
+    model (or one corpus snapshot) should never replay for a request
+    that's now routed to a different one.
+
+    ``rag_version`` is an opaque token bumped by
+    `core.project_manager.build_project_index` after a successful
+    re-ingest. It defaults to ``""`` for non-RAG runs and projects that
+    have never been indexed, so those keys stay stable.
     """
     payload = {
         "agent": agent,
         "qa_mode": "general" if str(qa_mode or "").strip().lower() == "general" else "salesforce",
         "project": project or "",
+        "rag_version": str(rag_version or ""),
         "input": user_input or {},
         "system_prompt": system_prompt or "",
         "provider": str(provider or ""),

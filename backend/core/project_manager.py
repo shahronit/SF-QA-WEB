@@ -453,7 +453,15 @@ def _materialize_docs_for_indexing(slug: str) -> tuple[Path, tempfile.TemporaryD
 
 
 def build_project_index(slug: str) -> int:
-    """Ingest project documents into a dedicated ChromaDB store. Returns chunk count."""
+    """Ingest project documents into a dedicated ChromaDB store.
+
+    Bumps the project's ``rag_version`` token after a successful build so
+    the LLM response cache can detect re-ingested content. Empty corpora
+    (no chunks ingested) intentionally do NOT bump the version — keeping
+    the cache valid for a project the user never ran with RAG.
+
+    Returns chunk count.
+    """
     docs_path, tmp_handle = _materialize_docs_for_indexing(slug)
     try:
         ingestor = SalesforceKnowledgeIngestor(knowledge_base_path=docs_path)
@@ -474,6 +482,18 @@ def build_project_index(slug: str) -> int:
                 shutil.rmtree(store_path, ignore_errors=True)
         vs = SalesforceVectorStore(persist_dir=store_path)
         vs.build(chunks)
+        # Re-ingesting the same docs still bumps the version because the
+        # timestamp moves. That matches the user's intent: "if a re-
+        # ingest happens, treat it as RAG changed". Use a content hash
+        # later if we want stricter same-corpus → same-version semantics.
+        try:
+            _bump_rag_version(slug, len(chunks))
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "Failed to bump rag_version for %s after index build (%s); "
+                "cache key falls back to project slug only.",
+                slug, exc,
+            )
         return len(chunks)
     finally:
         if tmp_handle is not None:
@@ -491,6 +511,51 @@ def get_project_vector_store(slug: str) -> SalesforceVectorStore:
 def project_index_ready(slug: str) -> bool:
     """True when the project has an indexed vector store with chunks."""
     return get_project_vector_store(slug).is_ready()
+
+
+# ---------------------------------------------------------------------------
+# RAG-version bookkeeping
+#
+# Stored on the project metadata record so every storage backend (Firestore
+# or local JSON) inherits it for free. The token is treated as opaque by
+# the cache key — only equality matters. Format `f"{iso_ts}-{chunk_count}"`
+# is descriptive enough for ops to grep without leaking sensitive info.
+# ---------------------------------------------------------------------------
+
+
+def _bump_rag_version(slug: str, chunk_count: int) -> str:
+    """Persist a fresh rag_version token onto the project metadata.
+
+    Returns the new token. Silently no-ops when the project record
+    doesn't exist yet — `build_project_index` is the caller and the
+    project is normally created before its corpus is ingested, but a
+    test fixture or recovery path might call it on a slug that never
+    went through `create_project`. The cache key handles missing
+    versions by falling back to ``""``, so a no-op here is safe.
+    """
+    meta = get_metadata(slug)
+    if meta is None:
+        return ""
+    token = f"{datetime.now(timezone.utc).isoformat()}-{int(chunk_count)}"
+    meta["rag_version"] = token
+    _save_meta(slug, meta)
+    return token
+
+
+def get_rag_version(slug: str) -> str:
+    """Return the project's rag_version token, or "" when unset.
+
+    The cache key in `core.llm_cache.make_key` includes this string
+    verbatim. An empty value keeps non-RAG runs (no project, no index)
+    cacheable across restarts because their key payload doesn't churn.
+    """
+    if not slug:
+        return ""
+    meta = get_metadata(slug)
+    if not meta:
+        return ""
+    val = meta.get("rag_version")
+    return str(val) if val else ""
 
 
 # ---------------------------------------------------------------------------

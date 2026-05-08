@@ -527,7 +527,14 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
     availableResults.find(r => r.name === linkedAgent) ||
     historicalRuns.find(r => r.name === linkedAgent)
 
-  const handleRun = async () => {
+  const handleRun = async (options = {}) => {
+    // ``forceFresh`` is plumbed through from the "Regenerate (skip cache)"
+    // affordance below the ReportPanel. When true the backend skips the
+    // cache LOOKUP but still writes the freshly-generated output, so the
+    // next normal run for everyone serves the refreshed bytes. The
+    // option is opt-in so the default Generate path keeps benefiting
+    // from cache replay (the headline determinism guarantee).
+    const forceFresh = !!options.forceFresh
     if (loading) return
     if (!allRequiredFilled) {
       const missing = {}
@@ -578,6 +585,7 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
           user_input: { ...mergedInput, qa_mode: qaMode },
           project_slug: selectedProject || null,
           ...(systemPromptOverride ? { system_prompt_override: systemPromptOverride } : {}),
+          ...(forceFresh ? { force_fresh: true } : {}),
         }),
       })
       if (!resp.ok) {
@@ -1358,7 +1366,7 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
           <motion.button
             whileTap={!loading ? { scale: 0.96 } : {}}
             whileHover={!loading ? { scale: 1.01 } : {}}
-            onClick={handleRun}
+            onClick={() => handleRun()}
             disabled={loading}
             className={`astound-btn-grad w-full text-lg ${
               loading ? 'opacity-80 cursor-wait' : ''
@@ -1416,6 +1424,29 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
           jiraContextKey={jiraContextKey}
           runMeta={runMeta}
         />
+      )}
+
+      {/* "Regenerate (skip cache)" — only surfaced when the user is
+          actually looking at a cache hit. This is the escape hatch for
+          the rare case where the cached output is stale (e.g. an
+          admin-pinned model produced an oddity, or the provider rolled
+          a silent upgrade and the user wants to re-baseline). The
+          backend skips the cache READ but still WRITES the new output,
+          so a single user's force-fresh refreshes the entry for
+          everyone — preventing two simultaneous regenerate clicks both
+          paying LLM cost for the same input. */}
+      {result && runMeta?.cached && !loading && (
+        <div className="flex justify-end">
+          <button
+            type="button"
+            onClick={() => handleRun({ forceFresh: true })}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold text-sky-700 bg-sky-50 border border-sky-200 hover:bg-sky-100 hover:border-sky-300 transition-colors"
+            title="Re-run this exact input against the live LLM, ignoring the cached response. Updates the cached entry for everyone."
+          >
+            <span aria-hidden="true">↻</span>
+            <span>Regenerate (skip cache)</span>
+          </button>
+        </div>
       )}
 
       {/* Confetti is a fixed-position overlay — kept outside the

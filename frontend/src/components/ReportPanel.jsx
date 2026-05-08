@@ -215,6 +215,35 @@ function RepairedChip({ runMeta }) {
   )
 }
 
+/**
+ * "Cached" pill shown when this run replayed a stored response instead
+ * of calling the LLM. Visible to EVERY user (not gated on `isAdmin`)
+ * because the determinism guarantee — same input + same model +
+ * unchanged RAG ⇒ byte-identical output — only makes sense if the user
+ * can tell whether a cache hit happened. Token chips remain admin-only
+ * (cost/governance data); this chip is purely about run provenance.
+ *
+ * The backend sets `runMeta.cached = true` on the SSE `usage` event
+ * when `LLMResponseCache.get_full(key)` returns a record, so the chip
+ * appears alongside the rendered output and stays visible until the
+ * user kicks off a fresh run.
+ */
+function CachedChip({ runMeta }) {
+  if (!runMeta || !runMeta.cached) return null
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: -4, scale: 0.96 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      transition={{ type: 'spring', stiffness: 320, damping: 22, delay: 0.05 }}
+      title="Identical input + model + RAG context → replayed byte-for-byte for consistency. Use 'Regenerate (skip cache)' if you want a fresh run."
+      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-sky-50 border border-sky-200 text-[11px] font-bold text-sky-700 shadow-sm"
+    >
+      <span aria-hidden="true">♻️</span>
+      <span className="uppercase tracking-wider text-[9px]">Cached</span>
+    </motion.div>
+  )
+}
+
 export default function ReportPanel({
   content,
   agentName,
@@ -339,10 +368,13 @@ export default function ReportPanel({
               yet (e.g. while the stream is still in-flight).
 
               Model + token chips are admin-only (cost / governance
-              data). The Auto-repaired pill stays visible to everyone
-              because it explains a visible behaviour change. */}
+              data). The "Cached" and "Auto-repaired" pills stay visible
+              to everyone because they explain run provenance — cached
+              hits anchor the determinism guarantee, repairs explain a
+              visible behaviour change. */}
           <div className="ml-1 flex items-center gap-1.5 flex-wrap">
             {isAdmin && <ModelChip runMeta={runMeta} />}
+            <CachedChip runMeta={runMeta} />
             {isAdmin && <TokenUsageChip runMeta={runMeta} />}
             <RepairedChip runMeta={runMeta} />
           </div>
