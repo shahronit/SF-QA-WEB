@@ -12,7 +12,7 @@ import ReportPanel from '../components/ReportPanel'
 import ProjectContextPicker from '../components/ProjectContextPicker'
 import { useJira } from '../context/JiraContext'
 import { useAgentResults } from '../context/AgentResultsContext'
-import { STLC_PACK_AGENTS, getAgent } from '../config/agentMeta'
+import { STLC_PACK_AGENTS, getAgent, pickAutoRunnableAgents } from '../config/agentMeta'
 import { Stagger, StaggerItem } from '../components/motion/Stagger'
 import GeneratingScene from '../components/motion/GeneratingScene'
 import { extractJiraKey } from '../utils/jiraDetect'
@@ -184,24 +184,28 @@ export default function StlcPack() {
   })
   // Subset of STLC_PACK_AGENTS the user wants this run to actually
   // execute. Persists across reload via SessionPrefsContext.stlcPackTargets
-  // — ``null`` in storage means "default to every phase" (first-run /
-  // never picked). Unchecked phases are explicitly skipped by the
-  // backend with reason "Excluded by user selection." — distinct from
-  // the implicit Phase 4/5 skip when execution_data is null.
+  // — ``null`` in storage means "first-run / never picked", and we then
+  // default to the auto-runnable phases only (Phase 4 Execution Report
+  // and Phase 5 Closure Report need post-cycle counts the Jira context
+  // can't provide, so they're left unchecked until the user opts in).
+  // Unchecked phases are explicitly skipped by the backend with reason
+  // "Excluded by user selection." — distinct from the implicit Phase 4/5
+  // skip when execution_data is null.
+  const defaultPhases = useMemo(() => pickAutoRunnableAgents(STLC_PACK_AGENTS), [])
   const selectedAgents = useMemo(() => {
     if (stlcPackTargets === null || stlcPackTargets === undefined) {
-      return new Set(STLC_PACK_AGENTS)
+      return new Set(defaultPhases)
     }
     return new Set(stlcPackTargets.filter(s => STLC_PACK_AGENTS.includes(s)))
-  }, [stlcPackTargets])
+  }, [stlcPackTargets, defaultPhases])
   const toggleSelectedAgent = useCallback((slug) => {
     const current = stlcPackTargets === null || stlcPackTargets === undefined
-      ? new Set(STLC_PACK_AGENTS)
+      ? new Set(defaultPhases)
       : new Set(stlcPackTargets.filter(s => STLC_PACK_AGENTS.includes(s)))
     if (current.has(slug)) current.delete(slug)
     else current.add(slug)
     setStlcPackTargets(current)
-  }, [stlcPackTargets, setStlcPackTargets])
+  }, [stlcPackTargets, defaultPhases, setStlcPackTargets])
   const setAllAgentsSelected = useCallback((all) => {
     setStlcPackTargets(all ? STLC_PACK_AGENTS : [])
   }, [setStlcPackTargets])

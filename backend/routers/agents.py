@@ -71,6 +71,13 @@ class AgentRequest(BaseModel):
     # in the orchestrator (see ``_build_messages``). The default prompt
     # in ``backend/core/prompts/prompts.py`` is never modified.
     system_prompt_override: str | None = None
+    # Set by the "Regenerate (skip cache)" affordance on the frontend.
+    # When True the orchestrator skips the cache LOOKUP but still writes
+    # the freshly-generated output back into the cache, so the next
+    # normal run for everyone serves the refreshed bytes. Skip-read /
+    # keep-write avoids two simultaneous regenerate clicks both paying
+    # LLM cost for the same input.
+    force_fresh: bool = False
 
 
 @router.get("/{agent_name}/prompt")
@@ -127,6 +134,7 @@ async def run_agent(
             body.system_prompt_override,
             user.get("username"),
             usage_box=usage_box,
+            force_fresh=bool(body.force_fresh),
         )
     except KeyError:
         raise HTTPException(400, f"Unknown agent: {agent_name}")
@@ -178,6 +186,7 @@ async def stream_agent(
                 body.system_prompt_override,
                 user.get("username"),
                 usage_box=usage_box,
+                force_fresh=bool(body.force_fresh),
             ):
                 loop.call_soon_threadsafe(
                     queue.put_nowait,

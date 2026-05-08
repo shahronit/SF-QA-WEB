@@ -6,6 +6,15 @@ import toast from 'react-hot-toast'
 import api from '../api/client'
 import { useAuth } from '../context/AuthContext'
 import { AGENT_META } from '../config/agentMeta'
+import {
+  fmtTokens,
+  fmtTs,
+  RankingTable,
+  RecentRunsTable,
+  RunDetailsModal,
+  UsageSummaryStrip,
+  FilterChip,
+} from '../components/usage/UsageTables'
 
 // Stable, ordered list of real runnable agents sourced from AGENT_META.
 // Used by prompt/model override tabs (which should only show true
@@ -1211,24 +1220,10 @@ function ModelOverrideRow({
 // Usage tab — admin-only token-spend dashboard across ALL users
 // ===========================================================================
 
-// Local token formatter — same rules as ReportPanel/History formatters.
-// Kept inline because the Admin page is a single-file panel and we
-// don't want to introduce a shared util module just for this.
-function fmtTokens(n) {
-  if (n == null || Number.isNaN(n)) return '—'
-  const v = Number(n)
-  if (v < 1000) return String(v)
-  if (v < 10000) return v.toLocaleString()
-  return `${(v / 1000).toFixed(1).replace(/\.0$/, '')}k`
-}
-
-function fmtTs(ts) {
-  if (!ts) return ''
-  // Normalize "2026-05-04T12:34:56.789Z" to "2026-05-04 12:34:56" so
-  // the table stays narrow without losing the second-precision that
-  // matters when correlating two near-simultaneous runs.
-  return String(ts).slice(0, 19).replace('T', ' ')
-}
+// fmtTokens / fmtTs / RankingTable / RecentRunsTable / SummaryCard live
+// in `components/usage/UsageTables.jsx` — the same primitives are reused
+// by the per-user "My Usage" page so the math reconciles identically in
+// both surfaces.
 
 function UsageTab() {
   const [data, setData] = useState({
@@ -1247,16 +1242,20 @@ function UsageTab() {
     username: '',
     since: '',
   })
+  // The Recent-runs row click target; populating this opens the modal
+  // with the run's full breakdown (token counts + flags + output_preview).
+  const [selectedRun, setSelectedRun] = useState(null)
 
-  const reload = async () => {
+  const reload = async (overrides) => {
     setLoading(true)
     setError('')
     try {
+      const f = overrides || filters
       const params = {}
-      if (filters.limit) params.limit = filters.limit
-      if (filters.agent) params.agent = filters.agent
-      if (filters.username.trim()) params.username = filters.username.trim()
-      if (filters.since) params.since = new Date(filters.since).toISOString()
+      if (f.limit) params.limit = f.limit
+      if (f.agent) params.agent = f.agent
+      if (f.username && f.username.trim()) params.username = f.username.trim()
+      if (f.since) params.since = new Date(f.since).toISOString()
       const { data: payload } = await api.get('/admin/usage', { params })
       setData({
         records: payload?.records || [],
@@ -1271,42 +1270,30 @@ function UsageTab() {
     }
   }
 
-  useEffect(() => { reload() }, [])  // initial load only; filter changes apply on Apply click
+  // Initial load + auto-reload whenever a click sets `agent`,
+  // `username`, `since`, or `limit`. Free-text filter edits still wait
+  // for the Apply button so the admin can compose a multi-field query
+  // without churning the network on every keystroke — we fire the
+  // automatic reload only when one of the click-targets changes.
+  useEffect(() => { reload() }, [])
+  useEffect(() => {
+    reload(filters)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filters.agent, filters.username, filters.since, filters.limit])
+
+  // Convenience: clearing one chip should reload immediately.
+  const clearFilter = (key) => setFilters(f => ({ ...f, [key]: '' }))
+  const clearAllFilters = () =>
+    setFilters({ limit: 500, agent: '', username: '', since: '' })
 
   const totals = data.summary.totals || {}
+  const hasFilter = !!(filters.agent || filters.username || filters.since)
 
   return (
     <div className="space-y-4">
-      {/* Summary cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <SummaryCard
-          icon="🏃"
-          label="Total runs"
-          value={(totals.runs ?? 0).toLocaleString()}
-          gradient="from-toon-blue to-cyan-400"
-        />
-        <SummaryCard
-          icon="⬇️"
-          label="Prompt tokens"
-          value={fmtTokens(totals.prompt_tokens)}
-          subtitle={(totals.prompt_tokens ?? 0).toLocaleString()}
-          gradient="from-emerald-500 to-teal-400"
-        />
-        <SummaryCard
-          icon="⬆️"
-          label="Completion tokens"
-          value={fmtTokens(totals.completion_tokens)}
-          subtitle={(totals.completion_tokens ?? 0).toLocaleString()}
-          gradient="from-amber-500 to-orange-400"
-        />
-        <SummaryCard
-          icon="🪙"
-          label="Total tokens"
-          value={fmtTokens(totals.total_tokens)}
-          subtitle={(totals.total_tokens ?? 0).toLocaleString()}
-          gradient="from-violet-500 to-fuchsia-500"
-        />
-      </div>
+      {/* Summary cards — five tiles so PROMPT + COMPLETION + REASONING = TOTAL
+          reconciles in the headline strip, not just the rollup tables. */}
+      <UsageSummaryStrip totals={totals} />
 
       {/* Filters */}
       <div className="toon-card !py-3">
@@ -1353,16 +1340,16 @@ function UsageTab() {
           </FilterField>
           <button
             type="button"
-            onClick={reload}
+            onClick={() => reload()}
             disabled={loading}
             className="toon-btn toon-btn-blue text-sm py-2 px-4"
           >
             {loading ? '…' : '↻ Apply'}
           </button>
-          {(filters.agent || filters.username || filters.since) && (
+          {hasFilter && (
             <button
               type="button"
-              onClick={() => setFilters({ limit: 500, agent: '', username: '', since: '' })}
+              onClick={clearAllFilters}
               className="text-xs font-semibold text-gray-500 hover:text-toon-coral"
             >
               Clear filters
@@ -1376,7 +1363,40 @@ function UsageTab() {
         )}
       </div>
 
-      {/* Leaderboards */}
+      {/* Active filter chips — surface what's narrowing the table at a
+          glance so the admin doesn't get confused why the Recent runs
+          list shrank after a row click. */}
+      {hasFilter && (
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-[11px] uppercase tracking-wider text-gray-500 font-bold">
+            Filtered to
+          </span>
+          {filters.agent && (
+            <FilterChip
+              label="agent"
+              value={AGENT_LABEL[filters.agent] || filters.agent}
+              onClear={() => clearFilter('agent')}
+            />
+          )}
+          {filters.username && (
+            <FilterChip
+              label="user"
+              value={filters.username}
+              onClear={() => clearFilter('username')}
+            />
+          )}
+          {filters.since && (
+            <FilterChip
+              label="since"
+              value={filters.since}
+              onClear={() => clearFilter('since')}
+            />
+          )}
+        </div>
+      )}
+
+      {/* Leaderboards — clickable rows pivot the Recent-runs feed below
+          to a single agent or a single user with one tap. */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
         <RankingTable
           title="By user"
@@ -1384,6 +1404,9 @@ function UsageTab() {
           nameKey="username"
           nameLabel="User"
           emptyHint="No attributed runs yet."
+          onRowClick={(r) => setFilters(f => ({
+            ...f, username: r.username || '', agent: '',
+          }))}
         />
         <RankingTable
           title="By agent"
@@ -1392,6 +1415,9 @@ function UsageTab() {
           nameLabel="Agent"
           renderName={(name) => AGENT_LABEL[name] || name}
           emptyHint="No agent runs in this window."
+          onRowClick={(r) => setFilters(f => ({
+            ...f, agent: r.agent || '', username: '',
+          }))}
         />
       </div>
 
@@ -1411,115 +1437,20 @@ function UsageTab() {
         emptyHint="No model usage in this window."
       />
 
-      {/* Recent runs */}
-      <div className="toon-card !p-0 overflow-hidden">
-        <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <span className="text-sm font-bold text-toon-navy">Recent runs</span>
-            <span className="text-xs text-gray-500">
-              {loading ? 'loading…' : `${data.records.length} rows`}
-            </span>
-          </div>
-        </div>
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead className="bg-gray-50 text-gray-500 text-[11px] uppercase tracking-wider">
-              <tr>
-                <th className="text-left px-3 py-2 font-bold">When</th>
-                <th className="text-left px-3 py-2 font-bold">User</th>
-                <th className="text-left px-3 py-2 font-bold">Agent</th>
-                <th className="text-left px-3 py-2 font-bold">Model</th>
-                <th className="text-right px-3 py-2 font-bold">Prompt</th>
-                <th className="text-right px-3 py-2 font-bold">Completion</th>
-                <th className="text-right px-3 py-2 font-bold">Total</th>
-                <th className="text-center px-3 py-2 font-bold">Flags</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
-              {data.records.map((r, i) => {
-                const usage = r.usage || {}
-                return (
-                  <tr key={i} className="hover:bg-gray-50">
-                    <td className="px-3 py-2 text-gray-500 tabular-nums whitespace-nowrap">
-                      {fmtTs(r.ts)}
-                    </td>
-                    <td className="px-3 py-2 font-semibold text-toon-navy">
-                      {r.username || <span className="text-gray-400">(unknown)</span>}
-                    </td>
-                    <td className="px-3 py-2">
-                      {AGENT_LABEL[r.agent] || r.agent}
-                    </td>
-                    <td className="px-3 py-2 text-gray-600">
-                      <span className="text-gray-400">{r.provider || '—'}</span>
-                      <span className="opacity-40 mx-1">·</span>
-                      <span>{r.model || '—'}</span>
-                    </td>
-                    <td className="px-3 py-2 text-right tabular-nums">
-                      {fmtTokens(usage.prompt_tokens)}
-                    </td>
-                    <td className="px-3 py-2 text-right tabular-nums">
-                      {fmtTokens(usage.completion_tokens)}
-                    </td>
-                    <td className="px-3 py-2 text-right tabular-nums font-extrabold">
-                      {fmtTokens(usage.total_tokens)}
-                    </td>
-                    <td className="px-3 py-2 text-center">
-                      <div className="inline-flex items-center gap-1">
-                        {r.cache_hit && (
-                          <span
-                            title="Replayed from response cache"
-                            className="px-1.5 py-0.5 rounded bg-sky-100 text-sky-700 text-[10px] font-bold"
-                          >
-                            cached
-                          </span>
-                        )}
-                        {r.repaired && (
-                          <span
-                            title="Auto-repair pass kicked in"
-                            className="px-1.5 py-0.5 rounded bg-fuchsia-100 text-fuchsia-700 text-[10px] font-bold"
-                          >
-                            repaired
-                          </span>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                )
-              })}
-              {!loading && data.records.length === 0 && (
-                <tr>
-                  <td colSpan={8} className="px-3 py-6 text-center text-sm text-gray-400">
-                    No runs match the current filters.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </div>
-  )
-}
+      {/* Recent runs — clicking a row pops a modal with the full
+          per-run breakdown (token columns + flags + output preview). */}
+      <RecentRunsTable
+        records={data.records}
+        loading={loading}
+        agentLabel={(slug) => AGENT_LABEL[slug] || slug}
+        onRowClick={(r) => setSelectedRun(r)}
+      />
 
-function SummaryCard({ icon, label, value, subtitle, gradient }) {
-  return (
-    <div className="toon-card !p-3">
-      <div className="flex items-center gap-3">
-        <span className={`w-10 h-10 rounded-xl bg-gradient-to-br ${gradient} flex items-center justify-center text-white text-base shadow-toon`}>
-          {icon}
-        </span>
-        <div className="min-w-0">
-          <div className="text-[10px] uppercase tracking-wider text-gray-500 font-bold">
-            {label}
-          </div>
-          <div className="text-xl font-extrabold text-toon-navy tabular-nums">
-            {value}
-          </div>
-          {subtitle && (
-            <div className="text-[10px] text-gray-400 tabular-nums">{subtitle}</div>
-          )}
-        </div>
-      </div>
+      <RunDetailsModal
+        run={selectedRun}
+        onClose={() => setSelectedRun(null)}
+        agentLabel={(slug) => AGENT_LABEL[slug] || slug}
+      />
     </div>
   )
 }
@@ -1535,58 +1466,3 @@ function FilterField({ label, children }) {
   )
 }
 
-function RankingTable({ title, rows, nameKey, nameLabel, renderName, emptyHint }) {
-  const safeRows = Array.isArray(rows) ? rows : []
-  return (
-    <div className="toon-card !p-0 overflow-hidden">
-      <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
-        <span className="text-sm font-bold text-toon-navy">{title}</span>
-        <span className="text-xs text-gray-500">{safeRows.length} rows</span>
-      </div>
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead className="bg-gray-50 text-gray-500 text-[11px] uppercase tracking-wider">
-            <tr>
-              <th className="text-left px-3 py-2 font-bold">{nameLabel}</th>
-              <th className="text-right px-3 py-2 font-bold">Runs</th>
-              <th className="text-right px-3 py-2 font-bold">Prompt</th>
-              <th className="text-right px-3 py-2 font-bold">Completion</th>
-              <th className="text-right px-3 py-2 font-bold">Total</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-100">
-            {safeRows.map((row, i) => {
-              const name = row[nameKey]
-              return (
-                <tr key={i} className="hover:bg-gray-50">
-                  <td className="px-3 py-2 font-semibold text-toon-navy">
-                    {renderName ? renderName(name, row) : (name || '(unknown)')}
-                  </td>
-                  <td className="px-3 py-2 text-right tabular-nums">
-                    {(row.runs ?? 0).toLocaleString()}
-                  </td>
-                  <td className="px-3 py-2 text-right tabular-nums">
-                    {fmtTokens(row.prompt_tokens)}
-                  </td>
-                  <td className="px-3 py-2 text-right tabular-nums">
-                    {fmtTokens(row.completion_tokens)}
-                  </td>
-                  <td className="px-3 py-2 text-right tabular-nums font-extrabold">
-                    {fmtTokens(row.total_tokens)}
-                  </td>
-                </tr>
-              )
-            })}
-            {safeRows.length === 0 && (
-              <tr>
-                <td colSpan={5} className="px-3 py-6 text-center text-sm text-gray-400">
-                  {emptyHint || 'Nothing to show.'}
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  )
-}

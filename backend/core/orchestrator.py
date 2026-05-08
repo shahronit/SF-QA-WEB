@@ -442,16 +442,28 @@ def _coerce_usage(
         * ``"live"``      — pulled from the SDK response;
         * ``"estimated"`` — rough char-length heuristic (Cursor CLI);
         * ``"cached"``    — replayed from the response cache.
+
+    ``reasoning_tokens`` captures the residual the provider reported
+    above ``prompt + completion`` — Gemini 2.5's ``thoughts_token_count``,
+    cached-context tokens, and similar internal categories that count
+    against the total but are not part of either visible bucket. Floored
+    at 0 so a wonky provider report never produces a negative count;
+    defaults to 0 for providers that don't report a total at all (Cursor
+    CLI estimates, etc.). The frontend renders TOTAL = PROMPT +
+    COMPLETION + REASONING so the math reconciles without dropping any
+    provider-reported information.
     """
     p = int(prompt_tokens) if prompt_tokens is not None else None
     c = int(completion_tokens) if completion_tokens is not None else None
     t = int(total_tokens) if total_tokens is not None else (
         (p or 0) + (c or 0) if (p is not None or c is not None) else None
     )
+    r = max(0, (t or 0) - (p or 0) - (c or 0)) if t is not None else 0
     return {
         "prompt_tokens": p,
         "completion_tokens": c,
         "total_tokens": t,
+        "reasoning_tokens": r,
         "source": source,
     }
 
@@ -1531,6 +1543,24 @@ class SFQAOrchestrator:
         """Switch the active project context (None = global only)."""
         self._active_project = slug
 
+    def _rag_version_for(self, slug: str | None) -> str:
+        """Return the project's RAG content version, or "" when absent.
+
+        The token gets mixed into the LLM cache key by `_cache_lookup`
+        so re-ingesting a project's corpus invalidates every cached
+        artifact for that project — even when the slug, model, prompt
+        and user input are identical to a prior run. We catch and
+        swallow any exception so a Firestore hiccup never blocks a run;
+        the worst case is a cache miss and a fresh generation.
+        """
+        if not slug:
+            return ""
+        try:
+            from core.project_manager import get_rag_version
+            return get_rag_version(slug) or ""
+        except Exception:  # noqa: BLE001
+            return ""
+
     # -- internal --
 
     def _pick_recommended_default(
@@ -1918,6 +1948,8 @@ class SFQAOrchestrator:
         username: str | None,
         provider: str,
         model: str,
+        *,
+        force_fresh: bool = False,
     ) -> tuple[str | None, str, dict[str, Any] | None]:
         """Return ``(cached_output, cache_key, cached_usage)``.
 
@@ -1933,6 +1965,13 @@ class SFQAOrchestrator:
         was added simply lack it). Re-emitted on cache hits so the UI
         shows the same chip the original generation produced rather
         than a "0 tokens" placeholder.
+
+        ``force_fresh=True`` skips the ``get_full`` lookup but still
+        computes and returns the key, so the write path can update the
+        cached entry with the freshly-generated output. Skip-read /
+        keep-write is the deliberate semantic here — skipping both reads
+        and writes would let two simultaneous "Regenerate (skip cache)"
+        clicks both pay LLM cost for the same input.
         """
         # NOTE: `LLMResponseCache.__len__` is defined, so `bool(self._cache)`
         # is False when the cache is *empty* (Python falls back to len==0).
@@ -1953,7 +1992,14 @@ class SFQAOrchestrator:
                 agent_name, qa_mode, self._active_project,
                 {**user_input, "qa_mode": qa_mode}, system_prompt,
                 provider=provider, model=model,
+                rag_version=self._rag_version_for(self._active_project),
             )
+            if force_fresh:
+                # Caller explicitly asked for a fresh run — pretend the
+                # entry doesn't exist so the orchestrator falls through
+                # to the live LLM path. The key is still returned so
+                # the write path can refresh the stored output.
+                return None, key, None
             full = self._cache.get_full(key)
             if not full:
                 return None, key, None
@@ -2094,6 +2140,7 @@ class SFQAOrchestrator:
         provider_override: str | None = None,
         model_override: str | None = None,
         usage_box: dict[str, Any] | None = None,
+        force_fresh: bool = False,
     ) -> str:
         """Run one agent end-to-end: RAG query from flattened input, then LLM.
 
@@ -2115,6 +2162,11 @@ class SFQAOrchestrator:
         envelope from the underlying provider call (or the cached one
         on a hit). This is the threadsafe channel through which the
         ``/api/agents/{a}/run`` route surfaces token counts to the UI.
+
+        ``force_fresh=True`` is the user-facing escape hatch behind the
+        "Regenerate (skip cache)" affordance. It skips the cache LOOKUP
+        but still writes the freshly-generated output back into the
+        cache, so the next normal run replays the refreshed bytes.
         """
         if agent_name not in PROMPTS_SF:
             raise KeyError(f"Unknown agent: {agent_name}. Valid: {list(PROMPTS_SF)}")
@@ -2132,6 +2184,7 @@ class SFQAOrchestrator:
         cached, cache_key, cached_usage = self._cache_lookup(
             agent_name, user_input, system_prompt_override, username,
             provider=provider.name, model=model,
+            force_fresh=force_fresh,
         )
         if cached is not None:
             self._record_usage(
@@ -2258,6 +2311,7 @@ class SFQAOrchestrator:
         provider_override: str | None = None,
         model_override: str | None = None,
         usage_box: dict[str, Any] | None = None,
+        force_fresh: bool = False,
     ) -> Iterator[str]:
         """Stream decoded tokens; logs the joined result when the stream completes.
 
@@ -2268,6 +2322,10 @@ class SFQAOrchestrator:
 
         ``username`` (when supplied by the API layer) is forwarded into
         the prompt-resolution chain — same semantics as ``run_agent``.
+
+        ``force_fresh=True`` skips the cache lookup but still writes
+        the freshly-generated output to the cache — same semantics as
+        ``run_agent.force_fresh``.
 
         ``usage_box`` (when supplied) carries the resolved
         ``provider``/``model`` and the token-usage envelope back to
@@ -2296,6 +2354,7 @@ class SFQAOrchestrator:
         cached, cache_key, cached_usage = self._cache_lookup(
             agent_name, user_input, system_prompt_override, username,
             provider=provider.name, model=model,
+            force_fresh=force_fresh,
         )
         if cached is not None:
             yield cached

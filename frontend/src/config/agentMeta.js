@@ -201,6 +201,12 @@ export const AGENT_META = {
     // exists in the current `fields` prop, so listing both keys here
     // means it always finds the right one for the rendered mode.
     primaryFieldKey: ['bug_description', 'bug_title'],
+    // Manual-input dependency: a defect report is only meaningful for an
+    // actual observed bug (steps to reproduce, severity, environment).
+    // Seeding it from a Jira *story* would produce a fictional defect.
+    // Excluded from the QuickPack / StlcPack default-selected set so the
+    // user has to opt in, matching their explicit intent.
+    requiresManualInput: true,
     hints: [
       'Title-only mode infers steps and severity — verify "(inferred)" sections before submission.',
       'Connect Jira to push the report directly as an issue.',
@@ -220,6 +226,9 @@ export const AGENT_META = {
     // through to the prompt. The required count fields stay in the
     // Advanced disclosure (with a "N required" badge).
     primaryFieldKey: 'coverage_notes',
+    // Manual-input dependency: Pass/Fail/Blocked counts only exist
+    // after a real test cycle has run; a Jira story can't supply them.
+    requiresManualInput: true,
     hints: [
       'Pass/Fail/Blocked counts drive the Insights tab visualisation.',
       'A Go/No-Go recommendation is generated — share daily during cycles.',
@@ -234,6 +243,9 @@ export const AGENT_META = {
     gradient: 'from-rose-500 to-red-600',
     accentText: 'text-rose-600',
     primaryFieldKey: 'symptoms',
+    // Manual-input dependency: RCA needs the actual observed symptoms
+    // of a failure. There's nothing in a Jira story to derive that from.
+    requiresManualInput: true,
     hints: [
       'Provide recent_changes (deployments, data loads) for a sharper timeline.',
       '5-Whys + Fishbone + corrective AND preventive actions are produced.',
@@ -248,6 +260,10 @@ export const AGENT_META = {
     gradient: 'from-violet-500 to-purple-600',
     accentText: 'text-violet-600',
     primaryFieldKey: 'cycle_summary',
+    // Manual-input dependency: closure metrics (pass rate, automation %,
+    // open defects with workarounds) come from the post-execution cycle,
+    // not from a Jira story.
+    requiresManualInput: true,
     hints: [
       'Paste your final metrics — Pass Rate and Automation % power the KPI tiles.',
       'Open defects with workarounds inform the Go-live recommendation.',
@@ -355,6 +371,32 @@ export function getRunnableAgentsForUser(user) {
     if (allow == null) return true
     return Array.isArray(allow) && allow.includes(slug)
   })
+}
+
+/**
+ * True when *slug* declares `requiresManualInput: true` in AGENT_META.
+ *
+ * These are agents whose primary inputs (defect repro steps, Pass/Fail
+ * counts, root-cause symptoms, closure metrics) only exist after the
+ * test cycle has been run by a human. Seeding them from a Jira story
+ * produces fictional output, so QuickPack and StlcPack drop them from
+ * the *default* selected set — the user can still opt them in via the
+ * tab strip or the "All" toggle.
+ */
+export function agentRequiresManualInput(slug) {
+  const meta = AGENT_META[slug]
+  return !!(meta && meta.requiresManualInput)
+}
+
+/**
+ * Filter *slugs* down to the auto-runnable subset — drops every agent
+ * that declares ``requiresManualInput: true``. Used as the first-run
+ * default for QuickPack and StlcPack so the bulk Generate button only
+ * fires the agents the Jira context can actually feed.
+ */
+export function pickAutoRunnableAgents(slugs) {
+  if (!Array.isArray(slugs)) return []
+  return slugs.filter(s => !agentRequiresManualInput(s))
 }
 
 /**
