@@ -1,11 +1,16 @@
 // Lightweight Jira-key detector used to short-circuit the /jira/resolve
 // roundtrip on every textarea blur. Mirrors backend/core/jira_links.py.
-const JIRA_KEY_RE = /\b([A-Z][A-Z0-9]+-\d+)\b/
+//
+// Matching is case-insensitive so pasted lower-case keys (e.g. `ket-1`) and
+// project keys containing underscores (e.g. `MY_PROJ-42`) are accepted.
+// The match is uppercased before returning so the rest of the app always
+// sees the canonical Jira key shape that the REST API expects.
+const JIRA_KEY_RE = /\b([A-Za-z][A-Za-z0-9_]+-\d+)\b/
 
 // Bare project key (no `-N` suffix). Mirrors PROJECT_KEY_RE in
 // backend/routers/jira.py so token classification stays consistent on
 // both sides — required by QA Workbench's multi-import field.
-const PROJECT_KEY_RE = /^[A-Z][A-Z0-9_]{1,9}$/
+const PROJECT_KEY_RE = /^[A-Za-z][A-Za-z0-9_]{1,9}$/
 
 export function extractJiraKey(text) {
   if (!text || typeof text !== 'string') return null
@@ -14,14 +19,14 @@ export function extractJiraKey(text) {
       try {
         const url = new URL(token)
         const m = url.pathname.match(JIRA_KEY_RE)
-        if (m) return m[1]
+        if (m) return m[1].toUpperCase()
       } catch {
         // not a real URL — fall through
       }
     }
   }
   const m = text.match(JIRA_KEY_RE)
-  return m ? m[1] : null
+  return m ? m[1].toUpperCase() : null
 }
 
 export function hasJiraKey(text) {
@@ -47,6 +52,9 @@ export function classifyJiraToken(token) {
   if (!trimmed) return { kind: 'unknown', value: '' }
   const key = extractJiraKey(trimmed)
   if (key) return { kind: 'issue', value: key }
-  if (PROJECT_KEY_RE.test(trimmed)) return { kind: 'project', value: trimmed }
+  // Project keys are normalised to upper-case so the backend, which still
+  // matches with the canonical PROJECT_KEY_RE, accepts pasted lower-case
+  // input like `ket` for the user's `KET` project.
+  if (PROJECT_KEY_RE.test(trimmed)) return { kind: 'project', value: trimmed.toUpperCase() }
   return { kind: 'unknown', value: trimmed }
 }

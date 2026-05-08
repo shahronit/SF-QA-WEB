@@ -10,18 +10,33 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState } 
 //   - sprintId / sprintName: Sprint filter from the Jira issue picker
 //   - userStoryKey: Imported Jira ticket key that test cases / comments
 //                   default to as their parent
+//   - quickPackTargets: Array of agent slugs the user wants the next
+//                       QuickPack import / bulk Generate to apply to.
+//                       ``null`` means "default to every accessible
+//                       agent" (first run / never explicitly chosen).
+//   - stlcPackTargets:  Same idea, but for the five STLC phases.
+//                       ``null`` ⇒ run all five.
 //
 // All four are written by the components that own each selection and
 // read by every place that needs a default. Reset buttons no longer
 // clear these — only individual pin removals or `clearAll()` do.
 
-const STORAGE_KEY = 'qa:sessionPrefs:v1'
+// Bumped to v2 when the targets keys were added so a stale localStorage
+// entry doesn't accidentally produce a "no agents selected" UI on first
+// load after the upgrade.
+const STORAGE_KEY = 'qa:sessionPrefs:v2'
 const DEFAULT_STATE = {
   qaProjectSlug: '',
   jiraProjectKey: '',
   sprintId: '',
   sprintName: '',
   userStoryKey: '',
+  // Both default to ``null`` — components interpret that as
+  // "select all currently accessible agents". Storing an explicit
+  // empty array would mean "user picked NO agents" which is a
+  // different, valid state.
+  quickPackTargets: null,
+  stlcPackTargets: null,
 }
 
 function readInitialState() {
@@ -89,6 +104,30 @@ export function SessionPrefsProvider({ children }) {
     setState((prev) => ({ ...prev, userStoryKey: (key || '').toUpperCase() }))
   }, [])
 
+  // Persist the "Apply Jira & Generate to" / "Run these phases"
+  // selection as an array of slugs (or ``null`` to fall back to the
+  // page's default-everything behaviour). We accept ``Set`` instances
+  // for ergonomics — the page state is a Set; the storage layer
+  // serialises whatever comes in into a plain array of strings.
+  const setQuickPackTargets = useCallback((targets) => {
+    setState((prev) => ({
+      ...prev,
+      quickPackTargets:
+        targets === null || targets === undefined
+          ? null
+          : [...targets].map(String),
+    }))
+  }, [])
+  const setStlcPackTargets = useCallback((targets) => {
+    setState((prev) => ({
+      ...prev,
+      stlcPackTargets:
+        targets === null || targets === undefined
+          ? null
+          : [...targets].map(String),
+    }))
+  }, [])
+
   const clearPin = useCallback((slot) => {
     setState((prev) => {
       const next = { ...prev }
@@ -110,9 +149,21 @@ export function SessionPrefsProvider({ children }) {
     setJiraProjectKey,
     setSprint,
     setUserStoryKey,
+    setQuickPackTargets,
+    setStlcPackTargets,
     clearPin,
     clearAll,
-  }), [state, setQaProjectSlug, setJiraProjectKey, setSprint, setUserStoryKey, clearPin, clearAll])
+  }), [
+    state,
+    setQaProjectSlug,
+    setJiraProjectKey,
+    setSprint,
+    setUserStoryKey,
+    setQuickPackTargets,
+    setStlcPackTargets,
+    clearPin,
+    clearAll,
+  ])
 
   return (
     <SessionPrefsContext.Provider value={value}>{children}</SessionPrefsContext.Provider>

@@ -15,10 +15,11 @@ from core.jira_client import JiraClient
 from core.jira_links import extract_jira_key
 from routers.deps import get_current_user
 
-# Bare project key shape: 2+ uppercase letters/digits/underscores, no dash.
-# Mirrors the frontend `PROJECT_KEY_RE` in utils/jiraDetect.js so token
-# classification stays consistent on both sides.
-PROJECT_KEY_RE = re.compile(r"^[A-Z][A-Z0-9_]{1,9}$")
+# Bare project key shape: a letter followed by 1-9 letters/digits/_ (no
+# dash). Match is case-insensitive to mirror the frontend; callers should
+# upper-case the value before sending it to Jira because the REST API only
+# returns matches for the canonical (upper-case) project key.
+PROJECT_KEY_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{1,9}$")
 
 # Fields in a Jira session dict that hold sensitive material and should
 # be encrypted at rest. Everything else (jira_url, email, last_project,
@@ -342,8 +343,19 @@ async def resolve_jira_text(body: JiraResolveRequest, user=Depends(get_current_u
     """Detect a Jira issue key/URL in *text* and return the fetched issue.
 
     Used by the frontend to auto-expand pasted ticket references inside any
-    textarea. Returns ``{"key": null}`` (200) when no key is detected or the
-    user is not connected — callers can treat the call as best-effort.
+    textarea. Always returns 200 so the frontend can distinguish between
+    "didn't parse" (``key=None``) and "parsed but Jira refused" (``key`` set
+    plus ``error``). Without this distinction every Jira API failure
+    surfaces in the UI as the misleading "Could not parse a Jira ticket key
+    from that input" toast — even though the key was extracted just fine.
+
+    Response shape:
+      - ``{"key": null}`` — no Jira-key shape detected in the input.
+      - ``{"key": "ABC-1", "issue": {...}, "connected": true}`` — happy path.
+      - ``{"key": "ABC-1", "issue": null, "connected": false}`` — user
+        is not connected to Jira yet.
+      - ``{"key": "ABC-1", "issue": null, "connected": true,
+            "error": "..."}`` — Jira returned an error (404, 403, network).
     """
     key = extract_jira_key(body.text)
     if not key:
@@ -355,7 +367,16 @@ async def resolve_jira_text(body: JiraResolveRequest, user=Depends(get_current_u
     try:
         issue = client.get_issue(key)
     except ConnectionError as exc:
-        raise HTTPException(400, str(exc))
+        # Don't 400 — that just turns into "Could not parse..." in the UI
+        # because the frontend's resolveFromText() swallows network errors.
+        # Returning the error here lets the picker show what Jira actually
+        # said (e.g. "returned 404: Issue does not exist" / 403 permission).
+        return {
+            "key": key,
+            "issue": None,
+            "connected": True,
+            "error": str(exc),
+        }
     return {"key": key, "issue": issue, "connected": True}
 
 
@@ -423,7 +444,9 @@ async def import_batch(
         if key:
             return ("issue", key)
         if PROJECT_KEY_RE.match(token):
-            return ("project", token)
+            # Jira project keys are canonically upper-case; normalise so a
+            # lower-case paste resolves the same project.
+            return ("project", token.upper())
         return ("unknown", token)
 
     def resolve(token: str) -> dict:

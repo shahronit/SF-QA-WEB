@@ -1,12 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { motion, AnimatePresence } from 'framer-motion'
+import { motion } from 'framer-motion'
 import toast from 'react-hot-toast'
 import api from '../api/client'
 import PageHeader from '../components/PageHeader'
 import ReportPanel from '../components/ReportPanel'
 import ProjectContextPicker from '../components/ProjectContextPicker'
 import GeneratingScene from '../components/motion/GeneratingScene'
-import JiraTicketCard from '../components/JiraTicketCard'
 import QuickPackInputs from '../components/quickpack/QuickPackInputs'
 import { useAuth } from '../context/AuthContext'
 import { useAgentResults } from '../context/AgentResultsContext'
@@ -27,164 +26,24 @@ import {
   isReadyToRun,
 } from '../config/agentInputs'
 import { splitJiraTokens, classifyJiraToken } from '../utils/jiraDetect'
+import { seedTextFromBatch, summarizeBatchError } from '../utils/jiraSeed'
+import BatchPreview from '../components/jira/BatchPreview'
 
 // Status vocabulary used by the tab strip dots and per-tab banner.
 // Mirrors the language on the STLC pack page so users see consistent
-// states across the two multi-agent surfaces. `needs_input` is unique
-// to Quick Pack: it means the bulk Generate skipped this tab because
-// at least one required field was empty.
+// states across the two multi-agent surfaces.
+//   - `needs_input` is unique to Quick Pack: bulk Generate skipped the
+//     tab because at least one required field was empty.
+//   - `excluded` means the user explicitly unchecked the agent in the
+//     "Apply Jira to" picker — that agent will be entirely skipped on
+//     the next bulk Generate (no Needs input tag, no fire).
 const STATUS_STYLES = {
   idle:        { dot: 'bg-gray-300',                     text: 'Idle' },
   needs_input: { dot: 'bg-amber-400',                    text: 'Needs input' },
+  excluded:    { dot: 'bg-gray-400',                     text: 'Excluded' },
   loading:     { dot: 'bg-toon-blue animate-pulse',      text: 'Streaming' },
   done:        { dot: 'bg-toon-mint',                    text: 'Done' },
   error:       { dot: 'bg-toon-coral',                   text: 'Error' },
-}
-
-// Lite-mode renderer of an issue payload into seed text. Mirrors the
-// minimal subset of `jiraIssueToText` used by AgentForm so users get
-// recognisable Context after a Jira fetch without us reaching into
-// AgentForm's private function. Handles both the rich `/full` shape
-// and the lite `/issue/{key}` shape.
-function jiraPayloadToText(issue) {
-  if (!issue) return ''
-  const isRich = !!(issue.core || issue.fetch_metadata)
-  const c = isRich ? (issue.core || {}) : issue
-  const lines = []
-  const head = `Jira ${c.issuetype || 'Issue'} ${c.key || ''}: ${c.summary || ''}`.trim()
-  if (head) lines.push(head)
-  const status = []
-  if (c.status) status.push(`Status: ${c.status}`)
-  if (c.priority) status.push(`Priority: ${c.priority}`)
-  if (status.length) lines.push(status.join(' | '))
-  if (c.components?.length) lines.push(`Components: ${c.components.join(', ')}`)
-  if (c.labels?.length) lines.push(`Labels: ${c.labels.join(', ')}`)
-  if (c.environment) lines.push(`Environment: ${c.environment}`)
-  lines.push('', 'Description:', (c.description || '(no description)').trim())
-  if (isRich && Array.isArray(issue.subtasks) && issue.subtasks.length) {
-    lines.push('', 'Sub-tasks:')
-    for (const s of issue.subtasks) {
-      const bits = [s.key, s.status ? `[${s.status}]` : '', s.summary].filter(Boolean)
-      lines.push(`- ${bits.join(' ')}`)
-    }
-  }
-  return lines.join('\n')
-}
-
-// One-line summary of a child issue (epic child or project bulk import
-// row). Capped at 200 chars so a 100-row project import still fits in
-// the shared Context box without overwhelming the agents.
-function childRowLine(c) {
-  const tags = [c?.issuetype, c?.status].filter(Boolean).join('/')
-  const head = `- ${c?.key || '?'}${tags ? ` [${tags}]` : ''} ${c?.summary || ''}`.trim()
-  return head.length > 200 ? `${head.slice(0, 197)}…` : head
-}
-
-// Compose seed text for the shared Context box from a batch of resolved
-// items. Issue/Epic primaries use the existing `jiraPayloadToText`;
-// epic children and project rows are rendered as compact `KEY [type/
-// status] summary` lines. Sections separated by `\n\n---\n\n` so the
-// downstream agents see clean boundaries between tickets.
-function seedTextFromBatch(items) {
-  const sections = []
-  for (const item of items) {
-    if (item.kind === 'project') {
-      const children = item.children || []
-      const lines = [`Jira Project ${item.token} — ${children.length} issue(s):`]
-      for (const c of children) lines.push(childRowLine(c))
-      sections.push(lines.join('\n'))
-      continue
-    }
-    const head = item.primary ? jiraPayloadToText(item.primary) : ''
-    if (item.kind === 'epic' && item.children?.length) {
-      const lines = [head, '', `Epic ${item.key} child issues (${item.children.length}):`]
-      for (const c of item.children) lines.push(childRowLine(c))
-      sections.push(lines.filter(Boolean).join('\n'))
-      continue
-    }
-    if (head) sections.push(head)
-  }
-  return sections.join('\n\n---\n\n')
-}
-
-// Compact card used when the resolved batch item has no rich primary
-// payload — i.e. for project-key tokens. Mirrors `JiraTicketCard`'s
-// header (key chip + remove button) without the meta grid / sub-tabs
-// since there is no single "ticket" to show.
-function ProjectChildrenCard({ token, kind, items, onRemove }) {
-  const label = kind === 'project' ? 'Project' : 'Epic'
-  return (
-    <div className="flex items-start gap-3">
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2 mb-1">
-          <span className="inline-flex items-center gap-1 text-[11px] font-extrabold uppercase tracking-wider text-violet-700 bg-violet-50 border border-violet-200 px-2 py-0.5 rounded-md">
-            {label}
-          </span>
-          <span className="font-mono font-extrabold text-toon-navy">{token}</span>
-          <span className="text-xs text-gray-500">
-            {items.length} issue{items.length === 1 ? '' : 's'}
-          </span>
-        </div>
-        <ChildIssueList items={items} />
-      </div>
-      {onRemove && (
-        <button
-          type="button"
-          onClick={onRemove}
-          className="text-xs font-bold text-gray-400 hover:text-red-500 transition-colors"
-          aria-label={`Remove ${token}`}
-        >
-          ✕
-        </button>
-      )}
-    </div>
-  )
-}
-
-// Children list rendered under an Epic's primary `JiraTicketCard`.
-function EpicChildrenList({ items, epicKey }) {
-  if (!items?.length) return null
-  return (
-    <div className="mt-3 pl-3 border-l-2 border-violet-200">
-      <div className="text-[11px] font-extrabold uppercase tracking-wider text-violet-700 mb-1.5">
-        Epic {epicKey} children ({items.length})
-      </div>
-      <ChildIssueList items={items} />
-    </div>
-  )
-}
-
-// Compact rows used by both Project and Epic children. Truncates to
-// 10 rows by default with a "Show all N" toggle so a 100-issue project
-// import doesn't blow out the card height.
-function ChildIssueList({ items }) {
-  const [showAll, setShowAll] = useState(false)
-  if (!items?.length) return <div className="text-xs text-gray-400 italic">No child issues.</div>
-  const visible = showAll ? items : items.slice(0, 10)
-  return (
-    <div className="space-y-0.5">
-      {visible.map((c) => (
-        <div key={c.key} className="flex items-baseline gap-2 text-xs">
-          <span className="font-mono font-bold text-violet-700">{c.key}</span>
-          {(c.issuetype || c.status) && (
-            <span className="text-[10px] uppercase tracking-wider font-bold text-gray-500 bg-white border border-gray-200 px-1.5 py-0.5 rounded">
-              {[c.issuetype, c.status].filter(Boolean).join(' • ')}
-            </span>
-          )}
-          <span className="truncate text-gray-700">{c.summary || ''}</span>
-        </div>
-      ))}
-      {items.length > 10 && (
-        <button
-          type="button"
-          onClick={() => setShowAll((v) => !v)}
-          className="mt-1 text-[11px] font-extrabold text-violet-600 hover:text-violet-800"
-        >
-          {showAll ? 'Show fewer' : `Show all ${items.length}`}
-        </button>
-      )}
-    </div>
-  )
 }
 
 // Resolve the primary input field key for a given agent. AGENT_META
@@ -398,7 +257,15 @@ function QuickPackTab({
 
 export default function QuickPack() {
   const { user } = useAuth()
-  const { qaProjectSlug, setQaProjectSlug, userStoryKey, setUserStoryKey, setJiraProjectKey } = useSessionPrefs()
+  const {
+    qaProjectSlug,
+    setQaProjectSlug,
+    userStoryKey,
+    setUserStoryKey,
+    setJiraProjectKey,
+    quickPackTargets,
+    setQuickPackTargets,
+  } = useSessionPrefs()
   const { connected: jiraConnected, importBatch } = useJira()
   const [qaMode, setQaMode] = useQaMode()
   const [projects, setProjects] = useState([])
@@ -442,6 +309,40 @@ export default function QuickPack() {
       setActiveSlug(accessibleAgents[0] || null)
     }
   }, [accessibleAgents, activeSlug])
+
+  // Subset of `accessibleAgents` the user wants the next Jira import
+  // and the next bulk Generate to apply to. Persists across reload via
+  // SessionPrefsContext.quickPackTargets — ``null`` in storage means
+  // "default to every accessible agent" (first-run / never picked).
+  // Unselecting an agent here:
+  //   1. Skips it during the shared-Context auto-fill effect.
+  //   2. Excludes it from `handleBulkGenerate` (no fire, no Needs input
+  //      tag — the tab gets a neutral 'excluded' dot in the strip).
+  // The choice survives `Reset all` so the user doesn't have to re-pick
+  // their target set every run; clearing the import doesn't mean
+  // forgetting which agents they care about.
+  const selectedAgents = useMemo(() => {
+    if (quickPackTargets === null || quickPackTargets === undefined) {
+      return new Set(accessibleAgents)
+    }
+    // Filter against the current allow-list — admin grants/revokes mid-
+    // session shouldn't leave stale slugs in the active set.
+    return new Set(quickPackTargets.filter(s => accessibleAgents.includes(s)))
+  }, [quickPackTargets, accessibleAgents])
+
+  const toggleSelectedAgent = useCallback((slug) => {
+    const current = quickPackTargets === null || quickPackTargets === undefined
+      ? new Set(accessibleAgents)
+      : new Set(quickPackTargets.filter(s => accessibleAgents.includes(s)))
+    if (current.has(slug)) current.delete(slug)
+    else current.add(slug)
+    setQuickPackTargets(current)
+  }, [quickPackTargets, accessibleAgents, setQuickPackTargets])
+  const setAllAgentsSelected = useCallback((all) => {
+    setQuickPackTargets(all ? accessibleAgents : [])
+  }, [accessibleAgents, setQuickPackTargets])
+  const allSelected = selectedAgents.size === accessibleAgents.length && accessibleAgents.length > 0
+  const noneSelected = selectedAgents.size === 0
 
   // Classify every comma-separated token in the input so we can both
   // pin the first detected story key (mirrors the StlcPack page so
@@ -488,14 +389,16 @@ export default function QuickPack() {
   }, [fetchProjects])
 
   // Whenever the shared Context changes, gently auto-prefill every
-  // tab's primary field IF that field is currently empty. We never
-  // overwrite manual edits — once a user types into a tab's input,
-  // it's theirs.
+  // SELECTED tab's primary field IF that field is currently empty. We
+  // never overwrite manual edits — once a user types into a tab's
+  // input, it's theirs. Unselected agents stay blank: the user
+  // explicitly opted them out of the import.
   useEffect(() => {
     if (!context) return
     setPerAgentValues(prev => {
       const next = { ...prev }
       for (const slug of accessibleAgents) {
+        if (!selectedAgents.has(slug)) continue
         const primaryKey = pickPrimaryFieldKey(slug)
         if (!primaryKey) continue
         const tab = next[slug] || {}
@@ -505,7 +408,7 @@ export default function QuickPack() {
       }
       return next
     })
-  }, [context, accessibleAgents])
+  }, [context, accessibleAgents, selectedAgents])
 
   const handleValuesChange = useCallback((slug, key, value) => {
     setPerAgentValues(prev => ({
@@ -527,11 +430,21 @@ export default function QuickPack() {
     setStatuses(prev => (prev[slug] === status ? prev : { ...prev, [slug]: status }))
   }, [])
 
-  const readyCount = useMemo(
-    () => accessibleAgents.filter(s => isReadyToRun(s, perAgentValues[s])).length,
-    [accessibleAgents, perAgentValues],
+  // Counters only consider SELECTED agents — the "Ready" / "Needs
+  // input" pills under the Generate button reflect what will actually
+  // run, not the full allow-list. Excluded agents are tallied
+  // separately so the user has a quick visual on how many they've
+  // opted out of.
+  const targetedAgents = useMemo(
+    () => accessibleAgents.filter(s => selectedAgents.has(s)),
+    [accessibleAgents, selectedAgents],
   )
-  const needsInputCount = accessibleAgents.length - readyCount
+  const readyCount = useMemo(
+    () => targetedAgents.filter(s => isReadyToRun(s, perAgentValues[s])).length,
+    [targetedAgents, perAgentValues],
+  )
+  const needsInputCount = targetedAgents.length - readyCount
+  const excludedCount = accessibleAgents.length - targetedAgents.length
   const runningCount = useMemo(
     () => Object.values(statuses).filter(s => s === 'loading').length,
     [statuses],
@@ -548,11 +461,16 @@ export default function QuickPack() {
 
   const handleBulkGenerate = () => {
     if (isRunning) return
-    if (accessibleAgents.length === 0) return
+    if (targetedAgents.length === 0) {
+      toast.error('No agents selected — pick at least one in the "Apply to" row above.')
+      return
+    }
     const skip = new Set()
     const trigger = { ...triggerMap }
     let firedCount = 0
-    for (const slug of accessibleAgents) {
+    // Iterate ONLY the selected agents; unchecked agents are excluded
+    // entirely (they stay 'excluded' in the tab strip and never fire).
+    for (const slug of targetedAgents) {
       if (isReadyToRun(slug, perAgentValues[slug])) {
         trigger[slug] = (trigger[slug] || 0) + 1
         firedCount += 1
@@ -564,9 +482,11 @@ export default function QuickPack() {
     setTriggerMap(trigger)
     setShakeStamp(Date.now())
     if (firedCount === 0) {
-      toast.error('No agents are ready — fill the required inputs on each tab first.')
+      toast.error('No selected agents are ready — fill the required inputs on each tab first.')
     } else {
-      toast.success(`Generating ${firedCount} of ${accessibleAgents.length} agents in parallel…`)
+      const excluded = accessibleAgents.length - targetedAgents.length
+      const tail = excluded > 0 ? ` (${excluded} excluded)` : ''
+      toast.success(`Generating ${firedCount} of ${targetedAgents.length} selected agents in parallel…${tail}`)
     }
   }
 
@@ -588,6 +508,7 @@ export default function QuickPack() {
   // just the FIRST primary issue without duplicating the body.
   const seedBugReportTab = useCallback((payload, key) => {
     if (!accessibleAgents.includes('bug_report')) return
+    if (!selectedAgents.has('bug_report')) return
     const core = payload?.core || payload || {}
     const summary = (core.summary || '').trim()
     const issueEnv = (core.environment || '').trim()
@@ -612,7 +533,7 @@ export default function QuickPack() {
       next['bug_report'] = tab
       return next
     })
-  }, [accessibleAgents, qaMode])
+  }, [accessibleAgents, selectedAgents, qaMode])
 
   const handleJiraFetch = async () => {
     if (jiraFetching || !jiraConnected) return
@@ -628,7 +549,13 @@ export default function QuickPack() {
       const ok = items.filter(i => !i.error && (i.primary || (i.children && i.children.length)))
       const failed = items.length - ok.length
       if (!ok.length) {
-        toast.error('No matching Jira tickets found.')
+        // Surface the actual reason from the backend instead of a generic
+        // "no matching tickets" line. Most failures here are 404 ("Issue
+        // does not exist"), 403 (permission), or a key that classified as
+        // "unknown" — the user can only act on the right one if we tell
+        // them which it was.
+        const { reason, tokenLabel } = summarizeBatchError(items, tokens)
+        toast.error(`Could not fetch ${tokenLabel}: ${reason}`, { duration: 6000 })
         return
       }
       setImportedIssues(ok)
@@ -648,12 +575,18 @@ export default function QuickPack() {
         ? `Imported Jira ${headlineKey}${summary ? ` — ${summary}` : ''}`
         : `Imported ${ok.length} Jira items${failed ? ` (${failed} skipped)` : ''}`
       if (failed > 0) {
-        toast(detail, { icon: '⚠️' })
+        // Mention the first failing key so the user knows which token in
+        // their list didn't make it (e.g. a typo or a deleted ticket).
+        const firstFailing = items.find(i => i.error)
+        const skippedNote = firstFailing
+          ? ` Skipped ${firstFailing.key || firstFailing.token}: ${firstFailing.error}`
+          : ''
+        toast(detail + skippedNote, { icon: '⚠️', duration: 6000 })
       } else {
         toast.success(detail)
       }
     } catch (err) {
-      toast.error(err?.message || 'Failed to fetch Jira tickets')
+      toast.error(err?.response?.data?.detail || err?.message || 'Failed to fetch Jira tickets')
     } finally {
       setJiraFetching(false)
     }
@@ -730,9 +663,10 @@ export default function QuickPack() {
             <p className="text-sm text-gray-500">
               Paste a Jira key or describe your scope below. Every accessible
               agent gets its own tab with editable inputs and a per-tab
-              Regenerate. Bulk Generate runs all agents whose required
-              fields are filled — the rest stay tagged
-              <span className="font-bold text-amber-700"> Needs input</span>.
+              Regenerate. Pick which agents the next import and bulk run
+              target in <span className="font-bold text-violet-700">Apply Jira &amp; Generate to</span> below;
+              unchecked agents are tagged <span className="font-bold text-gray-500">Excluded</span> and
+              won&apos;t fire on Generate.
             </p>
           </div>
           <span className="text-[11px] font-bold text-astound-violet bg-violet-50 border border-violet-200 px-2.5 py-1 rounded-full whitespace-nowrap">
@@ -780,6 +714,75 @@ export default function QuickPack() {
                     <span aria-hidden="true">{opt.icon}</span>
                     {opt.label}
                   </span>
+                </button>
+              )
+            })}
+          </div>
+        </div>
+
+        {/* Apply-to picker — pick which agents the next Jira import and
+            the next bulk Generate target. Defaults to all accessible.
+            Unchecked agents are excluded from auto-fill and bulk run. */}
+        <div className="mb-4 bg-gray-50 rounded-2xl p-3 border border-gray-200">
+          <div className="flex items-center justify-between gap-3 mb-2">
+            <div>
+              <div className="text-sm font-bold text-toon-navy">Apply Jira & Generate to</div>
+              <div className="text-xs text-gray-500">
+                {selectedAgents.size === 0
+                  ? 'No agents selected — Generate is disabled.'
+                  : `${selectedAgents.size}/${accessibleAgents.length} agent${accessibleAgents.length === 1 ? '' : 's'} will receive the next import and run.`}
+              </div>
+            </div>
+            <div className="flex items-center gap-1.5 text-[11px] font-bold">
+              <button
+                type="button"
+                onClick={() => setAllAgentsSelected(true)}
+                disabled={isRunning || allSelected}
+                className={`px-2.5 py-1 rounded-lg border transition-colors ${
+                  allSelected
+                    ? 'border-violet-200 text-violet-300 bg-white cursor-default'
+                    : 'border-violet-200 text-violet-700 bg-white hover:bg-violet-50'
+                } ${isRunning ? 'opacity-50 cursor-not-allowed' : ''}`}
+              >
+                All
+              </button>
+              <button
+                type="button"
+                onClick={() => setAllAgentsSelected(false)}
+                disabled={isRunning || noneSelected}
+                className={`px-2.5 py-1 rounded-lg border transition-colors ${
+                  noneSelected
+                    ? 'border-gray-200 text-gray-300 bg-white cursor-default'
+                    : 'border-gray-200 text-gray-600 bg-white hover:bg-gray-100'
+                } ${isRunning ? 'opacity-50 cursor-not-allowed' : ''}`}
+              >
+                None
+              </button>
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {accessibleAgents.map(slug => {
+              const meta = getAgent(slug)
+              const checked = selectedAgents.has(slug)
+              return (
+                <button
+                  key={slug}
+                  type="button"
+                  onClick={() => toggleSelectedAgent(slug)}
+                  disabled={isRunning}
+                  aria-pressed={checked}
+                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl border text-xs font-bold transition-all ${
+                    checked
+                      ? 'bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white border-transparent shadow-sm'
+                      : 'bg-white text-gray-600 border-gray-200 hover:border-violet-300'
+                  } ${isRunning ? 'opacity-60 cursor-not-allowed' : ''}`}
+                  title={checked ? 'Click to exclude this agent' : 'Click to include this agent'}
+                >
+                  <span aria-hidden="true">{meta?.icon || '✨'}</span>
+                  <span>{meta?.label || slug}</span>
+                  {!checked && (
+                    <span className="text-[9px] uppercase tracking-wider text-gray-400">off</span>
+                  )}
                 </button>
               )
             })}
@@ -841,46 +844,13 @@ export default function QuickPack() {
         </div>
 
         {/* Imported Jira preview — one card per resolved batch item */}
-        <AnimatePresence initial={false}>
-          {importedIssues.length > 0 && (
-            <motion.div
-              key="imported-jira-list"
-              initial={{ opacity: 0, height: 0 }}
-              animate={{ opacity: 1, height: 'auto' }}
-              exit={{ opacity: 0, height: 0 }}
-              transition={{ duration: 0.2 }}
-              className="overflow-hidden mb-4"
-            >
-              <div className="space-y-2">
-                {importedIssues.map((item, idx) => (
-                  <div
-                    key={`${item.token}-${idx}`}
-                    className="rounded-2xl border border-gray-200 bg-gray-50 p-3"
-                  >
-                    {item.primary ? (
-                      <JiraTicketCard
-                        detail={item.primary}
-                        compact
-                        defaultExpanded={false}
-                        onRemove={() => setImportedIssues(prev => prev.filter((_, i) => i !== idx))}
-                      />
-                    ) : (
-                      <ProjectChildrenCard
-                        token={item.token}
-                        kind={item.kind}
-                        items={item.children || []}
-                        onRemove={() => setImportedIssues(prev => prev.filter((_, i) => i !== idx))}
-                      />
-                    )}
-                    {item.kind === 'epic' && item.children?.length > 0 && (
-                      <EpicChildrenList items={item.children} epicKey={item.key} />
-                    )}
-                  </div>
-                ))}
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
+        <BatchPreview
+          items={importedIssues}
+          onRemoveIndex={(idx) =>
+            setImportedIssues(prev => prev.filter((_, i) => i !== idx))
+          }
+          className="mb-4"
+        />
 
         <div className="mb-4">
           <label className="text-sm font-bold text-toon-navy mb-1.5 block">
@@ -907,11 +877,17 @@ export default function QuickPack() {
                 ? 'bg-gradient-to-r from-violet-500 to-fuchsia-500 hover:shadow-lg cursor-pointer'
                 : 'bg-gray-300 cursor-not-allowed'
             }`}
-            title={readyCount === 0 ? 'Fill required inputs on at least one tab' : ''}
+            title={
+              targetedAgents.length === 0
+                ? 'Pick at least one agent in the "Apply Jira & Generate to" row above'
+                : readyCount === 0
+                  ? 'Fill required inputs on at least one selected tab'
+                  : ''
+            }
           >
             {isRunning
-              ? `⏳ Streaming ${runningCount}/${accessibleAgents.length}…`
-              : `🚀 Generate ready agents (${readyCount}/${accessibleAgents.length})`}
+              ? `⏳ Streaming ${runningCount}/${targetedAgents.length}…`
+              : `🚀 Generate ready agents (${readyCount}/${targetedAgents.length})`}
           </motion.button>
           <button
             type="button"
@@ -930,6 +906,12 @@ export default function QuickPack() {
               <span className="inline-flex items-center gap-1.5 text-amber-700">
                 <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
                 {needsInputCount} need input
+              </span>
+            )}
+            {excludedCount > 0 && (
+              <span className="inline-flex items-center gap-1.5 text-gray-500">
+                <span className="w-1.5 h-1.5 rounded-full bg-gray-400" />
+                {excludedCount} excluded
               </span>
             )}
             {runningCount > 0 && (
@@ -958,7 +940,14 @@ export default function QuickPack() {
       <div className="mb-4 flex flex-wrap gap-2 sticky top-0 z-10 bg-astound-cream/80 backdrop-blur-sm py-2 -mx-2 px-2 rounded-2xl">
         {accessibleAgents.map(slug => {
           const meta = getAgent(slug)
-          const status = statuses[slug] || (bulkSkipped.has(slug) ? 'needs_input' : 'idle')
+          const isExcluded = !selectedAgents.has(slug)
+          // Excluded > skipped > stream-status > idle. The 'excluded'
+          // state takes priority over the streaming dot too because the
+          // user opted this tab out — its previous run state isn't
+          // relevant to the next bulk Generate.
+          const status = isExcluded
+            ? 'excluded'
+            : statuses[slug] || (bulkSkipped.has(slug) ? 'needs_input' : 'idle')
           const styles = STATUS_STYLES[status] || STATUS_STYLES.idle
           const isActive = slug === activeSlug
           const ready = isReadyToRun(slug, perAgentValues[slug])
@@ -970,20 +959,34 @@ export default function QuickPack() {
               className={`group relative inline-flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ${
                 isActive
                   ? 'bg-astound-grad text-white border-transparent shadow-astound'
-                  : 'bg-white text-toon-navy border-gray-200 hover:border-astound-violet/40'
+                  : isExcluded
+                    ? 'bg-white text-gray-400 border-gray-200 hover:border-astound-violet/40'
+                    : 'bg-white text-toon-navy border-gray-200 hover:border-astound-violet/40'
               }`}
-              title={!ready ? 'Required inputs missing — open this tab to fill them.' : undefined}
+              title={
+                isExcluded
+                  ? 'Excluded from the next bulk Generate — toggle it back on in the "Apply Jira & Generate to" row above.'
+                  : !ready
+                    ? 'Required inputs missing — open this tab to fill them.'
+                    : undefined
+              }
             >
               <span className={`w-1.5 h-1.5 rounded-full ${styles.dot}`} />
               <span aria-hidden="true">{meta?.icon || '✨'}</span>
               <span>{meta?.label || slug}</span>
-              {!ready && (
+              {isExcluded ? (
+                <span className={`ml-1 text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded-md ${
+                  isActive ? 'bg-white/20' : 'bg-gray-100 text-gray-500 border border-gray-200'
+                }`}>
+                  excluded
+                </span>
+              ) : !ready ? (
                 <span className={`ml-1 text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded-md ${
                   isActive ? 'bg-white/20' : 'bg-amber-50 text-amber-700 border border-amber-200'
                 }`}>
                   needs input
                 </span>
-              )}
+              ) : null}
             </button>
           )
         })}
