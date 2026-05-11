@@ -277,6 +277,35 @@ async def list_jira_issues(
     return {"issues": issues}
 
 
+@router.get("/bug-meta")
+async def get_jira_bug_meta(
+    project_key: str,
+    user=Depends(get_current_user),
+):
+    """Return the Bug-create field metadata for *project_key*.
+
+    Exposes the set of priorities, severities, components, and versions
+    the project will actually accept on a new Bug issue. Used by the
+    frontend's JiraBugPush modal so the priority/severity dropdowns
+    always match the tenant's configuration — Jira tenants commonly
+    replace the default ``Highest/High/Medium/Low/Lowest`` rungs with
+    custom names like ``Critical/Major/Minor/Trivial``, and sending an
+    unrecognised name produces a hard 400 ``"The priority selected is
+    invalid."``.
+
+    Always returns ``200`` with empty lists when createmeta is
+    unavailable (e.g. service account missing "Browse projects"); the
+    frontend falls back to its built-in defaults in that case.
+    """
+    if not (project_key or "").strip():
+        raise HTTPException(400, "project_key is required.")
+    client = _get_client(user["username"])
+    try:
+        return client.get_bug_meta(project_key.strip())
+    except ConnectionError as e:
+        raise HTTPException(400, str(e))
+
+
 @router.get("/sprints")
 async def list_jira_sprints(
     project_key: str,

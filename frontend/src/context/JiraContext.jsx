@@ -104,6 +104,35 @@ export function JiraProvider({ children }) {
     return data.issues || []
   }, [])
 
+  // Fetch the Bug-create field metadata for a project (priorities,
+  // severities, components, versions actually accepted by the project's
+  // Bug workflow). Used by JiraBugPush so the priority/severity
+  // dropdowns mirror the tenant's configuration — Jira tenants
+  // frequently replace the default Highest/High/Medium/Low/Lowest rungs
+  // with custom names like Critical/Major/Minor/Trivial, and sending an
+  // unrecognised name produces a hard 400. Always resolves; on failure
+  // the caller falls back to the built-in defaults.
+  const getBugMeta = useCallback(async (projectKey) => {
+    if (!projectKey) {
+      return {
+        priorities: [],
+        severities: [],
+        has_severity: false,
+        components: [],
+        versions: [],
+        accepts_priority: true,
+      }
+    }
+    try {
+      const { data } = await api.get('/jira/bug-meta', {
+        params: { project_key: projectKey },
+      })
+      return data || { priorities: [], severities: [], components: [], versions: [] }
+    } catch {
+      return { priorities: [], severities: [], components: [], versions: [] }
+    }
+  }, [])
+
   const listSprints = useCallback(async (projectKey) => {
     if (!projectKey) return { board_id: null, board_name: null, sprints: [], reason: 'no_project' }
     try {
@@ -174,6 +203,7 @@ export function JiraProvider({ children }) {
         refreshStatus,
         listIssues,
         listSprints,
+        getBugMeta,
         getIssue,
         getFullIssue,
         resolveFromText,
