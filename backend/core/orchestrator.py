@@ -1456,11 +1456,19 @@ class SFQAOrchestrator:
         )
         first_model = (self._models_by_provider.get(chosen) or [""])[0]
         self._active: dict[str, str] = {"provider": chosen, "model": first_model}
+        # Tracks whether ``self._active`` represents an explicit user/admin
+        # Sidebar pick (True) or just the boot default from env (False).
+        # Recommended per-agent defaults only kick in when this is False —
+        # otherwise the Sidebar dropdown would lie: it shows "Cursor / gpt-5"
+        # while the run silently routes to gemini-2.5-pro because that's the
+        # baked-in recommendation for the agent.
+        self._active_is_user_pick: bool = False
 
         # Smart per-agent defaults (admin-overridable). Loaded once at
         # boot from baked-in constants + the AGENT_RECOMMENDED_DEFAULTS
         # env JSON. _resolve_provider_and_model walks this AFTER the
-        # admin override but BEFORE falling back to self._active.
+        # admin override but ONLY when the user hasn't explicitly picked
+        # an engine from the Sidebar — once they have, their pick wins.
         self._recommended_defaults: dict[str, list[tuple[str, str]]] = (
             _load_runtime_recommendations()
         )
@@ -1533,6 +1541,10 @@ class SFQAOrchestrator:
         if chosen_model not in catalog:
             return False
         self._active = {"provider": provider, "model": chosen_model}
+        # Mark this as an explicit Sidebar/admin selection so subsequent
+        # runs honour it instead of silently swapping to a baked-in
+        # per-agent recommended default.
+        self._active_is_user_pick = True
         return True
 
     def switch_provider(self, provider: str) -> bool:
@@ -1600,11 +1612,16 @@ class SFQAOrchestrator:
         Resolution order:
             1. Explicit per-call (``provider_override``, ``model_override``).
             2. Per-user, per-agent admin override (``user_auth.model_overrides``).
-            3. Per-agent smart default (``RECOMMENDED_DEFAULTS``) — the
-               orchestrator picks the highest-ranked recommended pair
-               whose provider is registered AND whose model exists in
-               that provider's catalog.
-            4. The orchestrator's global ``self._active`` selection.
+            3. The orchestrator's global ``self._active`` selection IF the
+               user has explicitly picked it from the Sidebar — this honours
+               "show what you run, run what you show" and keeps the
+               token-usage report aligned with the engine the user chose.
+            4. Per-agent smart default (``RECOMMENDED_DEFAULTS``) — only
+               consulted when neither the admin nor the user has picked
+               anything, so different agents can land on the best-suited
+               model out of the box.
+            5. The orchestrator's global ``self._active`` selection (boot
+               default from env).
 
         Falls back to the global active when the desired override
         points at a provider/model that isn't registered, so a stale
@@ -1624,8 +1641,17 @@ class SFQAOrchestrator:
                 chosen_provider = rec.get("provider") or None
                 chosen_model = rec.get("model") or None
 
-        # Per-agent smart default — wins over global active so a
-        # well-suited model runs even when the admin hasn't pinned one.
+        # If the user (or admin) has explicitly picked an engine from
+        # the Sidebar, honour it over any baked-in per-agent default —
+        # otherwise the UI's "Will run on X" label and the token-usage
+        # row would disagree with where the run actually landed.
+        if not chosen_provider and self._active_is_user_pick:
+            chosen_provider = active.get("provider")
+            chosen_model = active.get("model")
+
+        # Per-agent smart default — only when nothing more specific
+        # has been chosen, so each agent still lands on a well-suited
+        # model on a fresh boot.
         if not chosen_provider:
             picked = self._pick_recommended_default(agent_name)
             if picked is not None:
