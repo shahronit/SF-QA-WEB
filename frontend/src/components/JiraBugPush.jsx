@@ -17,8 +17,41 @@ const LINK_TYPES = [
   { value: 'Cloners',     label: 'Cloned by' },
 ]
 
-const PRIORITY_OPTIONS = ['Highest', 'High', 'Medium', 'Low', 'Lowest']
-const SEVERITY_OPTIONS = ['Critical', 'Major', 'Minor', 'Trivial']
+// Static fallbacks used when /jira/bug-meta hasn't been loaded yet (or
+// the user's account lacks the "Browse projects" permission needed for
+// createmeta). The modal always prefers the live project-specific list
+// returned by getBugMeta() so tenants with custom priority schemes
+// (Critical/Major/Minor/Trivial, P0..P4, etc.) get the right options.
+const DEFAULT_PRIORITY_OPTIONS = ['Highest', 'High', 'Medium', 'Low', 'Lowest']
+const DEFAULT_SEVERITY_OPTIONS = ['Critical', 'Major', 'Minor', 'Trivial']
+
+// Translate Jira's structured error body into a single-line message the
+// user can act on. The backend forwards Jira's response verbatim inside
+// the FastAPI ``detail`` string, so we peel off the leading
+// ``"Jira API POST /issue returned 400:"`` prefix and try to parse the
+// trailing JSON envelope (``{"errorMessages": [...], "errors": {...}}``).
+// Falls back to the raw text on any parse failure so we never hide
+// information from the user.
+function humanizeJiraError(raw) {
+  if (!raw || typeof raw !== 'string') return 'Failed to create Jira bug.'
+  const jsonStart = raw.indexOf('{')
+  if (jsonStart < 0) return raw
+  try {
+    const env = JSON.parse(raw.slice(jsonStart))
+    const lines = []
+    if (Array.isArray(env.errorMessages)) {
+      for (const m of env.errorMessages) if (m) lines.push(String(m))
+    }
+    if (env.errors && typeof env.errors === 'object') {
+      for (const [field, msg] of Object.entries(env.errors)) {
+        if (msg) lines.push(`${field}: ${msg}`)
+      }
+    }
+    return lines.length ? lines.join(' • ') : raw
+  } catch {
+    return raw
+  }
+}
 
 /**
  * Lightweight chip-input: comma or Enter to commit; backspace on an empty
@@ -78,7 +111,7 @@ function ChipInput({ value = [], onChange, placeholder, disabled }) {
 }
 
 export default function JiraBugPush({ markdown, agentName, defaultIssueKey = '' }) {
-  const { connected: jiraConnected, projects, listIssues } = useJira()
+  const { connected: jiraConnected, projects, listIssues, getBugMeta } = useJira()
   const {
     jiraProjectKey: pinnedProjectKey,
     setJiraProjectKey,
@@ -94,6 +127,21 @@ export default function JiraBugPush({ markdown, agentName, defaultIssueKey = '' 
   const [issuesLoading, setIssuesLoading] = useState(false)
   const [pushing, setPushing] = useState(false)
   const [result, setResult] = useState(null)
+
+  // Project-specific bug-create metadata. Populated when the modal
+  // opens with a selected project; refetched whenever the project
+  // changes. Empty arrays fall back to DEFAULT_*_OPTIONS in the render
+  // helpers below so the modal stays usable even when /jira/bug-meta
+  // fails (e.g. service account without Browse Projects).
+  const [bugMeta, setBugMeta] = useState({
+    priorities: [],
+    severities: [],
+    has_severity: true,
+    components: [],
+    versions: [],
+    accepts_priority: true,
+  })
+  const [metaLoading, setMetaLoading] = useState(false)
 
   // Form state — initialised from parseDefectReport when the modal opens
   // so the user gets a one-click push when the agent's output is already
@@ -137,6 +185,74 @@ export default function JiraBugPush({ markdown, agentName, defaultIssueKey = '' 
       .finally(() => { if (!cancelled) setIssuesLoading(false) })
     return () => { cancelled = true }
   }, [open, projectKey, jiraConnected, listIssues])
+
+  // Refresh the priority/severity dropdowns whenever the modal is open
+  // and the project changes. We deliberately re-run on every project
+  // change instead of caching once at open-time so picking a different
+  // project mid-flow always rebuilds the option list to match the new
+  // workflow.
+  useEffect(() => {
+    if (!open) return
+    if (!projectKey || !jiraConnected) {
+      setBugMeta({
+        priorities: [], severities: [], has_severity: true,
+        components: [], versions: [], accepts_priority: true,
+      })
+      return
+    }
+    let cancelled = false
+    setMetaLoading(true)
+    getBugMeta(projectKey)
+      .then(meta => { if (!cancelled) setBugMeta(meta || {}) })
+      .catch(() => {
+        if (!cancelled) setBugMeta({
+          priorities: [], severities: [], has_severity: true,
+          components: [], versions: [], accepts_priority: true,
+        })
+      })
+      .finally(() => { if (!cancelled) setMetaLoading(false) })
+    return () => { cancelled = true }
+  }, [open, projectKey, jiraConnected, getBugMeta])
+
+  // Compute the option list rendered into each dropdown. We always
+  // prefer the project's createmeta-derived list when it's non-empty.
+  // Otherwise we fall back to the Jira Cloud defaults so the modal stays
+  // usable on tenants where createmeta is locked down.
+  const priorityOptionNames = useMemo(() => {
+    const live = (bugMeta.priorities || [])
+      .map(p => (p?.name || '').trim())
+      .filter(Boolean)
+    return live.length ? live : DEFAULT_PRIORITY_OPTIONS
+  }, [bugMeta.priorities])
+
+  const severityOptionNames = useMemo(() => {
+    const live = (bugMeta.severities || [])
+      .map(s => (s?.value || s?.name || '').trim())
+      .filter(Boolean)
+    return live.length ? live : DEFAULT_SEVERITY_OPTIONS
+  }, [bugMeta.severities])
+
+  // When the AI seeded a priority/severity that isn't actually allowed
+  // on this project's Bug workflow (the original "Medium" 400 bug),
+  // surface a small hint under the dropdown so the user knows we
+  // cleared it intentionally — rather than thinking the modal forgot
+  // their previous selection. The hint disappears once they pick a
+  // valid value.
+  const priorityHint = useMemo(() => {
+    if (!priority) return ''
+    const known = (bugMeta.priorities || []).map(p => (p?.name || '').toLowerCase())
+    if (!known.length) return ''
+    if (known.includes(priority.toLowerCase())) return ''
+    return `"${priority}" isn't configured on this project — pick from the list above.`
+  }, [priority, bugMeta.priorities])
+
+  const severityHint = useMemo(() => {
+    if (!severity) return ''
+    const known = (bugMeta.severities || []).map(s => (s?.value || s?.name || '').toLowerCase())
+    if (!known.length) return ''
+    if (known.includes(severity.toLowerCase())) return ''
+    return `"${severity}" isn't configured on this project — pick from the list above.`
+  }, [severity, bugMeta.severities])
 
   if (agentName !== 'bug_report') return null
 
@@ -234,13 +350,22 @@ export default function JiraBugPush({ markdown, agentName, defaultIssueKey = '' 
       }
       // Surface anything the backend silently dropped because the
       // current Jira account can't auto-create new components/versions
-      // on this project. The bug itself was still created.
+      // on this project, or because the priority/severity name didn't
+      // match the project's configured values. The bug itself was
+      // still created — we just want the user to know the field was
+      // silently omitted so they can add it back in Jira if needed.
       const dropped = []
       if (Array.isArray(data.dropped_components) && data.dropped_components.length) {
         dropped.push(`components: ${data.dropped_components.join(', ')}`)
       }
       if (Array.isArray(data.dropped_versions) && data.dropped_versions.length) {
         dropped.push(`affects versions: ${data.dropped_versions.join(', ')}`)
+      }
+      if (data.dropped_priority) {
+        dropped.push(`priority "${data.dropped_priority}"`)
+      }
+      if (data.dropped_severity) {
+        dropped.push(`severity "${data.dropped_severity}"`)
       }
       if (dropped.length) {
         toast(
@@ -249,7 +374,8 @@ export default function JiraBugPush({ markdown, agentName, defaultIssueKey = '' 
         )
       }
     } catch (err) {
-      toast.error(err?.response?.data?.detail || 'Failed to create Jira bug.')
+      const raw = err?.response?.data?.detail || err?.message || ''
+      toast.error(humanizeJiraError(raw) || 'Failed to create Jira bug.')
     } finally {
       setPushing(false)
     }
@@ -278,7 +404,7 @@ export default function JiraBugPush({ markdown, agentName, defaultIssueKey = '' 
               animate={{ scale: 1, y: 0 }}
               exit={{ scale: 0.95, y: 20 }}
               transition={{ type: 'spring', stiffness: 320, damping: 24 }}
-              className="bg-white rounded-toon-lg shadow-2xl w-full max-w-3xl max-h-[90vh] overflow-hidden flex flex-col"
+              className="bg-white rounded-toon-lg shadow-2xl w-full max-w-4xl max-h-[92vh] overflow-hidden flex flex-col"
               onClick={e => e.stopPropagation()}
             >
               <div className="flex items-center justify-between p-5 border-b border-gray-100">
@@ -379,7 +505,12 @@ export default function JiraBugPush({ markdown, agentName, defaultIssueKey = '' 
                     {/* Priority + Severity */}
                     <div className="grid sm:grid-cols-2 gap-3">
                       <div>
-                        <label className="block text-xs font-bold text-toon-navy mb-1">Priority</label>
+                        <label className="text-xs font-bold text-toon-navy mb-1 flex items-center gap-2">
+                          Priority
+                          {metaLoading && (
+                            <span className="text-[10px] font-normal text-gray-400">loading project values…</span>
+                          )}
+                        </label>
                         <select
                           className="toon-input !py-2"
                           value={priority}
@@ -387,10 +518,16 @@ export default function JiraBugPush({ markdown, agentName, defaultIssueKey = '' 
                           disabled={pushing}
                         >
                           <option value="">— Not set —</option>
-                          {PRIORITY_OPTIONS.map(p => (
+                          {priorityOptionNames.map(p => (
                             <option key={p} value={p}>{p}</option>
                           ))}
+                          {priority && !priorityOptionNames.some(p => p.toLowerCase() === priority.toLowerCase()) && (
+                            <option value={priority}>{priority} (not configured)</option>
+                          )}
                         </select>
+                        {priorityHint && (
+                          <p className="text-[11px] text-toon-coral mt-1">{priorityHint}</p>
+                        )}
                       </div>
                       <div>
                         <label className="block text-xs font-bold text-toon-navy mb-1">
@@ -400,13 +537,24 @@ export default function JiraBugPush({ markdown, agentName, defaultIssueKey = '' 
                           className="toon-input !py-2"
                           value={severity}
                           onChange={e => setSeverity(e.target.value)}
-                          disabled={pushing}
+                          disabled={pushing || (bugMeta.has_severity === false && !metaLoading)}
                         >
                           <option value="">— Not set —</option>
-                          {SEVERITY_OPTIONS.map(s => (
+                          {severityOptionNames.map(s => (
                             <option key={s} value={s}>{s}</option>
                           ))}
+                          {severity && !severityOptionNames.some(s => s.toLowerCase() === severity.toLowerCase()) && (
+                            <option value={severity}>{severity} (not configured)</option>
+                          )}
                         </select>
+                        {bugMeta.has_severity === false && !metaLoading && (
+                          <p className="text-[11px] text-gray-400 mt-1">
+                            This project doesn&apos;t expose a Severity field — it will be ignored on create.
+                          </p>
+                        )}
+                        {severityHint && (
+                          <p className="text-[11px] text-toon-coral mt-1">{severityHint}</p>
+                        )}
                       </div>
                     </div>
 

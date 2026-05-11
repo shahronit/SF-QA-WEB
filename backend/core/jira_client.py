@@ -837,13 +837,20 @@ class JiraClient:
                 "fields": {"summary", "priority", "labels", "components",
                            "environment", "versions", ...},
                 "severity_field_id": "customfield_10010" or None,
+                "priority_allowed": [{"id": "1", "name": "Major"}, ...],
+                "severity_allowed": [{"id": "10001", "value": "Minor"}, ...],
             }
 
         Built from Jira's createmeta endpoint so projects that don't expose
         a Severity custom field, or projects that have customised which
         standard fields are required vs hidden, never 400 the create call.
-        Cached per-instance so back-to-back bug pushes only pay one extra
-        round-trip.
+        ``priority_allowed`` and ``severity_allowed`` carry the exact option
+        values the project will accept — Jira tenants frequently replace the
+        default ``Highest/High/Medium/Low/Lowest`` rungs with custom names
+        (e.g. ``Critical/Major/Minor/Trivial``), and sending one of the
+        Jira-default names that isn't configured on this tenant produces a
+        ``"The priority selected is invalid."`` 400. Cached per-instance so
+        back-to-back bug pushes only pay one extra round-trip.
         """
         cache = getattr(self, "_bug_field_cache", None)
         if cache is None:
@@ -855,6 +862,8 @@ class JiraClient:
 
         accepted_ids: set[str] = set()
         severity_id: str | None = None
+        priority_allowed: list[dict[str, str]] = []
+        severity_allowed: list[dict[str, str]] = []
         try:
             safe_key = urllib.parse.quote(project_key, safe="")
             data = self._request(
@@ -868,12 +877,37 @@ class JiraClient:
                         continue
                     for fid, meta in (itype.get("fields") or {}).items():
                         accepted_ids.add(fid)
+                        meta_name = (meta.get("name") or "").strip().lower()
+                        if fid == "priority":
+                            for opt in (meta.get("allowedValues") or []):
+                                if not isinstance(opt, dict):
+                                    continue
+                                name = (opt.get("name") or "").strip()
+                                if not name:
+                                    continue
+                                priority_allowed.append({
+                                    "id": str(opt.get("id") or "").strip(),
+                                    "name": name,
+                                })
                         if (
-                            severity_id is None
-                            and fid.startswith("customfield_")
-                            and (meta.get("name") or "").strip().lower() == "severity"
+                            fid.startswith("customfield_")
+                            and meta_name == "severity"
                         ):
-                            severity_id = fid
+                            if severity_id is None:
+                                severity_id = fid
+                            for opt in (meta.get("allowedValues") or []):
+                                if not isinstance(opt, dict):
+                                    continue
+                                # Severity custom-select uses {value: "..."}
+                                # for option-typed fields; some tenants name
+                                # the visible label "value", others "name".
+                                label = (opt.get("value") or opt.get("name") or "").strip()
+                                if not label:
+                                    continue
+                                severity_allowed.append({
+                                    "id": str(opt.get("id") or "").strip(),
+                                    "value": label,
+                                })
         except Exception:  # noqa: BLE001
             # createmeta requires the "Browse projects" permission, which
             # most service accounts have but is occasionally missing on
@@ -896,9 +930,41 @@ class JiraClient:
                 "priority", "labels", "components", "environment", "versions",
             }
 
-        result = {"fields": accepted_ids, "severity_field_id": severity_id}
+        result = {
+            "fields": accepted_ids,
+            "severity_field_id": severity_id,
+            "priority_allowed": priority_allowed,
+            "severity_allowed": severity_allowed,
+        }
         cache[project_key] = result
         return result
+
+    def get_bug_meta(self, project_key: str) -> dict[str, Any]:
+        """Return the set of values the Bug screen will accept for *project_key*.
+
+        Combines the createmeta whitelist (priorities + severities) with
+        the project's existing components and versions so the frontend can
+        render dropdowns/typeahead with values Jira will actually accept.
+        Returns ``{}``-safe lists on every field — callers can iterate
+        without nil checks.
+        """
+        whitelist = self._fetch_bug_field_whitelist(project_key)
+        accepted = whitelist.get("fields") or set()
+        components = self._fetch_project_components(project_key) if "components" in accepted else []
+        versions = self._fetch_project_versions(project_key) if "versions" in accepted else []
+        return {
+            "project_key": project_key,
+            "priorities": list(whitelist.get("priority_allowed") or []),
+            "severities": list(whitelist.get("severity_allowed") or []),
+            "has_severity": bool(whitelist.get("severity_field_id")),
+            "components": components,
+            "versions": versions,
+            "accepts_priority": "priority" in accepted,
+            "accepts_labels": "labels" in accepted,
+            "accepts_environment": "environment" in accepted,
+            "accepts_components": "components" in accepted,
+            "accepts_versions": "versions" in accepted,
+        }
 
     def _fetch_project_components(self, project_key: str) -> list[dict[str, str]]:
         """Return the project's existing components as ``[{id, name}, ...]``.
@@ -1048,6 +1114,8 @@ class JiraClient:
         whitelist = self._fetch_bug_field_whitelist(project_key)
         accepted = whitelist["fields"]
         severity_id = whitelist["severity_field_id"]
+        priority_allowed = whitelist.get("priority_allowed") or []
+        severity_allowed = whitelist.get("severity_allowed") or []
 
         fields: dict[str, Any] = {
             "project": {"key": project_key},
@@ -1056,9 +1124,41 @@ class JiraClient:
             "description": description_adf,
         }
 
+        # Priority: match case-insensitively against the project's allowed
+        # values. Tenants frequently replace Jira's default rungs
+        # (Highest/High/Medium/Low/Lowest) with custom names like
+        # Critical/Major/Minor/Trivial, and sending a name the workflow
+        # doesn't recognise produces a hard 400 "priority selected is
+        # invalid." Dropping the field is preferable to failing the whole
+        # bug-create call — the bug still lands, just without the priority.
+        dropped_priority: str | None = None
         priority_v = (priority or "").strip()
         if priority_v and "priority" in accepted:
-            fields["priority"] = {"name": priority_v}
+            if priority_allowed:
+                match = next(
+                    (p for p in priority_allowed
+                     if (p.get("name") or "").strip().lower() == priority_v.lower()),
+                    None,
+                )
+                if match:
+                    # Sending by ID is more robust than name (some tenants
+                    # localise priority names) but name still works.
+                    fields["priority"] = (
+                        {"id": match["id"]} if match.get("id")
+                        else {"name": match["name"]}
+                    )
+                else:
+                    dropped_priority = priority_v
+                    log.info(
+                        "Dropping priority %r for %s — not in project's allowed list (%s)",
+                        priority_v, project_key,
+                        [p.get("name") for p in priority_allowed],
+                    )
+            else:
+                # createmeta didn't expose allowedValues — best-effort: still
+                # send by name and let Jira accept or reject. If it rejects
+                # we retry without priority below.
+                fields["priority"] = {"name": priority_v}
 
         dropped_components: list[str] = []
         if components and "components" in accepted:
@@ -1087,15 +1187,57 @@ class JiraClient:
             if matched:
                 fields["versions"] = matched
 
+        # Severity: same defensive match as priority. Severity is a custom
+        # select field, so the option shape is {value: "<label>"}.
+        dropped_severity: str | None = None
         severity_v = (severity or "").strip()
         if severity_v and severity_id:
-            # Severity is a CUSTOM field that varies per Jira install.
-            # Cloud's "Severity" custom field expects {"value": "<name>"}
-            # for the standard select option shape.
-            fields[severity_id] = {"value": severity_v}
+            if severity_allowed:
+                match = next(
+                    (s for s in severity_allowed
+                     if (s.get("value") or "").strip().lower() == severity_v.lower()),
+                    None,
+                )
+                if match:
+                    fields[severity_id] = (
+                        {"id": match["id"]} if match.get("id")
+                        else {"value": match["value"]}
+                    )
+                else:
+                    dropped_severity = severity_v
+                    log.info(
+                        "Dropping severity %r for %s — not in project's allowed list (%s)",
+                        severity_v, project_key,
+                        [s.get("value") for s in severity_allowed],
+                    )
+            else:
+                fields[severity_id] = {"value": severity_v}
 
         payload = {"fields": fields}
-        result = self._request("POST", "/issue", payload)
+        try:
+            result = self._request("POST", "/issue", payload)
+        except ConnectionError as exc:
+            # Last-ditch fallback: when Jira rejects the create because of
+            # priority (createmeta didn't enumerate options, so we couldn't
+            # pre-validate), retry without the priority field. This keeps
+            # the user's bug from being lost when a tenant simply has a
+            # non-standard priority scheme. We do NOT swallow other errors.
+            msg = str(exc)
+            if (
+                "priority" in msg.lower()
+                and "fields" in fields
+                and fields.get("priority") is not None
+            ):
+                log.info(
+                    "Jira rejected priority for %s (%s); retrying without it",
+                    project_key, msg,
+                )
+                retry_fields = dict(fields)
+                retry_fields.pop("priority", None)
+                result = self._request("POST", "/issue", {"fields": retry_fields})
+                dropped_priority = priority_v or dropped_priority
+            else:
+                raise
         issue_key = result.get("key", "")
         response: dict[str, Any] = {
             "key": issue_key,
@@ -1105,6 +1247,10 @@ class JiraClient:
             response["dropped_components"] = dropped_components
         if dropped_versions:
             response["dropped_versions"] = dropped_versions
+        if dropped_priority:
+            response["dropped_priority"] = dropped_priority
+        if dropped_severity:
+            response["dropped_severity"] = dropped_severity
         return response
 
     def add_comment(self, issue_key: str, body_markdown: str) -> dict[str, Any]:
