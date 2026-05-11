@@ -232,6 +232,22 @@ export default function JiraBugPush({ markdown, agentName, defaultIssueKey = '' 
       } else {
         toast.success(`Bug ${data.key} created in Jira.`)
       }
+      // Surface anything the backend silently dropped because the
+      // current Jira account can't auto-create new components/versions
+      // on this project. The bug itself was still created.
+      const dropped = []
+      if (Array.isArray(data.dropped_components) && data.dropped_components.length) {
+        dropped.push(`components: ${data.dropped_components.join(', ')}`)
+      }
+      if (Array.isArray(data.dropped_versions) && data.dropped_versions.length) {
+        dropped.push(`affects versions: ${data.dropped_versions.join(', ')}`)
+      }
+      if (dropped.length) {
+        toast(
+          `Bug created without unknown ${dropped.join(' and ')}. Add them in Jira project settings first to keep them.`,
+          { duration: 6000, icon: 'ℹ️' },
+        )
+      }
     } catch (err) {
       toast.error(err?.response?.data?.detail || 'Failed to create Jira bug.')
     } finally {

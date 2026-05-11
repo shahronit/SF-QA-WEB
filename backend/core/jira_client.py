@@ -900,6 +900,106 @@ class JiraClient:
         cache[project_key] = result
         return result
 
+    def _fetch_project_components(self, project_key: str) -> list[dict[str, str]]:
+        """Return the project's existing components as ``[{id, name}, ...]``.
+
+        Results are cached per-instance so back-to-back bug pushes only
+        pay one round-trip. Failures are swallowed and return an empty
+        list, which the caller treats as "I don't know which components
+        exist, so drop them all rather than risk a 400 for missing
+        permissions".
+        """
+        cache = getattr(self, "_project_components_cache", None)
+        if cache is None:
+            cache = {}
+            self._project_components_cache = cache
+        cached = cache.get(project_key)
+        if cached is not None:
+            return cached
+        try:
+            safe_key = urllib.parse.quote(project_key, safe="")
+            data = self._request("GET", f"/project/{safe_key}/components")
+        except Exception:  # noqa: BLE001
+            log.warning(
+                "components lookup failed for %s; will drop the components field",
+                project_key,
+            )
+            cache[project_key] = []
+            return []
+        result: list[dict[str, str]] = []
+        for c in data or []:
+            cid = str(c.get("id") or "").strip()
+            name = (c.get("name") or "").strip()
+            if cid and name:
+                result.append({"id": cid, "name": name})
+        cache[project_key] = result
+        return result
+
+    def _fetch_project_versions(self, project_key: str) -> list[dict[str, str]]:
+        """Return the project's existing versions as ``[{id, name}, ...]``.
+
+        Same shape and caching strategy as :meth:`_fetch_project_components`.
+        Versions hit the same "you do not have permission to create new
+        versions" trap that components do, so they get the same
+        match-or-drop treatment.
+        """
+        cache = getattr(self, "_project_versions_cache", None)
+        if cache is None:
+            cache = {}
+            self._project_versions_cache = cache
+        cached = cache.get(project_key)
+        if cached is not None:
+            return cached
+        try:
+            safe_key = urllib.parse.quote(project_key, safe="")
+            data = self._request("GET", f"/project/{safe_key}/versions")
+        except Exception:  # noqa: BLE001
+            log.warning(
+                "versions lookup failed for %s; will drop the versions field",
+                project_key,
+            )
+            cache[project_key] = []
+            return []
+        result: list[dict[str, str]] = []
+        for v in data or []:
+            vid = str(v.get("id") or "").strip()
+            name = (v.get("name") or "").strip()
+            if vid and name:
+                result.append({"id": vid, "name": name})
+        cache[project_key] = result
+        return result
+
+    @staticmethod
+    def _match_by_name(
+        requested: list[str], known: list[dict[str, str]],
+    ) -> tuple[list[dict[str, str]], list[str]]:
+        """Return ``(matched_refs, dropped_names)`` for ``requested``.
+
+        ``matched_refs`` are ``{"id": ...}`` references suitable for a
+        Jira issue payload (using IDs avoids the "auto-create on name
+        miss" path that 400s for users without admin perms). Comparison
+        is case-insensitive on the trimmed name.
+        """
+        if not requested:
+            return [], []
+        by_lower = {entry["name"].strip().lower(): entry for entry in known}
+        matched: list[dict[str, str]] = []
+        dropped: list[str] = []
+        seen_ids: set[str] = set()
+        for raw in requested:
+            name = (raw or "").strip()
+            if not name:
+                continue
+            entry = by_lower.get(name.lower())
+            if entry is None:
+                dropped.append(name)
+                continue
+            if entry["id"] in seen_ids:
+                continue
+            seen_ids.add(entry["id"])
+            matched.append({"id": entry["id"]})
+        return matched, dropped
+
     def create_bug(
         self,
         project_key: str,
@@ -913,8 +1013,8 @@ class JiraClient:
         environment: str | None = None,
         affects_versions: list[str] | None = None,
         rich_adf: bool = True,
-    ) -> dict[str, str]:
-        """Create a Bug issue and return ``{key, url}``.
+    ) -> dict[str, Any]:
+        """Create a Bug issue and return ``{key, url, dropped_components?, dropped_versions?}``.
 
         Description is sent as ADF (Atlassian Document Format) so Jira
         Cloud renders it properly. When *rich_adf* is true (the default
@@ -929,6 +1029,16 @@ class JiraClient:
         Bug createmeta before being added to the payload. Anything the
         project doesn't accept is silently dropped so a missing custom
         field never breaks the push.
+
+        Components and affects_versions are additionally validated
+        against the project's existing values and sent by ID. Jira would
+        otherwise interpret a name that doesn't match an existing entry
+        as a request to *create* a new component/version — and most
+        service accounts lack the "Administer Project" permission for
+        that, producing a 400 like
+        ``You do not have permission to create new components``. Names
+        that don't match are returned in ``dropped_components`` /
+        ``dropped_versions`` so the UI can surface a hint.
         """
         if rich_adf:
             description_adf = _markdown_to_adf_rich(description_markdown)
@@ -950,10 +1060,12 @@ class JiraClient:
         if priority_v and "priority" in accepted:
             fields["priority"] = {"name": priority_v}
 
+        dropped_components: list[str] = []
         if components and "components" in accepted:
-            cleaned = [c.strip() for c in components if (c or "").strip()]
-            if cleaned:
-                fields["components"] = [{"name": c} for c in cleaned]
+            known = self._fetch_project_components(project_key)
+            matched, dropped_components = self._match_by_name(components, known)
+            if matched:
+                fields["components"] = matched
 
         if labels and "labels" in accepted:
             cleaned = [l.strip() for l in labels if (l or "").strip()]
@@ -968,10 +1080,12 @@ class JiraClient:
             # some — send as ADF so both shapes accept it.
             fields["environment"] = _markdown_to_adf(environment_v)
 
+        dropped_versions: list[str] = []
         if affects_versions and "versions" in accepted:
-            cleaned = [v.strip() for v in affects_versions if (v or "").strip()]
-            if cleaned:
-                fields["versions"] = [{"name": v} for v in cleaned]
+            known = self._fetch_project_versions(project_key)
+            matched, dropped_versions = self._match_by_name(affects_versions, known)
+            if matched:
+                fields["versions"] = matched
 
         severity_v = (severity or "").strip()
         if severity_v and severity_id:
@@ -983,10 +1097,15 @@ class JiraClient:
         payload = {"fields": fields}
         result = self._request("POST", "/issue", payload)
         issue_key = result.get("key", "")
-        return {
+        response: dict[str, Any] = {
             "key": issue_key,
             "url": f"{self.base_url}/browse/{issue_key}",
         }
+        if dropped_components:
+            response["dropped_components"] = dropped_components
+        if dropped_versions:
+            response["dropped_versions"] = dropped_versions
+        return response
 
     def add_comment(self, issue_key: str, body_markdown: str) -> dict[str, Any]:
         """Post a comment on an issue. Body is converted to ADF like descriptions."""
