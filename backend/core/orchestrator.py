@@ -928,6 +928,15 @@ class _CursorAgentProvider:
         # AND backward-compatible. Failure is silent — we behave as
         # if no flags are supported (current legacy behavior).
         self._supported_flags: set[str] = self._discover_flags()
+        # The CLI's model selector has drifted across releases: some
+        # builds use ``-m <model>``, others use ``--model <model>``,
+        # and on a few seats the flag is absent entirely (the CLI
+        # auto-picks whichever model is licensed). We pick the
+        # first form the installed binary actually advertises; when
+        # neither is supported we omit the flag and let the CLI
+        # default kick in instead of crashing with
+        # ``unknown option '-m'``.
+        self._model_flag: str | None = self._discover_model_flag()
 
     @classmethod
     def _discover_flags(cls, binary: str | None = None) -> set[str]:
@@ -939,6 +948,23 @@ class _CursorAgentProvider:
         timeout) we return an empty set so every call site falls
         back to the no-flag legacy path.
         """
+        blob = cls._help_text(binary).lower()
+        if not blob:
+            return set()
+        candidates = (
+            "--temperature", "--seed", "--max-tokens",
+            "--top-p", "--output-format",
+        )
+        return {flag for flag in candidates if flag in blob}
+
+    @classmethod
+    def _help_text(cls, binary: str | None = None) -> str:
+        """Return the combined stdout+stderr of ``cursor-agent --help``.
+
+        Returns an empty string on any failure (binary missing, login
+        wall, timeout) so callers can simply fall back to flag-less
+        invocations.
+        """
         bin_path = binary or shutil.which("cursor-agent") or "cursor-agent"
         try:
             result = subprocess.run(
@@ -946,13 +972,34 @@ class _CursorAgentProvider:
                 encoding="utf-8", timeout=8, check=False,
             )
         except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
-            return set()
-        blob = ((result.stdout or "") + "\n" + (result.stderr or "")).lower()
-        candidates = (
-            "--temperature", "--seed", "--max-tokens",
-            "--top-p", "--output-format",
-        )
-        return {flag for flag in candidates if flag in blob}
+            return ""
+        return (result.stdout or "") + "\n" + (result.stderr or "")
+
+    @classmethod
+    def _discover_model_flag(cls, binary: str | None = None) -> str | None:
+        """Detect which model-selection flag the installed CLI accepts.
+
+        Returns ``"--model"`` when the long-form is documented in the
+        help text (current Cursor CLI), ``"-m"`` for legacy builds that
+        only advertise the short form, or ``None`` when neither is
+        present — in which case the orchestrator omits the flag and
+        the CLI's own default model is used. We probe ``--help``
+        rather than trial-and-erroring against a real call so a flag
+        rename never breaks generation on a clean install.
+        """
+        blob = cls._help_text(binary).lower()
+        if not blob:
+            return None
+        # Match ``--model`` only when followed by a non-letter so we
+        # don't accidentally match ``--models``-style sub-commands.
+        import re
+        if re.search(r"--model(?![a-z])", blob):
+            return "--model"
+        # Short form: ``-m`` followed by space, comma, equals, or
+        # end-of-line — same anti-prefix guard as above.
+        if re.search(r"(?<!-)-m(?![a-z])", blob):
+            return "-m"
+        return None
 
     @classmethod
     def discover_models(cls, binary: str | None = None) -> list[str]:
@@ -1060,9 +1107,18 @@ class _CursorAgentProvider:
         """
         args: list[str] = []
         # "auto" / "default" lets cursor-agent pick whichever model is
-        # licensed on the seat; otherwise forward the explicit choice.
-        if model and model.lower() not in {"auto", "default"}:
-            args.extend(["-m", model])
+        # licensed on the seat; otherwise forward the explicit choice
+        # using whichever flag form the installed CLI advertises. If
+        # the binary doesn't expose any model flag at all (rare; some
+        # locked-down seats) we silently drop the model arg and let
+        # the CLI default kick in — passing an unknown ``-m`` would
+        # crash the call with ``error: unknown option '-m'``.
+        if (
+            model
+            and model.lower() not in {"auto", "default"}
+            and self._model_flag is not None
+        ):
+            args.extend([self._model_flag, model])
         if temperature is not None and "--temperature" in self._supported_flags:
             args.extend(["--temperature", f"{float(temperature):.2f}"])
         if seed is not None and "--seed" in self._supported_flags:
