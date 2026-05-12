@@ -13,6 +13,7 @@ from pydantic import BaseModel
 from core import firestore_db, secret_fields
 from core.jira_client import JiraClient
 from core.jira_links import extract_jira_key
+from core.jira_push_logger import log_jira_push
 from routers.deps import get_current_user
 
 # Bare project key shape: a letter followed by 1-9 letters/digits/_ (no
@@ -150,6 +151,11 @@ class JiraAddCommentRequest(BaseModel):
     """Add a comment to an existing Jira issue (session credentials)."""
     issue_key: str
     body: str
+    # Optional source-agent slug for the dashboard activity log. The
+    # frontend passes the agent the comment was drafted from (e.g.
+    # ``"bug_report"`` or ``"closure_report"``); omitted requests are
+    # recorded with ``agent=None`` and bucketed under "unattributed".
+    agent: str | None = None
 
 
 class JiraCreateBugRequest(BaseModel):
@@ -562,10 +568,27 @@ async def import_batch(
 async def add_issue_comment(body: JiraAddCommentRequest, user=Depends(get_current_user)):
     """Post a comment on a Jira issue; body is rendered from markdown to ADF."""
     client = _get_client(user["username"])
+    issue_key = body.issue_key.strip()
     try:
-        return client.add_comment(body.issue_key.strip(), body.body)
+        result = client.add_comment(issue_key, body.body)
     except ConnectionError as e:
+        log_jira_push(
+            username=user["username"],
+            kind="comment",
+            issue_key=issue_key,
+            agent=body.agent,
+            status="error",
+            error=str(e),
+        )
         raise HTTPException(400, str(e))
+    log_jira_push(
+        username=user["username"],
+        kind="comment",
+        issue_key=issue_key,
+        agent=body.agent,
+        status="success",
+    )
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -595,6 +618,15 @@ async def create_bug(body: JiraCreateBugRequest, user=Depends(get_current_user))
             affects_versions=body.affects_versions,
         )
     except ConnectionError as e:
+        log_jira_push(
+            username=user["username"],
+            kind="bug",
+            project_key=body.project_key,
+            linked_issue_key=body.linked_issue_key,
+            agent="bug_report",
+            status="error",
+            error=str(e),
+        )
         raise HTTPException(400, str(e))
 
     linked_key = (body.linked_issue_key or "").strip()
@@ -610,4 +642,13 @@ async def create_bug(body: JiraCreateBugRequest, user=Depends(get_current_user))
             created["linked_issue_key"] = linked_key
             created["link_type"] = link_type
             created["link_error"] = str(exc)
+    log_jira_push(
+        username=user["username"],
+        kind="bug",
+        project_key=body.project_key,
+        issue_key=created.get("key", ""),
+        linked_issue_key=linked_key or None,
+        agent="bug_report",
+        status="success",
+    )
     return created

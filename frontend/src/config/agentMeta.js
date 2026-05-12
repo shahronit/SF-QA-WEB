@@ -22,6 +22,14 @@ export const PHASES = {
 export const AGENT_META = {
   requirement: {
     label: 'Requirements Analysis',
+    // `actionLabel` is the human-readable verb shown on the page's
+    // primary "Generate" button (AgentForm) and on each tab's idle
+    // button in QA Test Artifacts. Keep it short and noun-y
+    // ("Generate Requirements", "Generate Test Cases") instead of
+    // echoing the full `label` so the button never wraps in narrow
+    // viewports. Added everywhere so consumers can fall back to
+    // ``meta.actionLabel || 'Generate'`` without a special-case list.
+    actionLabel: 'Generate Requirements',
     phaseId: 'P1',
     icon: '📝',
     iconKey3d: 'requirement',
@@ -36,6 +44,7 @@ export const AGENT_META = {
   },
   test_strategy: {
     label: 'Test Plan & Strategy',
+    actionLabel: 'Generate Test Plan',
     phaseId: 'P2',
     icon: '📋',
     iconKey3d: 'test_plan',
@@ -49,6 +58,7 @@ export const AGENT_META = {
   },
   test_plan: {
     label: 'Test Plan & Strategy',
+    actionLabel: 'Generate Test Plan',
     phaseId: 'P2',
     icon: '📋',
     iconKey3d: 'test_plan',
@@ -64,6 +74,7 @@ export const AGENT_META = {
   },
   estimation: {
     label: 'Test Effort Estimation',
+    actionLabel: 'Generate Estimation',
     phaseId: 'P2',
     icon: '📊',
     iconKey3d: 'estimation',
@@ -78,6 +89,7 @@ export const AGENT_META = {
   },
   automation_plan: {
     label: 'Test Automation Plan',
+    actionLabel: 'Generate Automation Plan',
     phaseId: 'P2',
     icon: '🤖',
     iconKey3d: 'automation_plan',
@@ -92,6 +104,7 @@ export const AGENT_META = {
   },
   testcase: {
     label: 'Test Case Development',
+    actionLabel: 'Generate Test Cases',
     phaseId: 'P3',
     icon: '🧪',
     iconKey3d: 'testcase',
@@ -106,6 +119,7 @@ export const AGENT_META = {
   },
   test_data: {
     label: 'Test Data Preparation',
+    actionLabel: 'Generate Test Data',
     phaseId: 'P3',
     icon: '🧬',
     iconKey3d: 'test_data',
@@ -120,6 +134,7 @@ export const AGENT_META = {
   },
   rtm: {
     label: 'Requirements Traceability Matrix',
+    actionLabel: 'Generate RTM',
     phaseId: 'P3',
     icon: '🧭',
     iconKey3d: 'rtm',
@@ -134,6 +149,7 @@ export const AGENT_META = {
   },
   copado_script: {
     label: 'Automation Scripts',
+    actionLabel: 'Generate Automation Scripts',
     phaseId: 'P3',
     icon: '⚡',
     iconKey3d: 'copado_script',
@@ -148,6 +164,7 @@ export const AGENT_META = {
   },
   smoke: {
     label: 'Smoke Test Plan - Checklist',
+    actionLabel: 'Generate Smoke Test Plan',
     phaseId: 'P4',
     icon: '💨',
     iconKey3d: 'smoke',
@@ -162,6 +179,7 @@ export const AGENT_META = {
   },
   regression: {
     label: 'Regression Test Plan - Checklist',
+    actionLabel: 'Generate Regression Plan',
     phaseId: 'P4',
     icon: '🔄',
     iconKey3d: 'regression',
@@ -176,6 +194,7 @@ export const AGENT_META = {
   },
   uat_plan: {
     label: 'UAT Plan & Sign-off',
+    actionLabel: 'Generate UAT Plan',
     phaseId: 'P4',
     icon: '🤝',
     iconKey3d: 'uat_plan',
@@ -190,6 +209,7 @@ export const AGENT_META = {
   },
   bug_report: {
     label: 'Defect Reports',
+    actionLabel: 'Generate Bug Report',
     phaseId: 'P4',
     icon: '🐛',
     iconKey3d: 'bug_report',
@@ -215,6 +235,7 @@ export const AGENT_META = {
   },
   exec_report: {
     label: 'Test Execution Report',
+    actionLabel: 'Generate Execution Report',
     phaseId: 'P4',
     icon: '📈',
     iconKey3d: 'exec_report',
@@ -237,6 +258,7 @@ export const AGENT_META = {
   },
   rca: {
     label: 'Root Cause Analysis',
+    actionLabel: 'Generate RCA',
     phaseId: 'P5',
     icon: '🔍',
     iconKey3d: 'rca',
@@ -254,6 +276,7 @@ export const AGENT_META = {
   },
   closure_report: {
     label: 'Test Closure Report',
+    actionLabel: 'Generate Closure Report',
     phaseId: 'P5',
     icon: '🏁',
     iconKey3d: 'closure_report',
@@ -272,6 +295,7 @@ export const AGENT_META = {
   },
   stlc_pack: {
     label: '1-click STLC Pack',
+    actionLabel: 'Generate STLC Pack',
     phaseId: null,
     icon: '🚀',
     iconKey3d: 'stlc_pack',
@@ -305,7 +329,10 @@ export const PATH_TO_AGENT = {
   '/smoke': 'smoke',
   '/regression': 'regression',
   '/bugs': 'bug_report',
-  '/quick-pack': 'quick_pack',
+  // Path renamed from `/quick-pack` -> `/qa-test-artifacts` (the page is
+  // now "QA Test Artifacts"). The access slug stays `quick_pack` so
+  // existing per-user `agent_access` documents don't need migration.
+  '/qa-test-artifacts': 'quick_pack',
   '/closure-report': 'closure_report',
   '/estimation': 'estimation',
   '/automation-plan': 'automation_plan',
@@ -344,6 +371,18 @@ export function userCanAccessPath(user, path) {
 
 export function getAgent(name) {
   return AGENT_META[name] || null
+}
+
+/**
+ * Return the per-agent primary action label (e.g. "Generate Test Cases",
+ * "Generate Bug Report") used by AgentForm's idle Generate button and
+ * by each tab on the QA Test Artifacts page. Falls back to the generic
+ * verb so callers never need to special-case unknown / pre-release
+ * slugs that haven't been added to AGENT_META yet.
+ */
+export function getAgentActionLabel(name, fallback = 'Generate') {
+  const meta = AGENT_META[name]
+  return (meta && meta.actionLabel) || fallback
 }
 
 /**
@@ -439,4 +478,64 @@ export function getPhase(phaseId) {
 export function getAgentPhase(name) {
   const a = AGENT_META[name]
   return a ? PHASES[a.phaseId] : null
+}
+
+// Canonical STLC ordering: Requirements (P1) -> Test Planning (P2) ->
+// Test Case Development (P3) -> Test Execution (P4) -> Test Cycle
+// Closure (P5). Agents without a phase (composite pipelines like
+// stlc_pack) sort to the end. Pure data, no React.
+const _PHASE_ORDER = ['P1', 'P2', 'P3', 'P4', 'P5']
+
+function _phaseRank(slug) {
+  const phaseId = AGENT_META[slug]?.phaseId
+  if (!phaseId) return _PHASE_ORDER.length
+  const idx = _PHASE_ORDER.indexOf(phaseId)
+  return idx === -1 ? _PHASE_ORDER.length : idx
+}
+
+/**
+ * Sort *slugs* into canonical STLC order (P1 -> P5, then unphased).
+ * Ties are broken by AGENT_META declaration order so the relative
+ * position of agents inside the same phase (e.g. requirement vs.
+ * test_plan inside P1/P2) is stable run-to-run.
+ *
+ * Returns a NEW array — never mutates the input. Slugs missing from
+ * AGENT_META keep their original position because they don't have a
+ * stable phase rank we can compare against.
+ */
+export function stlcOrderedAgents(slugs) {
+  if (!Array.isArray(slugs)) return []
+  const decl = Object.keys(AGENT_META)
+  return [...slugs].sort((a, b) => {
+    const pa = _phaseRank(a)
+    const pb = _phaseRank(b)
+    if (pa !== pb) return pa - pb
+    const da = decl.indexOf(a)
+    const db = decl.indexOf(b)
+    if (da === -1 && db === -1) return 0
+    if (da === -1) return 1
+    if (db === -1) return -1
+    return da - db
+  })
+}
+
+/**
+ * Return *slugs* reordered so the user's currently-selected subset
+ * appears first (in STLC order), followed by the rest (also in STLC
+ * order). Used by the QA Test Artifacts tab strip so the tabs queued
+ * for bulk Generate float to the front of the strip without removing
+ * the unselected ones.
+ *
+ * `selected` may be an Array<string> or Set<string>; both are treated
+ * identically. Slugs in *selected* that aren't in *slugs* are
+ * ignored. Always returns a NEW array.
+ */
+export function selectedFirstStlcOrder(slugs, selected) {
+  if (!Array.isArray(slugs)) return []
+  const sel = selected instanceof Set
+    ? selected
+    : new Set(Array.isArray(selected) ? selected : [])
+  const inSel = stlcOrderedAgents(slugs.filter(s => sel.has(s)))
+  const rest = stlcOrderedAgents(slugs.filter(s => !sel.has(s)))
+  return [...inSel, ...rest]
 }

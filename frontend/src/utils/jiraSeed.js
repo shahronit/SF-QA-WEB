@@ -1,5 +1,5 @@
 // Helpers for turning a resolved /api/jira/import-batch response into seed
-// text + actionable error messages. Lifted from frontend/src/pages/QuickPack.jsx
+// text + actionable error messages. Lifted from frontend/src/pages/QATestArtifacts.jsx
 // so AgentForm and the QuickPack page share one canonical implementation.
 
 // Lite-mode renderer of an issue payload into seed text. Handles both the

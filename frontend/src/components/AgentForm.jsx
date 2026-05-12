@@ -19,7 +19,7 @@ import { seedTextFromBatch, summarizeBatchError } from '../utils/jiraSeed'
 import BatchPreview from './jira/BatchPreview'
 import { useQaMode, QA_MODE_OPTIONS } from '../hooks/useQaMode'
 import { useSessionPrefs } from '../context/SessionPrefsContext'
-import { resolvePrimaryField } from '../config/agentMeta'
+import { getAgentActionLabel, resolvePrimaryField } from '../config/agentMeta'
 
 const LINK_PREVIEW_MD_COMPONENTS = { td: MarkdownTableCell, table: MarkdownTableScroll }
 
@@ -1386,7 +1386,7 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
                   ))}
                 </span>
               </span>
-            ) : 'Generate'}
+            ) : getAgentActionLabel(agentName)}
           </motion.button>
         </MagneticButton>
 

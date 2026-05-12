@@ -108,6 +108,10 @@ PROJECT_DOCUMENTS = "documents"
 # created_at} — see project_manager.list_mcp_servers / add_mcp_server.
 MCP_SERVERS = "mcp_servers"
 AGENT_RUNS = "agent_runs"
+# Audit log of "pushed to Jira" actions (Create Bug, Add Comment). One
+# document per successful or failed push; powers the Dashboard activity
+# charts and "Recent activity" feed alongside AGENT_RUNS.
+JIRA_PUSHES = "jira_pushes"
 JIRA_SESSIONS = "jira_sessions"
 GDRIVE_SESSIONS = "gdrive_sessions"
 XRAY_SESSIONS = "xray_sessions"
