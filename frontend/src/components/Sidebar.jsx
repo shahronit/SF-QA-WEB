@@ -9,13 +9,14 @@ import logo from '../assets/logo.png'
 import Icon3D from './icons/Icon3D'
 
 const utilityItems = [
-  { path: '/',           label: 'Dashboard',    iconKey3d: 'home' },
-  // QA Workbench (slug `quick_pack` in admin access) lives at the top
-  // alongside the utility tiles so users hit the headline action first.
-  // The render below filters this entry out via userCanAccessPath when
-  // the admin has revoked access, while Dashboard/Projects/History stay
-  // unconditionally visible.
-  { path: '/quick-pack', label: 'QA Workbench', iconKey3d: 'sparkles' },
+  { path: '/',                 label: 'Dashboard',         iconKey3d: 'home' },
+  // QA Test Artifacts (slug `quick_pack` in admin access — the slug
+  // stayed put when the page was renamed so existing user permissions
+  // keep working). Lives at the top alongside the utility tiles so
+  // users hit the headline action first. The render below filters this
+  // entry out via userCanAccessPath when the admin has revoked access,
+  // while Dashboard/Projects/History stay unconditionally visible.
+  { path: '/qa-test-artifacts', label: 'QA Test Artifacts', iconKey3d: 'sparkles' },
   { path: '/projects',   label: 'Projects',     iconKey3d: 'folder' },
   { path: '/history',    label: 'History',      iconKey3d: 'history' },
   // "My Usage" is unconditional — every authenticated user can audit
@@ -285,7 +286,7 @@ export default function Sidebar() {
         <div className="space-y-0.5">
           {utilityItems
             // Dashboard/Projects/History stay unconditionally visible;
-            // only QA Workbench is gated by the admin-managed
+            // only QA Test Artifacts is gated by the admin-managed
             // `quick_pack` access slug. Anything else added here that
             // is missing from PATH_TO_AGENT also passes through (the
             // helper returns true for unmapped utility paths).

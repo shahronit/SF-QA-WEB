@@ -175,7 +175,7 @@ export function JiraProvider({ children }) {
   }, [])
 
   // Resolve a list of Jira tokens (issue keys, epic keys, bare project
-  // keys, or browse URLs) in a single round-trip. Used by QA Workbench's
+  // keys, or browse URLs) in a single round-trip. Used by QA Test Artifacts'
   // multi-import field. The server fans out the fetches in parallel and
   // promotes issue keys to "epic" automatically when the resolved
   // issuetype is Epic. Per-token failures surface as `error` strings on

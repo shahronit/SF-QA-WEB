@@ -16,8 +16,10 @@ import { useAgentStream } from '../hooks/useAgentStream'
 import {
   AGENT_META,
   getAgent,
+  getAgentActionLabel,
   getRunnableAgentsForUser,
   pickAutoRunnableAgents,
+  selectedFirstStlcOrder,
   userCanAccessPath,
 } from '../config/agentMeta'
 import {
@@ -151,11 +153,16 @@ function QuickPackTab({
   }
 
   const isRegenerate = stream.status === 'done' || stream.status === 'error'
+  // Agent-specific action label (e.g. "Generate Test Cases") falls back
+  // to the generic "Generate" verb when a slug is missing from
+  // AGENT_META. The Regenerate / Streaming states stay generic — they
+  // describe the lifecycle, not the artifact.
+  const actionLabel = getAgentActionLabel(slug)
   const buttonLabel = stream.status === 'loading'
     ? '⏳ Streaming…'
     : isRegenerate
       ? '🔁 Regenerate'
-      : '🚀 Generate this agent'
+      : `🚀 ${actionLabel}`
   const buttonDisabled = stream.status === 'loading' || !ready
 
   // CSS-hide instead of unmount — keeps in-flight streams alive while
@@ -186,7 +193,7 @@ function QuickPackTab({
           {derivedStatus === 'needs_input' && missing.length > 0 && (
             <div className="mb-3 rounded-xl bg-amber-50 border border-amber-200 p-2 text-[11px] text-amber-800">
               <span className="font-bold">Skipped by bulk Generate.</span>{' '}
-              Fill the highlighted fields below, then click Generate this agent.
+              Fill the highlighted fields below, then click {actionLabel}.
             </div>
           )}
 
@@ -256,7 +263,7 @@ function QuickPackTab({
   )
 }
 
-export default function QuickPack() {
+export default function QATestArtifacts() {
   const { user } = useAuth()
   const {
     qaProjectSlug,
@@ -299,9 +306,15 @@ export default function QuickPack() {
 
   const accessibleAgents = useMemo(() => getRunnableAgentsForUser(user), [user])
 
-  // Initialise the active tab to the first accessible agent and keep
-  // it valid when the allow-list changes (e.g. admin grants access
-  // mid-session).
+  // (orderedTabs memo is declared lower — JS hoisting of `let`/`const`
+  // refs in JSX works fine because the effect below runs after
+  // mount.) Initialise the active tab to the first accessible agent
+  // and keep it valid when the allow-list changes (e.g. admin grants
+  // access mid-session). The first-tab pick is intentionally based on
+  // `accessibleAgents` (declaration order) here so the initial mount
+  // is deterministic before the user has touched `quickPackTargets`
+  // — the targeted-first reorder kicks in via a second effect once
+  // selection state exists.
   useEffect(() => {
     if (!activeSlug && accessibleAgents.length > 0) {
       setActiveSlug(accessibleAgents[0])
@@ -348,6 +361,35 @@ export default function QuickPack() {
     else current.add(slug)
     setQuickPackTargets(current)
   }, [quickPackTargets, accessibleAgents, defaultTargets, setQuickPackTargets])
+
+  // Tab-strip order: selected agents first (in STLC order P1 -> P5),
+  // then the rest (also STLC-ordered). Memoised so toggling a target
+  // reshuffles the strip in one render without re-running anything
+  // expensive — the resolver inside QuickPackTab only re-runs when
+  // its own `slug` changes, which doesn't happen here.
+  const orderedTabs = useMemo(
+    () => selectedFirstStlcOrder(accessibleAgents, selectedAgents),
+    [accessibleAgents, selectedAgents],
+  )
+
+  // Single-selection auto-activate: when the user narrows their
+  // "Apply Jira & Generate to" pick down to exactly one agent, jump
+  // the tab strip to that agent so they don't have to also click the
+  // tab. >=2 selected -> keep the current active tab if it's still
+  // valid, else fall back to the first ordered tab. =0 selected ->
+  // leave the active tab alone (nothing to promote).
+  useEffect(() => {
+    if (selectedAgents.size === 1) {
+      const only = [...selectedAgents][0]
+      if (only && only !== activeSlug && accessibleAgents.includes(only)) {
+        setActiveSlug(only)
+      }
+      return
+    }
+    if (selectedAgents.size > 1 && activeSlug && !accessibleAgents.includes(activeSlug)) {
+      setActiveSlug(orderedTabs[0] || null)
+    }
+  }, [selectedAgents, orderedTabs, activeSlug, accessibleAgents])
   const setAllAgentsSelected = useCallback((all) => {
     setQuickPackTargets(all ? accessibleAgents : [])
   }, [accessibleAgents, setQuickPackTargets])
@@ -574,7 +616,7 @@ export default function QuickPack() {
       // fields auto-fill via the existing context effect (only blank
       // primary fields get filled — manual edits are preserved).
       setContext(seedTextFromBatch(ok))
-      // bug_report stays a single-defect tab on QA Workbench: seed it
+      // bug_report stays a single-defect tab on QA Test Artifacts: seed it
       // from the FIRST primary issue we received, ignoring children
       // and additional tickets.
       const firstIssue = ok.find(i => i.primary)
@@ -604,22 +646,27 @@ export default function QuickPack() {
 
   if (!user) return null
 
-  const canAccessQuickPack = userCanAccessPath(user, '/quick-pack')
+  // The admin-side access slug is still ``quick_pack`` so existing
+  // user permissions keep working after the page was renamed from
+  // "QA Workbench" / ``/quick-pack`` to "QA Test Artifacts" /
+  // ``/qa-test-artifacts``. Don't migrate the slug — only the display
+  // label and the URL changed.
+  const canAccessQuickPack = userCanAccessPath(user, '/qa-test-artifacts')
   if (!canAccessQuickPack) {
     return (
       <div>
         <PageHeader
-          title="QA Workbench"
+          title="QA Test Artifacts"
           subtitle="Run every agent you have access to from one prompt"
           icon="🚀"
           gradient="from-violet-500 to-fuchsia-500"
         />
         <div className="toon-card text-center py-16">
           <div className="text-5xl mb-3">🔒</div>
-          <h3 className="text-xl font-extrabold text-toon-navy mb-2">QA Workbench is disabled for your account</h3>
+          <h3 className="text-xl font-extrabold text-toon-navy mb-2">QA Test Artifacts is disabled for your account</h3>
           <p className="text-sm text-gray-500 max-w-md mx-auto">
             Ask an administrator to enable
-            <span className="font-bold text-astound-violet"> QA Workbench</span>
+            <span className="font-bold text-astound-violet"> QA Test Artifacts</span>
             {' '}in your user access settings.
           </p>
         </div>
@@ -631,7 +678,7 @@ export default function QuickPack() {
     return (
       <div>
         <PageHeader
-          title="QA Workbench"
+          title="QA Test Artifacts"
           subtitle="Run every agent you have access to from one prompt"
           icon="🚀"
           gradient="from-violet-500 to-fuchsia-500"
@@ -652,7 +699,7 @@ export default function QuickPack() {
   return (
     <div>
       <PageHeader
-        title="QA Workbench"
+        title="QA Test Artifacts"
         subtitle="One Context, every agent you can access — fired in parallel"
         icon="🚀"
         gradient="from-violet-500 to-fuchsia-500"
@@ -946,9 +993,14 @@ export default function QuickPack() {
         </div>
       </motion.div>
 
-      {/* Tab strip */}
+      {/* Tab strip — selected tabs (from "Apply Jira & Generate to")
+          float to the front in STLC order, then the rest in STLC
+          order. The visual "selected" indicator (a violet dot before
+          the icon) makes the queue-for-bulk-Generate set scannable at
+          a glance, even when the user has reordered or narrowed their
+          selection mid-session. */}
       <div className="mb-4 flex flex-wrap gap-2 sticky top-0 z-10 bg-astound-cream/80 backdrop-blur-sm py-2 -mx-2 px-2 rounded-2xl">
-        {accessibleAgents.map(slug => {
+        {orderedTabs.map(slug => {
           const meta = getAgent(slug)
           const isExcluded = !selectedAgents.has(slug)
           // Excluded > skipped > stream-status > idle. The 'excluded'
@@ -961,6 +1013,7 @@ export default function QuickPack() {
           const styles = STATUS_STYLES[status] || STATUS_STYLES.idle
           const isActive = slug === activeSlug
           const ready = isReadyToRun(slug, perAgentValues[slug])
+          const isSelected = !isExcluded
           return (
             <button
               key={slug}
@@ -971,17 +1024,30 @@ export default function QuickPack() {
                   ? 'bg-astound-grad text-white border-transparent shadow-astound'
                   : isExcluded
                     ? 'bg-white text-gray-400 border-gray-200 hover:border-astound-violet/40'
-                    : 'bg-white text-toon-navy border-gray-200 hover:border-astound-violet/40'
+                    : 'bg-white text-toon-navy border-violet-200 hover:border-astound-violet/40 shadow-sm'
               }`}
               title={
                 isExcluded
                   ? 'Excluded from the next bulk Generate — toggle it back on in the "Apply Jira & Generate to" row above.'
                   : !ready
                     ? 'Required inputs missing — open this tab to fill them.'
-                    : undefined
+                    : 'Queued for the next bulk Generate.'
               }
             >
               <span className={`w-1.5 h-1.5 rounded-full ${styles.dot}`} />
+              {/* Selected indicator: tiny filled fuchsia dot that
+                  appears only on inactive selected tabs. Active tabs
+                  already have the gradient bg, and excluded tabs get
+                  the existing greyed-out treatment, so the dot is
+                  reserved for the "in the queue but not currently
+                  visible" case. */}
+              {isSelected && !isActive && (
+                <span
+                  className="w-1.5 h-1.5 rounded-full bg-fuchsia-500"
+                  aria-hidden="true"
+                  title="Selected for bulk Generate"
+                />
+              )}
               <span aria-hidden="true">{meta?.icon || '✨'}</span>
               <span>{meta?.label || slug}</span>
               {isExcluded ? (
@@ -1006,7 +1072,7 @@ export default function QuickPack() {
           alive while the user switches between them. Inactive tabs are
           CSS-hidden — no unmount, no abort. */}
       <div>
-        {accessibleAgents.map(slug => (
+        {orderedTabs.map(slug => (
           <QuickPackTab
             key={slug}
             slug={slug}

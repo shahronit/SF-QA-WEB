@@ -1,3 +1,4 @@
+import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import JiraConnector from '../components/JiraConnector'
@@ -7,6 +8,14 @@ import Tilt3D from '../components/motion/Tilt3D'
 import Icon3D from '../components/icons/Icon3D'
 import { useAuth } from '../context/AuthContext'
 import { userCanAccessPath } from '../config/agentMeta'
+import { useDashboardData } from '../hooks/useDashboardData'
+import DashboardKpiTiles from '../components/dashboard/DashboardKpiTiles'
+import RunsByAgentChart from '../components/dashboard/RunsByAgentChart'
+import JiraPushesChart from '../components/dashboard/JiraPushesChart'
+import DailyActivityChart from '../components/dashboard/DailyActivityChart'
+import RecentActivityFeed from '../components/dashboard/RecentActivityFeed'
+import AgentInsightCard from '../components/dashboard/AgentInsightCard'
+import { getRunnableAgentsForUser } from '../config/agentMeta'
 
 const utilityTiles = [
   { path: '/projects', iconKey3d: 'folder',  title: 'Projects', desc: 'Manage project docs & scope' },
@@ -55,6 +64,25 @@ const SECTION_TO_VISIBILITY_KEY = {
 export default function Hub() {
   const nav = useNavigate()
   const { user } = useAuth()
+  const [activityWindow, setActivityWindow] = useState('30d')
+  // Per-user dashboard payload (totals, per_agent, daily, recent),
+  // scoped server-side to the agents the user actually has access to.
+  // Re-fetched whenever the window picker changes so KPI tiles and
+  // charts always reflect the same time range.
+  const { data: dashboard, loading: dashboardLoading } = useDashboardData(activityWindow)
+
+  // Agent slugs the user can run. Drives the "Agent insights" grid
+  // so every accessible agent renders a card — including ones with
+  // zero runs in the window (which surface as the empty-state copy
+  // "No runs yet — run this agent to see insights here.").
+  const accessibleAgents = useMemo(() => getRunnableAgentsForUser(user), [user])
+  const insightsBySlug = useMemo(() => {
+    const map = {}
+    for (const entry of dashboard.per_agent_insights || []) {
+      if (entry && entry.agent) map[entry.agent] = entry
+    }
+    return map
+  }, [dashboard.per_agent_insights])
 
   // Apply the same filter the Sidebar uses so the Hub stays in sync.
   // Sections hidden via menu_visibility disappear; individual tiles
@@ -123,6 +151,71 @@ export default function Hub() {
       <div className="mb-6">
         <JiraConnector />
       </div>
+
+      {/* Dashboard activity section — KPI tiles + clickable charts +
+          recent feed. Scoped to the caller's accessible agents on the
+          backend, so a user without (say) bug_report won't see it in
+          the runs chart even if other users on the tenant are
+          producing bug runs. */}
+      <motion.section
+        initial={{ opacity: 0, y: 16 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
+        className="mb-10 space-y-4"
+      >
+        <DashboardKpiTiles
+          totals={dashboard.totals}
+          window={activityWindow}
+          onWindowChange={setActivityWindow}
+          loading={dashboardLoading}
+        />
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <RunsByAgentChart rows={dashboard.per_agent} />
+          <JiraPushesChart rows={dashboard.per_agent} />
+        </div>
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+          <DailyActivityChart rows={dashboard.daily} window={activityWindow} />
+          <RecentActivityFeed rows={dashboard.recent} />
+        </div>
+      </motion.section>
+
+      {/* Agent insights grid — one card per accessible agent. Cards
+          render a bespoke chart parsed from the latest run when the
+          backend ``structured`` payload is non-null; otherwise they
+          fall back to a per-agent activity sparkline so every agent
+          still gets a visible heartbeat. Agents with zero runs show
+          an empty-state hint. */}
+      {accessibleAgents.length > 0 && (
+        <motion.section
+          initial={{ opacity: 0, y: 16 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
+          className="mb-10"
+        >
+          <div className="flex items-center justify-between mb-3">
+            <div>
+              <h2 className="font-display text-lg font-extrabold text-toon-navy">
+                Agent insights
+              </h2>
+              <p className="text-xs text-gray-500">
+                One interactive chart per agent you can access, parsed from your latest run.
+              </p>
+            </div>
+            <span className="text-[11px] font-bold text-astound-violet bg-violet-50 border border-violet-200 px-2.5 py-1 rounded-full whitespace-nowrap">
+              {accessibleAgents.length} agent{accessibleAgents.length === 1 ? '' : 's'}
+            </span>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
+            {accessibleAgents.map((slug) => (
+              <AgentInsightCard
+                key={slug}
+                slug={slug}
+                insight={insightsBySlug[slug]}
+              />
+            ))}
+          </div>
+        </motion.section>
+      )}
 
       {showStlcHero && (
       <Tilt3D max={6} className="mb-8">

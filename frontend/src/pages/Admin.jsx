@@ -29,7 +29,7 @@ const RUNNABLE_AGENTS = Object.entries(AGENT_META)
 // links and independently of per-agent backend prompt/model overrides.
 const ACCESS_ENTRIES = [
   ...RUNNABLE_AGENTS,
-  { slug: 'quick_pack', label: 'QA Workbench' },
+  { slug: 'quick_pack', label: 'QA Test Artifacts' },
 ]
 
 const AGENT_LABEL = Object.fromEntries(RUNNABLE_AGENTS.map(a => [a.slug, a.label]))

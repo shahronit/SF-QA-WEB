@@ -9,7 +9,7 @@ const JIRA_KEY_RE = /\b([A-Za-z][A-Za-z0-9_]+-\d+)\b/
 
 // Bare project key (no `-N` suffix). Mirrors PROJECT_KEY_RE in
 // backend/routers/jira.py so token classification stays consistent on
-// both sides — required by QA Workbench's multi-import field.
+// both sides — required by QA Test Artifacts' multi-import field.
 const PROJECT_KEY_RE = /^[A-Za-z][A-Za-z0-9_]{1,9}$/
 
 export function extractJiraKey(text) {
@@ -35,7 +35,7 @@ export function hasJiraKey(text) {
 
 // Split a free-form Jira input into individual tokens. Accepts comma- or
 // newline-separated values; trims whitespace and drops empty entries.
-// Used by QA Workbench's multi-import field to feed /api/jira/import-batch.
+// Used by QA Test Artifacts' multi-import field to feed /api/jira/import-batch.
 export function splitJiraTokens(text) {
   if (!text || typeof text !== 'string') return []
   return text.split(/[,\n]/).map((t) => t.trim()).filter(Boolean)
