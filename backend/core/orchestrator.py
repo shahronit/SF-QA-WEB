@@ -41,7 +41,7 @@ from typing import Any, Protocol
 
 logger = logging.getLogger(__name__)
 
-from core import firestore_db, secret_fields
+from core import cursor_auth, firestore_db, secret_fields
 from core.prompts.prompts import (
     PROMPTS_GEN,
     PROMPTS_SF,
@@ -231,6 +231,16 @@ _SKIP_PATTERNS = (
     # cursor-agent CLI stderr
     "model not found", "unknown model", "no models available",
     "not authenticated", "permission denied",
+    # Newer cursor-agent builds emit "Authentication required. Please
+    # run 'agent login' first, or set CURSOR_API_KEY environment
+    # variable." on every call when the seat is not logged in. Older
+    # builds said "not authenticated". Match BOTH so the orchestrator
+    # falls through to Gemini gracefully instead of surfacing the raw
+    # stderr inside a chat-style "Error calling Cursor (CLI): ..."
+    # message that confuses end users (they think the LLM is down).
+    "authentication required",
+    "agent login",
+    "cursor_api_key",
     "rate limit", "rate_limit", "quota exceeded",
 )
 
@@ -1197,10 +1207,15 @@ class _CursorAgentProvider:
                 output_format="json" if prefer_json else None,
             ),
         ]
+        # Per-user credentials: the orchestrator sets a contextvar in
+        # run_agent / stream_agent so the right ~/.cursor/auth.json
+        # is read for THIS call. Falls back to the inherited env when
+        # no user context is set (boot-time discovery, internal tests).
+        call_env = cursor_auth.env_for(cursor_auth.get_current_user())
         try:
             result = subprocess.run(
                 cmd, capture_output=True, text=True, encoding="utf-8",
-                check=False, timeout=300,
+                check=False, timeout=300, env=call_env,
             )
         except FileNotFoundError as exc:
             raise RuntimeError(
@@ -1302,6 +1317,11 @@ class _CursorAgentProvider:
                 output_format="stream-json",
             ),
         ]
+        # Per-user credentials — see comment in .generate above. The
+        # subprocess inherits HOME / USERPROFILE pointing at the
+        # current user's cursor slot so cursor-agent reads THAT seat's
+        # auth.json instead of the server-global one.
+        call_env = cursor_auth.env_for(cursor_auth.get_current_user())
         try:
             proc = subprocess.Popen(  # noqa: S603 - args are constants
                 cmd,
@@ -1310,6 +1330,7 @@ class _CursorAgentProvider:
                 text=True,
                 encoding="utf-8",
                 bufsize=1,
+                env=call_env,
             )
         except FileNotFoundError as exc:
             raise RuntimeError(
@@ -2305,39 +2326,50 @@ class SFQAOrchestrator:
         )
         content = ""
         errored = False
-        try:
-            content = self._call_with_retry(
-                system_prompt, user_block, provider, model, fallbacks,
-            )
-        except Exception as exc:  # noqa: BLE001
-            errored = True
-            content = (
-                f"**Error calling {provider.label}:** `{exc}`\n\n"
-                "The model may be temporarily overloaded. "
-                "Please wait a moment and try again."
-            )
-        # Strip leading / trailing conversational chatter so every
-        # downstream consumer (parser, deriveSummary, exporter) sees a
-        # clean artifact regardless of which provider produced it. No-
-        # op when the LLM already complied with the OUTPUT CONTRACT.
-        if not errored:
-            content = _strip_chatter(content)
-        # Auto-repair pass: if the agent has a registered output
-        # validator and the output failed it, re-run once with a
-        # strict format clamp. Mutates ``content`` + sets
-        # ``usage_box.repaired`` so the UI can surface the chip.
         repaired = False
-        if not errored:
-            content, repaired = self._maybe_repair(
-                agent_name=agent_name,
-                content=content,
-                provider=provider,
-                model=model,
-                fallbacks=fallbacks,
-                system_prompt=system_prompt,
-                user_block=user_block,
-                stream=False,
-            )
+        # Bind the username into a contextvar so the Cursor provider's
+        # subprocess spawn picks up the right per-user credentials
+        # without us having to thread it through the LLMProvider
+        # Protocol signature. Scoped tightly around the actual LLM-
+        # calling section (including the repair pass which can also
+        # spawn cursor-agent) so worker-thread reuses don't leak user
+        # identity into a subsequent request.
+        _cursor_user_token = cursor_auth.set_current_user(username)
+        try:
+            try:
+                content = self._call_with_retry(
+                    system_prompt, user_block, provider, model, fallbacks,
+                )
+            except Exception as exc:  # noqa: BLE001
+                errored = True
+                content = (
+                    f"**Error calling {provider.label}:** `{exc}`\n\n"
+                    "The model may be temporarily overloaded. "
+                    "Please wait a moment and try again."
+                )
+            # Strip leading / trailing conversational chatter so every
+            # downstream consumer (parser, deriveSummary, exporter) sees a
+            # clean artifact regardless of which provider produced it. No-
+            # op when the LLM already complied with the OUTPUT CONTRACT.
+            if not errored:
+                content = _strip_chatter(content)
+            # Auto-repair pass: if the agent has a registered output
+            # validator and the output failed it, re-run once with a
+            # strict format clamp. Mutates ``content`` + sets
+            # ``usage_box.repaired`` so the UI can surface the chip.
+            if not errored:
+                content, repaired = self._maybe_repair(
+                    agent_name=agent_name,
+                    content=content,
+                    provider=provider,
+                    model=model,
+                    fallbacks=fallbacks,
+                    system_prompt=system_prompt,
+                    user_block=user_block,
+                    stream=False,
+                )
+        finally:
+            cursor_auth.reset_current_user(_cursor_user_token)
         # Capture usage AFTER the provider call so retries that swap
         # models still report the *successful* model's token counts.
         live_usage = getattr(provider, "last_usage", None)
@@ -2469,62 +2501,71 @@ class SFQAOrchestrator:
             return
         collected: list[str] = []
         errored = False
-        try:
-            for piece in self._stream_with_fallback(
-                system_prompt, user_block, provider, model, fallbacks,
-            ):
-                collected.append(piece)
-                yield piece
-        except Exception as exc:  # noqa: BLE001
-            errored = True
-            err = (
-                f"**Error calling {provider.label}:** `{exc}`\n\n"
-                "The model may be temporarily overloaded. "
-                "Please wait a moment and try again."
-            )
-            collected.append(err)
-            yield err
-        # ----- post-stream cleanup + optional auto-repair -----
-        # The user has now seen the live stream. Chatter-strip the
-        # joined buffer so the cached / logged version is clean even
-        # if the stream had a chatty preamble. Then run the validator;
-        # if it fails, do ONE repair pass and stream the repaired
-        # output to the user behind a separator so they understand
-        # what changed. The cached entry stores the repaired version
-        # only — replays come back clean without the original or the
-        # separator.
-        full_raw = "".join(collected)
+        # Bind the username into a contextvar so the Cursor provider's
+        # subprocess spawn picks up the right per-user credentials.
+        # Scoped tightly around the streaming + repair sections so
+        # worker-thread reuses don't leak user identity across requests.
+        _cursor_user_token = cursor_auth.set_current_user(username)
         repaired_flag = False
-        final_content = full_raw
-        if not errored:
-            stripped = _strip_chatter(full_raw)
+        final_content = ""
+        try:
             try:
-                final_content, repaired_flag = self._maybe_repair(
-                    agent_name=agent_name,
-                    content=stripped,
-                    provider=provider,
-                    model=model,
-                    fallbacks=fallbacks,
-                    system_prompt=system_prompt,
-                    user_block=user_block,
-                    stream=True,
+                for piece in self._stream_with_fallback(
+                    system_prompt, user_block, provider, model, fallbacks,
+                ):
+                    collected.append(piece)
+                    yield piece
+            except Exception as exc:  # noqa: BLE001
+                errored = True
+                err = (
+                    f"**Error calling {provider.label}:** `{exc}`\n\n"
+                    "The model may be temporarily overloaded. "
+                    "Please wait a moment and try again."
                 )
-            except Exception:  # noqa: BLE001
-                logger.exception(
-                    "Auto-repair pass blew up for %s; keeping original.",
-                    agent_name,
-                )
-                final_content = stripped
-            if repaired_flag:
-                # Flush the repaired content to the live SSE stream
-                # behind a clear visual separator so the user can see
-                # what the parser-friendly version looks like.
-                notice = (
-                    "\n\n---\n\n"
-                    "_Auto-reformatted to match the required output structure._\n\n"
-                )
-                yield notice
-                yield final_content
+                collected.append(err)
+                yield err
+            # ----- post-stream cleanup + optional auto-repair -----
+            # The user has now seen the live stream. Chatter-strip the
+            # joined buffer so the cached / logged version is clean even
+            # if the stream had a chatty preamble. Then run the validator;
+            # if it fails, do ONE repair pass and stream the repaired
+            # output to the user behind a separator so they understand
+            # what changed. The cached entry stores the repaired version
+            # only — replays come back clean without the original or the
+            # separator.
+            full_raw = "".join(collected)
+            final_content = full_raw
+            if not errored:
+                stripped = _strip_chatter(full_raw)
+                try:
+                    final_content, repaired_flag = self._maybe_repair(
+                        agent_name=agent_name,
+                        content=stripped,
+                        provider=provider,
+                        model=model,
+                        fallbacks=fallbacks,
+                        system_prompt=system_prompt,
+                        user_block=user_block,
+                        stream=True,
+                    )
+                except Exception:  # noqa: BLE001
+                    logger.exception(
+                        "Auto-repair pass blew up for %s; keeping original.",
+                        agent_name,
+                    )
+                    final_content = stripped
+                if repaired_flag:
+                    # Flush the repaired content to the live SSE stream
+                    # behind a clear visual separator so the user can see
+                    # what the parser-friendly version looks like.
+                    notice = (
+                        "\n\n---\n\n"
+                        "_Auto-reformatted to match the required output structure._\n\n"
+                    )
+                    yield notice
+                    yield final_content
+        finally:
+            cursor_auth.reset_current_user(_cursor_user_token)
         try:
             live_usage = getattr(provider, "last_usage", None)
             self._record_usage(

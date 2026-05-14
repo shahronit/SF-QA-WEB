@@ -89,6 +89,13 @@ export default function Sidebar() {
   // Outside-click handle so the engine popover behaves like a real menu.
   const enginePickerRef = useRef(null)
 
+  // Cursor CLI auth state — drives the "Log in to Cursor" banner that
+  // appears whenever the binary is reachable on this host but the seat
+  // hasn't been authenticated yet. Initial value `null` means "not
+  // probed yet" so we don't flash the banner on first paint.
+  const [cursorStatus, setCursorStatus] = useState(null)
+  const [cursorLoggingIn, setCursorLoggingIn] = useState(false)
+
   // Filter the static navGroups by the current user's admin-managed
   // visibility rules: hide whole groups via menu_visibility[group.id]
   // (manual / advanced) and individual items via agent_access. Admins
@@ -128,6 +135,78 @@ export default function Sidebar() {
       if (data.active) setActive(data.active)
     }).catch(() => {})
   }, [])
+
+  // Probe cursor-agent auth state whenever the Cursor provider is in
+  // the catalog. Re-runs after a login spawn so the banner clears as
+  // soon as the seat is authenticated.
+  const hasCursorProvider = useMemo(
+    () => providers.some(p => p.provider === 'cursor'),
+    [providers],
+  )
+
+  const refreshCursorStatus = async () => {
+    try {
+      const { data } = await api.get('/llm/cursor/status')
+      setCursorStatus(data)
+      return data
+    } catch {
+      setCursorStatus({ available: false, logged_in: false, models: [] })
+      return null
+    }
+  }
+
+  useEffect(() => {
+    if (!hasCursorProvider) {
+      setCursorStatus(null)
+      return
+    }
+    refreshCursorStatus()
+  }, [hasCursorProvider])
+
+  const handleCursorLogin = async () => {
+    if (cursorLoggingIn) return
+    setCursorLoggingIn(true)
+    try {
+      await api.post('/llm/cursor/login')
+      toast.success(
+        'A browser tab is opening — sign in with YOUR Cursor account, then click "Re-check".',
+        { duration: 7000 },
+      )
+    } catch (err) {
+      toast.error(
+        err.response?.data?.detail
+          || 'Failed to launch cursor-agent login.',
+      )
+    } finally {
+      setCursorLoggingIn(false)
+    }
+  }
+
+  const handleCursorLogout = async () => {
+    try {
+      await api.post('/llm/cursor/logout')
+      toast.success('Signed out of your Cursor account.')
+      await refreshCursorStatus()
+    } catch (err) {
+      toast.error(
+        err.response?.data?.detail
+          || 'Failed to sign out of Cursor.',
+      )
+    }
+  }
+
+  const handleCursorRecheck = async () => {
+    const next = await refreshCursorStatus()
+    if (next?.logged_in) {
+      toast.success(`You're signed in to Cursor — ${next.model_count} models available.`)
+      api.get('/llm/providers').then(({ data }) => {
+        setProviders(data.providers || [])
+        if (data.active) setActive(data.active)
+      }).catch(() => {})
+    } else if (next?.available) {
+      toast('Still not signed in. Finish the browser OAuth and try again.')
+    }
+  }
 
   // Close the picker on any outside click. The popover is mounted next
   // to the trigger so a single ref covers both.
@@ -273,12 +352,92 @@ export default function Sidebar() {
                     </div>
                   </div>
                 ))}
+                {/* Cursor CLI sign-in banner — every user authenticates
+                    their OWN Cursor account. When not logged in, show the
+                    Log-in button. When logged in, show a tiny "signed in"
+                    chip with an unobtrusive Sign-out option so users can
+                    rotate accounts. */}
+                {hasCursorProvider && cursorStatus && cursorStatus.available && !cursorStatus.logged_in && (
+                  <div className="mt-1 mx-1 rounded-xl border border-amber-300/60 bg-amber-50/80 p-2.5 space-y-2">
+                    <div className="flex items-start gap-2">
+                      <span className="text-amber-600 text-sm leading-none mt-0.5">⚠</span>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-[11px] font-extrabold text-amber-900 leading-tight">
+                          Sign in to your Cursor account
+                        </p>
+                        <p className="text-[10px] text-amber-800/80 mt-0.5 leading-snug">
+                          Each user needs their own Cursor sign-in before
+                          this engine can run for them.
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={handleCursorLogin}
+                        disabled={cursorLoggingIn}
+                        className={`flex-1 text-[10px] font-bold uppercase tracking-wider rounded-lg px-2 py-1.5 transition-colors ${
+                          cursorLoggingIn
+                            ? 'bg-amber-200 text-amber-700 cursor-wait'
+                            : 'bg-amber-500 text-white hover:bg-amber-600 shadow-sm'
+                        }`}
+                      >
+                        {cursorLoggingIn ? 'Launching…' : 'Log in to Cursor'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleCursorRecheck}
+                        className="text-[10px] font-bold uppercase tracking-wider rounded-lg px-2 py-1.5 bg-white/70 hover:bg-white text-amber-900 border border-amber-300/60"
+                        title="Re-probe Cursor sign-in state"
+                      >
+                        Re-check
+                      </button>
+                    </div>
+                  </div>
+                )}
+                {hasCursorProvider && cursorStatus && cursorStatus.logged_in && (
+                  <div className="mt-1 mx-1 rounded-xl border border-emerald-300/50 bg-emerald-50/60 px-2.5 py-1.5">
+                    <div className="flex items-center gap-2">
+                      <span className="text-emerald-600 text-[11px] leading-none">✓</span>
+                      <span className="flex-1 text-[10px] font-bold text-emerald-900">
+                        Cursor signed in · {cursorStatus.model_count} models
+                      </span>
+                      <button
+                        type="button"
+                        onClick={handleCursorLogout}
+                        className="text-[9px] font-bold uppercase tracking-wider text-emerald-800/80 hover:text-emerald-900 hover:underline"
+                        title="Clear your Cursor credentials on this server"
+                      >
+                        Sign out
+                      </button>
+                    </div>
+                  </div>
+                )}
                 <div className="pt-1.5 mt-1 border-t border-astound-violet/10 px-2 text-[10px] text-gray-400">
                   Admins can pin a different model per agent in <span className="font-bold text-astound-violet">Admin → Models</span>.
                 </div>
               </motion.div>
             )}
           </AnimatePresence>
+          {/* Collapsed-state hint — surfaces the auth gap without
+              requiring the user to open the dropdown first. Tapping it
+              expands the picker where the actual Log-in button lives. */}
+          {hasCursorProvider && cursorStatus && cursorStatus.available && !cursorStatus.logged_in && !enginePickerOpen && (
+            <button
+              type="button"
+              onClick={() => setEnginePickerOpen(true)}
+              className="mt-1.5 w-full flex items-center gap-1.5 px-2 py-1 rounded-xl bg-amber-50 border border-amber-300/60 hover:bg-amber-100/80 transition-colors"
+              title="Sign in to your Cursor account"
+            >
+              <span className="text-amber-600 text-[10px] leading-none">⚠</span>
+              <span className="text-[10px] font-bold text-amber-900 tracking-wide">
+                Sign in to Cursor
+              </span>
+              <span className="ml-auto text-[9px] font-bold uppercase tracking-wider text-amber-700">
+                Fix
+              </span>
+            </button>
+          )}
         </div>
       )}
 
