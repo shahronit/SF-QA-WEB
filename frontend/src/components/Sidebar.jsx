@@ -95,6 +95,9 @@ export default function Sidebar() {
   // probed yet" so we don't flash the banner on first paint.
   const [cursorStatus, setCursorStatus] = useState(null)
   const [cursorLoggingIn, setCursorLoggingIn] = useState(false)
+  const [cursorUploading, setCursorUploading] = useState(false)
+  const [cursorHelpOpen, setCursorHelpOpen] = useState(false)
+  const cursorUploadInputRef = useRef(null)
 
   // Filter the static navGroups by the current user's admin-managed
   // visibility rules: hide whole groups via menu_visibility[group.id]
@@ -192,6 +195,59 @@ export default function Sidebar() {
         err.response?.data?.detail
           || 'Failed to sign out of Cursor.',
       )
+    }
+  }
+
+  // Headless / Render path: user runs cursor-agent login on their own
+  // laptop, then uploads auth.json (or a tarball of ~/.cursor/) here.
+  // The hidden file input is triggered by the visible button below.
+  const handleCursorUploadClick = () => {
+    if (cursorUploading) return
+    cursorUploadInputRef.current?.click()
+  }
+
+  const handleCursorUploadChange = async (event) => {
+    const file = event.target.files?.[0]
+    // Always clear the input value so picking the same file twice
+    // still fires onChange — otherwise users would have to rename
+    // the file to retry after a failure.
+    if (event.target) event.target.value = ''
+    if (!file) return
+    setCursorUploading(true)
+    try {
+      const form = new FormData()
+      form.append('file', file)
+      const { data } = await api.post('/llm/cursor/upload-credentials', form, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      })
+      if (data?.logged_in) {
+        toast.success(
+          `Credentials installed — you're signed in to Cursor (${data.model_count} models).`,
+          { duration: 6000 },
+        )
+        // Refresh both the per-user status and the global provider
+        // list so the dropdown can re-render with the right catalog.
+        await refreshCursorStatus()
+        api.get('/llm/providers').then(({ data: pd }) => {
+          setProviders(pd.providers || [])
+          if (pd.active) setActive(pd.active)
+        }).catch(() => {})
+      } else {
+        toast(
+          data?.message
+            || 'Credentials installed but cursor-agent still reports "not authenticated".',
+          { duration: 7000 },
+        )
+        await refreshCursorStatus()
+      }
+    } catch (err) {
+      toast.error(
+        err.response?.data?.detail
+          || 'Failed to upload Cursor credentials.',
+        { duration: 7000 },
+      )
+    } finally {
+      setCursorUploading(false)
     }
   }
 
@@ -353,10 +409,13 @@ export default function Sidebar() {
                   </div>
                 ))}
                 {/* Cursor CLI sign-in banner — every user authenticates
-                    their OWN Cursor account. When not logged in, show the
-                    Log-in button. When logged in, show a tiny "signed in"
-                    chip with an unobtrusive Sign-out option so users can
-                    rotate accounts. */}
+                    their OWN Cursor account. When the server can spawn
+                    cursor-agent's browser login (developer workstation),
+                    we offer the one-click "Log in" button. On headless
+                    deployments (Render etc.) we only show the upload
+                    path because the browser flow would fail silently.
+                    Upload is always available as a fallback so users
+                    can recover from corrupt local state. */}
                 {hasCursorProvider && cursorStatus && cursorStatus.available && !cursorStatus.logged_in && (
                   <div className="mt-1 mx-1 rounded-xl border border-amber-300/60 bg-amber-50/80 p-2.5 space-y-2">
                     <div className="flex items-start gap-2">
@@ -366,23 +425,40 @@ export default function Sidebar() {
                           Sign in to your Cursor account
                         </p>
                         <p className="text-[10px] text-amber-800/80 mt-0.5 leading-snug">
-                          Each user needs their own Cursor sign-in before
-                          this engine can run for them.
+                          {cursorStatus.can_browser_login
+                            ? 'Each user needs their own Cursor sign-in before this engine can run for them.'
+                            : 'This server is headless, so the browser sign-in flow can\'t run here. Upload your own auth.json from a local Cursor install instead.'}
                         </p>
                       </div>
                     </div>
                     <div className="flex items-center gap-1.5">
+                      {cursorStatus.can_browser_login && (
+                        <button
+                          type="button"
+                          onClick={handleCursorLogin}
+                          disabled={cursorLoggingIn}
+                          className={`flex-1 text-[10px] font-bold uppercase tracking-wider rounded-lg px-2 py-1.5 transition-colors ${
+                            cursorLoggingIn
+                              ? 'bg-amber-200 text-amber-700 cursor-wait'
+                              : 'bg-amber-500 text-white hover:bg-amber-600 shadow-sm'
+                          }`}
+                        >
+                          {cursorLoggingIn ? 'Launching…' : 'Log in to Cursor'}
+                        </button>
+                      )}
                       <button
                         type="button"
-                        onClick={handleCursorLogin}
-                        disabled={cursorLoggingIn}
+                        onClick={handleCursorUploadClick}
+                        disabled={cursorUploading}
                         className={`flex-1 text-[10px] font-bold uppercase tracking-wider rounded-lg px-2 py-1.5 transition-colors ${
-                          cursorLoggingIn
+                          cursorUploading
                             ? 'bg-amber-200 text-amber-700 cursor-wait'
-                            : 'bg-amber-500 text-white hover:bg-amber-600 shadow-sm'
+                            : cursorStatus.can_browser_login
+                              ? 'bg-white text-amber-900 border border-amber-400/60 hover:bg-amber-100'
+                              : 'bg-amber-500 text-white hover:bg-amber-600 shadow-sm'
                         }`}
                       >
-                        {cursorLoggingIn ? 'Launching…' : 'Log in to Cursor'}
+                        {cursorUploading ? 'Uploading…' : 'Upload auth.json'}
                       </button>
                       <button
                         type="button"
@@ -393,6 +469,49 @@ export default function Sidebar() {
                         Re-check
                       </button>
                     </div>
+                    {/* Hidden file input — the visible 'Upload auth.json'
+                        button trips it. Accept JSON for the bare auth file
+                        plus the tarball / zip forms the server unpacks. */}
+                    <input
+                      ref={cursorUploadInputRef}
+                      type="file"
+                      accept=".json,.tgz,.tar.gz,.tar,.zip"
+                      onChange={handleCursorUploadChange}
+                      className="hidden"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setCursorHelpOpen(o => !o)}
+                      className="w-full text-left text-[10px] font-bold uppercase tracking-wider text-amber-800/70 hover:text-amber-900 flex items-center gap-1"
+                    >
+                      <span>{cursorHelpOpen ? '▾' : '▸'}</span>
+                      <span>How do I get my auth.json?</span>
+                    </button>
+                    {cursorHelpOpen && (
+                      <ol className="list-decimal pl-5 space-y-1 text-[10px] text-amber-900/85 leading-relaxed">
+                        <li>
+                          Install Cursor on your laptop from{' '}
+                          <a
+                            href="https://cursor.com/install"
+                            target="_blank"
+                            rel="noreferrer"
+                            className="underline font-semibold text-amber-900 hover:text-amber-700"
+                          >
+                            cursor.com/install
+                          </a>
+                          {' '}(if you don't already have it).
+                        </li>
+                        <li>
+                          In your terminal run <code className="font-mono bg-white/70 px-1 rounded">cursor-agent login</code> and complete the sign-in in your browser.
+                        </li>
+                        <li>
+                          Find the resulting file at <code className="font-mono bg-white/70 px-1 rounded">~/.cursor/auth.json</code> (or <code className="font-mono bg-white/70 px-1 rounded">%USERPROFILE%\.cursor\auth.json</code> on Windows) and upload it here.
+                        </li>
+                        <li>
+                          If cursor-agent still reports "not authenticated" after uploading just the JSON, pack the whole folder with <code className="font-mono bg-white/70 px-1 rounded">tar -C ~/.cursor -czf cursor-auth.tgz .</code> and upload that instead.
+                        </li>
+                      </ol>
+                    )}
                   </div>
                 )}
                 {hasCursorProvider && cursorStatus && cursorStatus.logged_in && (
