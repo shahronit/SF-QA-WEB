@@ -13,18 +13,23 @@ user has their own per-user Cursor credential slot under
 ``backend/data/cursor-auth/<username>/``, and the routes below
 manipulate ONLY the caller's own slot:
 
-    * ``GET  /cursor/status``  — probe ``cursor-agent --list-models``
-      against the caller's slot so the Sidebar can show "you need to
-      log in to Cursor" without surfacing other users' state.
-    * ``POST /cursor/login``   — spawns ``cursor-agent login`` as a
-      detached subprocess with HOME / USERPROFILE redirected to the
-      caller's slot. On a local-dev install (which is where this app
-      actually runs) the subprocess inherits the desktop session and
-      opens the OAuth tab in the operator's browser, so the seat can
-      be authenticated without dropping to a terminal.
-    * ``POST /cursor/logout``  — wipes the caller's slot so the next
-      cursor-agent call falls back to "Authentication required" and
-      the Sidebar banner reappears.
+    * ``GET  /cursor/status``              — probe ``cursor-agent
+      --list-models`` against the caller's slot so the Sidebar can
+      show "you need to log in to Cursor" without surfacing other
+      users' state.
+    * ``POST /cursor/login``               — local-dev only: spawn
+      ``cursor-agent login`` detached with HOME / USERPROFILE
+      redirected to the caller's slot. Inherits the desktop session
+      so the OAuth tab opens in the operator's browser.
+    * ``POST /cursor/upload-credentials``  — headless-prod (Render
+      etc.): user runs ``cursor-agent login`` on their own laptop
+      then uploads the resulting ``auth.json`` (or a tarball/zip of
+      their whole ``~/.cursor/``) here. The server lands it in the
+      caller's slot exactly as if the browser flow had run on the
+      server. Works in EVERY deployment mode.
+    * ``POST /cursor/logout``              — wipes the caller's slot
+      so the next cursor-agent call falls back to "Authentication
+      required" and the Sidebar banner reappears.
 """
 
 from __future__ import annotations
@@ -35,7 +40,7 @@ import shutil
 import subprocess
 import sys
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel
 
 from core import cursor_auth, user_auth
@@ -144,6 +149,40 @@ async def get_effective_model(
 # ---------------------------------------------------------------------------
 
 
+def _is_headless() -> bool:
+    """Return True when this host has no desktop session for an OAuth flow.
+
+    The browser-spawn path (``POST /cursor/login``) only works when the
+    server inherits a desktop session — i.e. on a developer's own
+    workstation. On Render, headless Linux servers, or anywhere
+    deliberately marked headless via ``QA_HEADLESS=true``, the
+    subprocess would have no browser to open and the user would be
+    stuck. The status route surfaces this as ``can_browser_login`` so
+    the UI can hide the futile button and steer users to the upload
+    flow instead.
+
+    Detection order (any one match = headless):
+      1. ``RENDER`` env var (Render sets this to "true" on every
+         instance).
+      2. ``QA_HEADLESS=true`` — explicit operator override.
+      3. POSIX host with no ``DISPLAY`` or ``WAYLAND_DISPLAY`` (a
+         common signal that there's no GUI session attached).
+
+    Windows hosts always have a desktop session by default (we're
+    almost always running on a developer workstation there), so they
+    fall through to "not headless" unless the operator opts in.
+    """
+    if os.environ.get("RENDER", "").lower() in ("true", "1", "yes"):
+        return True
+    if os.environ.get("QA_HEADLESS", "").lower() in ("true", "1", "yes"):
+        return True
+    if os.name == "posix" and not (
+        os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")
+    ):
+        return True
+    return False
+
+
 def _resolve_cursor_binary(orch) -> str:
     """Return the cursor-agent path the orchestrator is configured with.
 
@@ -239,34 +278,50 @@ async def cursor_status(user: dict = Depends(get_current_user)):
     UI shows "log in to Cursor" instead) when the slot has never been
     initialised so we never spawn a subprocess for a fresh account.
 
+    ``can_browser_login`` mirrors ``not _is_headless()`` — when False,
+    the Sidebar hides the "Log in to Cursor" button (which would just
+    fail silently on Render anyway) and surfaces the upload flow as
+    the only path to authentication.
+
     Returned shape (all keys always present so the client can render
     without null-checks):
 
         {
-          "available":         bool,   # binary discoverable on this host?
-          "logged_in":         bool,   # caller's seat passes --list-models?
-          "binary":            str,    # absolute path to cursor-agent
-          "model_count":       int,    # length of the discovered catalog
-          "models":            list[str],  # first 8 ids, for the UI hint
-          "reason":            str,    # diagnostic token when not logged_in
-          "username":          str,    # echo of the caller for the UI
-          "slot_initialized":  bool,   # has the user ever attempted login?
+          "available":           bool,   # binary discoverable on this host?
+          "logged_in":           bool,   # caller's seat passes --list-models?
+          "binary":              str,    # absolute path to cursor-agent
+          "model_count":         int,    # length of the discovered catalog
+          "models":              list[str],  # first 8 ids, for the UI hint
+          "reason":              str,    # diagnostic token when not logged_in
+          "username":            str,    # echo of the caller for the UI
+          "slot_initialized":    bool,   # has the user ever attempted login?
+          "is_headless":         bool,   # server has no GUI session?
+          "can_browser_login":   bool,   # browser-spawn path is feasible?
         }
     """
     orch = get_orchestrator()
     binary = _resolve_cursor_binary(orch)
     username = user.get("username") or ""
     slot_initialized = cursor_auth.slot_exists(username)
+    headless = _is_headless()
+
+    def _base() -> dict:
+        return {
+            "username": username,
+            "slot_initialized": slot_initialized,
+            "is_headless": headless,
+            "can_browser_login": not headless,
+        }
+
     if not binary:
         return {
+            **_base(),
             "available": False,
             "logged_in": False,
             "binary": "",
             "model_count": 0,
             "models": [],
             "reason": "binary_missing",
-            "username": username,
-            "slot_initialized": slot_initialized,
         }
     # Skip the probe for users who've never even attempted login — the
     # subprocess would correctly return "auth_required" but the spawn
@@ -274,38 +329,35 @@ async def cursor_status(user: dict = Depends(get_current_user)):
     # account, and the answer is foregone.
     if not slot_initialized:
         return {
+            **_base(),
             "available": True,
             "logged_in": False,
             "binary": binary,
             "model_count": 0,
             "models": [],
             "reason": "no_slot",
-            "username": username,
-            "slot_initialized": False,
         }
     try:
         logged_in, discovered, reason = _probe_cursor_auth(binary, username)
     except Exception:  # noqa: BLE001 — never let a probe failure 500 the UI
         logger.exception("cursor-agent --list-models probe failed for %s", username)
         return {
+            **_base(),
             "available": True,
             "logged_in": False,
             "binary": binary,
             "model_count": 0,
             "models": [],
             "reason": "probe_exception",
-            "username": username,
-            "slot_initialized": True,
         }
     return {
+        **_base(),
         "available": True,
         "logged_in": logged_in,
         "binary": binary,
         "model_count": len(discovered),
         "models": discovered[:8],
         "reason": reason,
-        "username": username,
-        "slot_initialized": True,
     }
 
 
@@ -416,3 +468,122 @@ async def cursor_logout(user: dict = Depends(get_current_user)):
     if cleared:
         logger.info("Cleared cursor credentials for %s", username)
     return {"cleared": cleared, "username": username}
+
+
+# Cap upload size to 2 MiB — a real cursor-agent auth.json is ~1 KB
+# and a whole ``~/.cursor/`` tarball with cache directories is still
+# well under a megabyte. Anything bigger is almost certainly a wrong
+# file (or an attack); fail fast with a clear 413 instead of letting
+# us churn through arbitrary garbage on disk.
+_MAX_UPLOAD_BYTES = 2 * 1024 * 1024
+
+
+@router.post("/cursor/upload-credentials")
+async def cursor_upload_credentials(
+    file: UploadFile = File(...),
+    user: dict = Depends(get_current_user),
+):
+    """Land a user-uploaded ``auth.json`` (or ``~/.cursor/`` tarball)
+    into the caller's per-user slot.
+
+    The workflow this unblocks is the ONLY way to authenticate on
+    headless deployments (Render etc.) where the browser-spawn login
+    route has nowhere to surface the OAuth tab:
+
+      1. On the user's own laptop: install Cursor, run
+         ``cursor-agent login`` once, complete the browser OAuth.
+      2. Locate ``~/.cursor/auth.json`` (macOS / Linux) or
+         ``%USERPROFILE%\\.cursor\\auth.json`` (Windows).
+      3. Upload that file via this endpoint — or, if cursor-agent
+         needs more than the auth.json (e.g. a refresh-token cache),
+         pack the whole directory with
+         ``tar -C ~/.cursor -czf cursor-auth.tgz .`` and upload the
+         tarball.
+
+    Detected by file extension. ``.json`` is treated as auth.json;
+    ``.tgz`` / ``.tar.gz`` / ``.tar`` / ``.zip`` as a bundle to
+    extract into the slot's ``.cursor/`` directory. Anything else
+    falls back to JSON parsing so users who renamed the file still
+    get a useful error message.
+
+    Re-uploading replaces the existing slot atomically — no need to
+    log out first.
+    """
+    username = user.get("username") or ""
+    if not username:
+        raise HTTPException(400, "Missing username on the auth token.")
+
+    # Read up to the cap + 1 byte so we can detect over-cap uploads
+    # without buffering the full payload first.
+    content = await file.read(_MAX_UPLOAD_BYTES + 1)
+    if not content:
+        raise HTTPException(400, "Uploaded file is empty.")
+    if len(content) > _MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            413,
+            f"Upload too large ({len(content)} bytes); the per-user "
+            f"limit is {_MAX_UPLOAD_BYTES} bytes. A real cursor-agent "
+            "auth.json is well under 4 KB.",
+        )
+
+    fname_low = (file.filename or "").lower()
+    archive_suffixes = (".tgz", ".tar.gz", ".tar", ".zip")
+    is_archive = fname_low.endswith(archive_suffixes)
+
+    try:
+        if is_archive:
+            target = cursor_auth.install_auth_archive(
+                username, content, fname_low,
+            )
+            installed_kind = "archive"
+        else:
+            target = cursor_auth.install_auth_json(username, content)
+            installed_kind = "auth_json"
+    except ValueError as exc:
+        # Bubble validation errors back to the client as 400s so the
+        # toast surfaces the actual problem (bad JSON, unsafe tar,
+        # etc.) instead of a generic "upload failed".
+        raise HTTPException(400, str(exc)) from exc
+    except Exception:  # noqa: BLE001
+        logger.exception("Failed to install cursor credentials for %s", username)
+        raise HTTPException(
+            500, "Failed to install credentials on the server. See logs.",
+        )
+
+    logger.info(
+        "Installed cursor credentials for %s (kind=%s, src=%s, bytes=%d, target=%s).",
+        username, installed_kind, file.filename, len(content), target,
+    )
+
+    # Probe the freshly-installed seat so the UI can flip its state
+    # immediately without an extra round-trip.
+    orch = get_orchestrator()
+    binary = _resolve_cursor_binary(orch)
+    logged_in = False
+    model_count = 0
+    if binary:
+        try:
+            logged_in_, models_, _ = _probe_cursor_auth(binary, username)
+            logged_in = logged_in_
+            model_count = len(models_)
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "Post-upload probe failed for %s; status route will retry.",
+                username,
+            )
+
+    return {
+        "installed": True,
+        "kind": installed_kind,
+        "username": username,
+        "logged_in": logged_in,
+        "model_count": model_count,
+        "message": (
+            "Credentials installed. You should now be signed in to Cursor."
+            if logged_in
+            else
+            "Credentials installed but cursor-agent still reports "
+            "'not authenticated'. Double-check you uploaded the correct "
+            "auth.json (or a full ~/.cursor tarball)."
+        ),
+    }
