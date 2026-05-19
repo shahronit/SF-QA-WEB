@@ -112,6 +112,11 @@ AGENT_RUNS = "agent_runs"
 # document per successful or failed push; powers the Dashboard activity
 # charts and "Recent activity" feed alongside AGENT_RUNS.
 JIRA_PUSHES = "jira_pushes"
+# Per-user Cursor CLI credential bundles. One doc per user, keyed by
+# username, holding base64-encoded snapshots of every file inside
+# their ~/.cursor/ directory. Hydrated to disk on every container
+# start so credentials survive Render's ephemeral filesystem.
+CURSOR_CREDENTIALS = "cursor_credentials"
 JIRA_SESSIONS = "jira_sessions"
 GDRIVE_SESSIONS = "gdrive_sessions"
 XRAY_SESSIONS = "xray_sessions"

@@ -217,9 +217,13 @@ export default function Sidebar() {
     try {
       const form = new FormData()
       form.append('file', file)
-      const { data } = await api.post('/llm/cursor/upload-credentials', form, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      })
+      // Critical: do NOT set Content-Type here. Manually specifying
+      // 'multipart/form-data' (without the boundary) was overriding
+      // axios's auto-detection, which means the boundary string never
+      // made it into the request and the server couldn't parse the
+      // body. Letting axios see the FormData lets it set the full
+      // 'multipart/form-data; boundary=...' header correctly.
+      const { data } = await api.post('/llm/cursor/upload-credentials', form)
       if (data?.logged_in) {
         toast.success(
           `Credentials installed — you're signed in to Cursor (${data.model_count} models).`,
