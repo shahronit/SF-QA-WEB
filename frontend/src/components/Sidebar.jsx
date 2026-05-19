@@ -89,15 +89,35 @@ export default function Sidebar() {
   // Outside-click handle so the engine popover behaves like a real menu.
   const enginePickerRef = useRef(null)
 
-  // Cursor CLI auth state — drives the "Log in to Cursor" banner that
-  // appears whenever the binary is reachable on this host but the seat
-  // hasn't been authenticated yet. Initial value `null` means "not
-  // probed yet" so we don't flash the banner on first paint.
+  // Cursor CLI auth state — drives the "Sign in to Cursor" banner
+  // that appears whenever the binary is reachable on this host but
+  // the seat hasn't been authenticated yet. Initial value `null`
+  // means "not probed yet" so we don't flash the banner on first
+  // paint.
   const [cursorStatus, setCursorStatus] = useState(null)
+  // Whether we're mid-spawn for the cursor-agent login subprocess
+  // (covers the brief window before /cursor/login returns with a URL).
   const [cursorLoggingIn, setCursorLoggingIn] = useState(false)
+  // Current OAuth URL returned by the backend. When set, the modal
+  // is showing the "Sign in on cursor.com" view and the status poll
+  // is running.
+  const [cursorLoginUrl, setCursorLoginUrl] = useState(null)
+  // 'idle' | 'in_progress' | 'success' | 'failed' | 'cancelled' | 'timeout'
+  // Mirrors the backend's get_login_session() status so the modal
+  // can show progress / errors.
+  const [cursorLoginPhase, setCursorLoginPhase] = useState('idle')
+  // Optional error tail surfaced from cursor-agent stderr when login
+  // fails — shown verbatim in the modal so the user can see what
+  // went wrong instead of a generic toast.
+  const [cursorLoginError, setCursorLoginError] = useState(null)
+  // Auth.json upload kept as an Advanced fallback for users who
+  // can't (or don't want to) complete the browser OAuth.
   const [cursorUploading, setCursorUploading] = useState(false)
-  const [cursorHelpOpen, setCursorHelpOpen] = useState(false)
+  const [cursorAdvancedOpen, setCursorAdvancedOpen] = useState(false)
   const cursorUploadInputRef = useRef(null)
+  // Polling cleanup handle — set when a login session starts, cleared
+  // when the modal closes or status reaches a terminal state.
+  const cursorLoginPollRef = useRef(null)
 
   // Filter the static navGroups by the current user's admin-managed
   // visibility rules: hide whole groups via menu_visibility[group.id]
@@ -166,26 +186,119 @@ export default function Sidebar() {
     refreshCursorStatus()
   }, [hasCursorProvider])
 
+  // Tear down the background polling loop. Safe to call multiple
+  // times — the ref short-circuits when already cleared.
+  const stopCursorLoginPolling = () => {
+    if (cursorLoginPollRef.current) {
+      clearInterval(cursorLoginPollRef.current)
+      cursorLoginPollRef.current = null
+    }
+  }
+
+  // Poll /cursor/login-status every 2.5s while the user is on the
+  // cursor.com sign-in tab. Transitions the UI when the backend
+  // reports success / failure / timeout / cancellation. Refreshes
+  // the provider catalog on success so the engine dropdown can
+  // immediately offer cursor models without a reload.
+  const startCursorLoginPolling = () => {
+    stopCursorLoginPolling()
+    cursorLoginPollRef.current = setInterval(async () => {
+      try {
+        const { data } = await api.get('/llm/cursor/login-status')
+        if (!data || data.status === 'idle') return
+        if (data.status === 'in_progress') {
+          // Still waiting — keep the URL fresh in case the backend
+          // dropped/replaced it (rare; defensive).
+          if (data.login_url) setCursorLoginUrl(data.login_url)
+          return
+        }
+        // Terminal states: stop polling regardless of outcome.
+        stopCursorLoginPolling()
+        setCursorLoginPhase(data.status)
+        if (data.status === 'success') {
+          toast.success('Cursor sign-in complete. You can close the sign-in tab.', { duration: 6000 })
+          setCursorLoginUrl(null)
+          setCursorLoginError(null)
+          await refreshCursorStatus()
+          api.get('/llm/providers').then(({ data: pd }) => {
+            setProviders(pd.providers || [])
+            if (pd.active) setActive(pd.active)
+          }).catch(() => {})
+        } else {
+          setCursorLoginError(data.error_tail || data.message || null)
+          toast.error(data.message || `Cursor sign-in ${data.status}.`, { duration: 8000 })
+        }
+      } catch {
+        // Single 401/network blip shouldn't abort the poll — keep
+        // trying. The poll itself stops when the user closes the
+        // modal or after a terminal state above.
+      }
+    }, 2500)
+  }
+
+  // Primary "Re-Login" handler: ask the backend to spawn cursor-agent
+  // login with NO_OPEN_BROWSER=1, get the cursor.com URL back, open
+  // it in a new tab, and start polling for completion. Works the
+  // same way locally and on Render — the user's own browser is what
+  // completes the OAuth, not the server's.
   const handleCursorLogin = async () => {
     if (cursorLoggingIn) return
     setCursorLoggingIn(true)
+    setCursorLoginPhase('starting')
+    setCursorLoginError(null)
     try {
-      await api.post('/llm/cursor/login')
-      toast.success(
-        'A browser tab is opening — sign in with YOUR Cursor account, then click "Re-check".',
-        { duration: 7000 },
-      )
+      const { data } = await api.post('/llm/cursor/login')
+      if (data?.login_url) {
+        setCursorLoginUrl(data.login_url)
+        setCursorLoginPhase(data.status || 'in_progress')
+        // Open in a new tab so the user keeps QA Studio in view
+        // while signing in. noopener+noreferrer per the usual
+        // window.open hygiene.
+        const popup = window.open(data.login_url, '_blank', 'noopener,noreferrer')
+        if (!popup) {
+          // Popup blocker swallowed it — leave the URL visible in
+          // the modal so the user can click it manually.
+          toast(
+            'Pop-up blocked — click the link in the panel to sign in to Cursor.',
+            { duration: 7000, icon: '\u26A0\uFE0F' },
+          )
+        }
+        startCursorLoginPolling()
+      } else {
+        setCursorLoginPhase('failed')
+        setCursorLoginError(data?.message || 'No sign-in URL returned by the server.')
+        toast.error(data?.message || 'Failed to start the Cursor sign-in flow.')
+      }
     } catch (err) {
-      toast.error(
-        err.response?.data?.detail
-          || 'Failed to launch cursor-agent login.',
-      )
+      setCursorLoginPhase('failed')
+      const detail = err.response?.data?.detail || err.message || 'Failed to start the Cursor sign-in flow.'
+      setCursorLoginError(detail)
+      toast.error(detail)
     } finally {
       setCursorLoggingIn(false)
     }
   }
 
+  // Cancel an in-flight login (closes the modal AND tells the
+  // backend to terminate the cursor-agent subprocess so we don't
+  // leak processes on the host).
+  const handleCursorLoginCancel = async () => {
+    stopCursorLoginPolling()
+    setCursorLoginUrl(null)
+    setCursorLoginPhase('idle')
+    setCursorLoginError(null)
+    try {
+      await api.post('/llm/cursor/login-cancel')
+    } catch {
+      // The backend may have already cleaned up — non-fatal.
+    }
+  }
+
   const handleCursorLogout = async () => {
+    stopCursorLoginPolling()
+    setCursorLoginUrl(null)
+    setCursorLoginPhase('idle')
+    setCursorLoginError(null)
     try {
       await api.post('/llm/cursor/logout')
       toast.success('Signed out of your Cursor account.')
@@ -280,6 +393,13 @@ export default function Sidebar() {
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
   }, [enginePickerOpen])
+
+  // Tear down the login status poller on unmount — without this an
+  // interval keeps firing /cursor/login-status after the sidebar
+  // unmounts (e.g. after a logout-triggered redirect).
+  useEffect(() => {
+    return () => stopCursorLoginPolling()
+  }, [])
 
   const handleSwitch = async (providerName, model) => {
     if (switching) return
@@ -429,92 +549,148 @@ export default function Sidebar() {
                           Sign in to your Cursor account
                         </p>
                         <p className="text-[10px] text-amber-800/80 mt-0.5 leading-snug">
-                          {cursorStatus.can_browser_login
-                            ? 'Each user needs their own Cursor sign-in before this engine can run for them.'
-                            : 'This server is headless, so the browser sign-in flow can\'t run here. Upload your own auth.json from a local Cursor install instead.'}
+                          Each user needs their own Cursor sign-in
+                          before this engine can run for them. Click
+                          Re-Login to open the Cursor sign-in page in a
+                          new tab.
                         </p>
                       </div>
                     </div>
-                    <div className="flex items-center gap-1.5">
-                      {cursorStatus.can_browser_login && (
+
+                    {/* Active sign-in session: show the URL the
+                        backend captured + a progress hint + a Cancel
+                        button. The user only sees this between
+                        clicking Re-Login and finishing OAuth on
+                        cursor.com. */}
+                    {cursorLoginUrl && cursorLoginPhase === 'in_progress' && (
+                      <div className="rounded-lg border border-amber-300/70 bg-white/80 p-2 space-y-1.5">
+                        <p className="text-[10px] font-bold text-amber-900 leading-snug">
+                          Waiting for Cursor sign-in…
+                        </p>
+                        <a
+                          href={cursorLoginUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="block text-[10px] font-mono text-amber-800 break-all underline hover:text-amber-600"
+                          title="Click to open the Cursor sign-in page in a new tab"
+                        >
+                          {cursorLoginUrl}
+                        </a>
+                        <p className="text-[9px] text-amber-700/80 leading-snug">
+                          Complete the sign-in in your browser. This
+                          panel updates automatically when it's done.
+                        </p>
+                        <div className="flex items-center gap-1.5 pt-0.5">
+                          <span className="inline-block w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
+                          <span className="text-[9px] font-bold uppercase tracking-wider text-amber-700">
+                            Polling cursor.com…
+                          </span>
+                          <button
+                            type="button"
+                            onClick={handleCursorLoginCancel}
+                            className="ml-auto text-[9px] font-bold uppercase tracking-wider text-amber-800/80 hover:text-amber-900 hover:underline"
+                            title="Abort the in-flight cursor-agent login"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Terminal-failure feedback: surface the actual
+                        cursor-agent error so the user knows why login
+                        didn't take instead of just seeing a flashed
+                        toast. */}
+                    {cursorLoginError && cursorLoginPhase !== 'in_progress' && (
+                      <div className="rounded-lg border border-red-300/70 bg-red-50/80 p-2">
+                        <p className="text-[10px] font-bold text-red-900 leading-snug">
+                          Sign-in didn't complete
+                        </p>
+                        <p className="text-[10px] font-mono text-red-800/90 break-all leading-snug mt-0.5">
+                          {cursorLoginError}
+                        </p>
+                      </div>
+                    )}
+
+                    {/* Primary CTA row: Re-Login + Re-check. The
+                        Re-Login button is hidden during an in-flight
+                        session so the user can't accidentally double-
+                        click and spawn a fresh OAuth URL. */}
+                    {(!cursorLoginUrl || cursorLoginPhase !== 'in_progress') && (
+                      <div className="flex items-center gap-1.5">
                         <button
                           type="button"
                           onClick={handleCursorLogin}
-                          disabled={cursorLoggingIn}
+                          disabled={cursorLoggingIn || !cursorStatus.can_browser_login}
                           className={`flex-1 text-[10px] font-bold uppercase tracking-wider rounded-lg px-2 py-1.5 transition-colors ${
-                            cursorLoggingIn
+                            (cursorLoggingIn || !cursorStatus.can_browser_login)
                               ? 'bg-amber-200 text-amber-700 cursor-wait'
                               : 'bg-amber-500 text-white hover:bg-amber-600 shadow-sm'
                           }`}
+                          title={
+                            cursorStatus.can_browser_login
+                              ? 'Open the Cursor sign-in page in a new tab and re-authenticate.'
+                              : 'cursor-agent binary missing on this host — use Advanced upload below.'
+                          }
                         >
-                          {cursorLoggingIn ? 'Launching…' : 'Log in to Cursor'}
+                          {cursorLoggingIn ? 'Starting…' : 'Re-Login'}
                         </button>
-                      )}
-                      <button
-                        type="button"
-                        onClick={handleCursorUploadClick}
-                        disabled={cursorUploading}
-                        className={`flex-1 text-[10px] font-bold uppercase tracking-wider rounded-lg px-2 py-1.5 transition-colors ${
-                          cursorUploading
-                            ? 'bg-amber-200 text-amber-700 cursor-wait'
-                            : cursorStatus.can_browser_login
-                              ? 'bg-white text-amber-900 border border-amber-400/60 hover:bg-amber-100'
-                              : 'bg-amber-500 text-white hover:bg-amber-600 shadow-sm'
-                        }`}
-                      >
-                        {cursorUploading ? 'Uploading…' : 'Upload auth.json'}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={handleCursorRecheck}
-                        className="text-[10px] font-bold uppercase tracking-wider rounded-lg px-2 py-1.5 bg-white/70 hover:bg-white text-amber-900 border border-amber-300/60"
-                        title="Re-probe Cursor sign-in state"
-                      >
-                        Re-check
-                      </button>
-                    </div>
-                    {/* Hidden file input — the visible 'Upload auth.json'
-                        button trips it. Accept JSON for the bare auth file
-                        plus the tarball / zip forms the server unpacks. */}
-                    <input
-                      ref={cursorUploadInputRef}
-                      type="file"
-                      accept=".json,.tgz,.tar.gz,.tar,.zip"
-                      onChange={handleCursorUploadChange}
-                      className="hidden"
-                    />
+                        <button
+                          type="button"
+                          onClick={handleCursorRecheck}
+                          className="text-[10px] font-bold uppercase tracking-wider rounded-lg px-2 py-1.5 bg-white/70 hover:bg-white text-amber-900 border border-amber-300/60"
+                          title="Re-probe Cursor sign-in state"
+                        >
+                          Re-check
+                        </button>
+                      </div>
+                    )}
+
+                    {/* Advanced fallback — keep the auth.json upload
+                        flow as an escape hatch for users who can't
+                        complete the browser OAuth (e.g. cursor.com
+                        blocked on their network) or whose laptop
+                        already has a working auth.json they'd rather
+                        copy across. Hidden behind a disclosure so the
+                        primary CTA stays clean. */}
                     <button
                       type="button"
-                      onClick={() => setCursorHelpOpen(o => !o)}
+                      onClick={() => setCursorAdvancedOpen(o => !o)}
                       className="w-full text-left text-[10px] font-bold uppercase tracking-wider text-amber-800/70 hover:text-amber-900 flex items-center gap-1"
                     >
-                      <span>{cursorHelpOpen ? '▾' : '▸'}</span>
-                      <span>How do I get my auth.json?</span>
+                      <span>{cursorAdvancedOpen ? '▾' : '▸'}</span>
+                      <span>Advanced — upload auth.json instead</span>
                     </button>
-                    {cursorHelpOpen && (
-                      <ol className="list-decimal pl-5 space-y-1 text-[10px] text-amber-900/85 leading-relaxed">
-                        <li>
-                          Install Cursor on your laptop from{' '}
-                          <a
-                            href="https://cursor.com/install"
-                            target="_blank"
-                            rel="noreferrer"
-                            className="underline font-semibold text-amber-900 hover:text-amber-700"
-                          >
-                            cursor.com/install
-                          </a>
-                          {' '}(if you don't already have it).
-                        </li>
-                        <li>
-                          In your terminal run <code className="font-mono bg-white/70 px-1 rounded">cursor-agent login</code> and complete the sign-in in your browser.
-                        </li>
-                        <li>
-                          Find the resulting file at <code className="font-mono bg-white/70 px-1 rounded">~/.cursor/auth.json</code> (or <code className="font-mono bg-white/70 px-1 rounded">%USERPROFILE%\.cursor\auth.json</code> on Windows) and upload it here.
-                        </li>
-                        <li>
-                          If cursor-agent still reports "not authenticated" after uploading just the JSON, pack the whole folder with <code className="font-mono bg-white/70 px-1 rounded">tar -C ~/.cursor -czf cursor-auth.tgz .</code> and upload that instead.
-                        </li>
-                      </ol>
+                    {cursorAdvancedOpen && (
+                      <div className="space-y-1.5 pl-2 border-l border-amber-300/40">
+                        <p className="text-[10px] text-amber-900/85 leading-snug">
+                          If the browser sign-in can't reach cursor.com
+                          from this server, upload the auth.json from a
+                          local Cursor install. On Windows it's at
+                          {' '}<code className="font-mono bg-white/70 px-1 rounded">%USERPROFILE%\.cursor\auth.json</code>,
+                          on Mac/Linux at
+                          {' '}<code className="font-mono bg-white/70 px-1 rounded">~/.cursor/auth.json</code>.
+                        </p>
+                        <button
+                          type="button"
+                          onClick={handleCursorUploadClick}
+                          disabled={cursorUploading}
+                          className={`w-full text-[10px] font-bold uppercase tracking-wider rounded-lg px-2 py-1.5 transition-colors ${
+                            cursorUploading
+                              ? 'bg-amber-200 text-amber-700 cursor-wait'
+                              : 'bg-white text-amber-900 border border-amber-400/60 hover:bg-amber-100'
+                          }`}
+                        >
+                          {cursorUploading ? 'Uploading…' : 'Upload auth.json'}
+                        </button>
+                        <input
+                          ref={cursorUploadInputRef}
+                          type="file"
+                          accept=".json,.tgz,.tar.gz,.tar,.zip"
+                          onChange={handleCursorUploadChange}
+                          className="hidden"
+                        />
+                      </div>
                     )}
                   </div>
                 )}
