@@ -71,6 +71,18 @@ _AUTH_REQUIRED_MARKERS = (
     "no models available",
 )
 
+# Pattern emitted by ``cursor-agent login`` (with NO_OPEN_BROWSER=1)
+# that contains the OAuth URL the user needs to visit. Verified
+# empirically: cursor-agent prints
+#     "Open a browser and navigate to this link: https://cursor.com/loginDeepControl?challenge=...&uuid=...&mode=login&redirectTarget=cli"
+# then polls cursor.com until the auth completes. We extract the URL
+# from any line containing it (line prefix may shift between
+# cursor-agent versions, so we match the URL substring directly).
+_LOGIN_URL_PATTERN = re.compile(
+    r"https://[^\s]*cursor\.com/loginDeepControl[^\s]*",
+    re.IGNORECASE,
+)
+
 
 def _sanitize(username: str) -> str:
     """Reduce a username to a safe filesystem segment.
@@ -771,6 +783,11 @@ def clear_slot(username: str | None) -> bool:  # noqa: F811 — overrides the si
     # Reset the per-process hydration cache eagerly so a subsequent
     # upload + restart re-runs the hydration path.
     _HYDRATED_USERS.discard(key)
+    # Cancel any in-flight login subprocess for the same user — its
+    # output is no longer useful if the user is logging out, and we
+    # don't want a stale process re-creating an auth.json after we
+    # just wiped the slot.
+    cancel_login(username)
     slot_removed = False
     slot = _DATA_DIR / key
     if slot.exists():
@@ -783,3 +800,342 @@ def clear_slot(username: str | None) -> bool:  # noqa: F811 — overrides the si
             slot_removed = True
     persisted_removed = _delete_persisted_snapshot(username)
     return slot_removed or persisted_removed
+
+
+# ---------------------------------------------------------------------------
+# Browser-less ``cursor-agent login`` sessions
+# ---------------------------------------------------------------------------
+#
+# On a headless server we can't let cursor-agent open the OAuth tab in
+# the server's own browser — there isn't one — so we run it with
+# ``NO_OPEN_BROWSER=1`` and surface the printed sign-in URL to the
+# caller. The cursor-agent process keeps polling cursor.com until the
+# user completes auth in *their* browser, at which point it writes
+# ``auth.json`` into the user's slot and exits cleanly. We snapshot
+# the resulting slot to the persistent store so Render's ephemeral
+# filesystem can't wipe the freshly-signed-in user out from under us
+# on the next restart.
+#
+# State is kept in a module-level dict keyed by username so the
+# frontend can poll for progress (``/cursor/login-status``) and so a
+# double-clicked "Re-Login" button doesn't spawn a second process.
+
+# Public state shape (mirrored to /cursor/login-status JSON). Keep
+# strings short — the frontend re-uses these as toast text fallbacks.
+_LoginSessionState = dict  # alias for readability
+
+
+_LOGIN_SESSIONS: dict[str, _LoginSessionState] = {}
+_LOGIN_SESSIONS_LOCK = threading.Lock()
+# How long we'll block the /cursor/login HTTP request waiting for the
+# URL line to appear in cursor-agent's stdout. Empirically the line
+# shows up within ~2 seconds on a warm machine; 15s is the upper
+# bound for cold-start / Render's slower hosts.
+_LOGIN_URL_WAIT_SECONDS = 15.0
+# Hard cap on how long a single login session can stay "in_progress"
+# before we give up on it. The user typically completes OAuth within
+# 60s — past 10 minutes it's almost certainly an abandoned tab and
+# we'd rather time out than leak a subprocess on the host.
+_LOGIN_OVERALL_TIMEOUT_SECONDS = 10 * 60
+
+
+def _login_session_snapshot(state: _LoginSessionState) -> dict:
+    """Return a JSON-safe copy of *state* for /cursor/login-status.
+
+    Stripping the live Popen / Thread handles is required because
+    they're not serialisable.
+    """
+    out = {
+        k: v for k, v in state.items()
+        if k not in {"_proc", "_thread", "_log_buf"}
+    }
+    return out
+
+
+def get_login_session(username: str | None) -> dict | None:
+    """Public read-only view of the user's current login session
+    (or ``None`` when no session is active or recently completed).
+
+    Used by the /cursor/login-status route — the frontend polls this
+    every ~2 seconds while the user is on the sign-in tab.
+    """
+    if not username:
+        return None
+    key = _sanitize(username)
+    with _LOGIN_SESSIONS_LOCK:
+        state = _LOGIN_SESSIONS.get(key)
+        if state is None:
+            return None
+        return _login_session_snapshot(state)
+
+
+def cancel_login(username: str | None) -> bool:
+    """Terminate any in-flight cursor-agent login process for *username*.
+
+    Called by ``clear_slot`` (so logout invalidates an in-progress
+    login) and exposed via the router for the frontend's "Cancel"
+    button on the Re-Login modal.
+    """
+    if not username:
+        return False
+    key = _sanitize(username)
+    with _LOGIN_SESSIONS_LOCK:
+        state = _LOGIN_SESSIONS.get(key)
+        if state is None:
+            return False
+        proc = state.get("_proc")
+    if proc is None:
+        return False
+    try:
+        proc.terminate()
+        try:
+            proc.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+    except (OSError, ProcessLookupError):
+        pass
+    with _LOGIN_SESSIONS_LOCK:
+        state = _LOGIN_SESSIONS.get(key)
+        if state is not None and state.get("status") in {"pending", "in_progress"}:
+            state["status"] = "cancelled"
+            state["message"] = "Login cancelled by user."
+    return True
+
+
+def _read_until_url(proc: subprocess.Popen, log_buf: list[bytes]) -> str | None:
+    """Read from *proc*'s stdout until the cursor.com login URL appears
+    (or the read times out / process exits).
+
+    Captures every byte read into *log_buf* so callers can dump it on
+    failure for debugging. Returns the URL string when found, ``None``
+    otherwise.
+    """
+    if proc.stdout is None:
+        return None
+    deadline = __import__("time").time() + _LOGIN_URL_WAIT_SECONDS
+    accumulated = b""
+    while True:
+        if proc.poll() is not None:
+            # Process exited before printing a URL — bail out so the
+            # caller can surface the captured stderr to the user.
+            break
+        remaining = deadline - __import__("time").time()
+        if remaining <= 0:
+            break
+        try:
+            chunk = proc.stdout.read1(1024) if hasattr(proc.stdout, "read1") else proc.stdout.read(1024)
+        except (OSError, ValueError):
+            break
+        if not chunk:
+            # EOF — wait briefly then re-check the deadline.
+            __import__("time").sleep(0.05)
+            continue
+        log_buf.append(chunk)
+        accumulated += chunk
+        match = _LOGIN_URL_PATTERN.search(accumulated.decode("utf-8", errors="replace"))
+        if match:
+            return match.group(0).strip().rstrip(",.;)")
+    return None
+
+
+def _wait_for_login_completion(
+    username: str,
+    proc: subprocess.Popen,
+    log_buf: list[bytes],
+) -> None:
+    """Background-thread worker that waits for cursor-agent to exit
+    after the URL has been surfaced.
+
+    On clean exit (rc == 0 and ``auth.json`` materialised) we
+    snapshot the slot into the persistent store so the credentials
+    survive a Render restart. On any failure we record the captured
+    output on the session state so the frontend can show it.
+    """
+    key = _sanitize(username)
+    try:
+        rc = proc.wait(timeout=_LOGIN_OVERALL_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        try:
+            proc.kill()
+        except (OSError, ProcessLookupError):
+            pass
+        with _LOGIN_SESSIONS_LOCK:
+            state = _LOGIN_SESSIONS.get(key)
+            if state is not None:
+                state["status"] = "timeout"
+                state["message"] = (
+                    "Login timed out after 10 minutes. Click Re-Login to try again."
+                )
+        return
+    # Drain any remaining stdout so the captured log is complete.
+    try:
+        if proc.stdout is not None:
+            tail = proc.stdout.read() or b""
+            if tail:
+                log_buf.append(tail)
+    except (OSError, ValueError):
+        pass
+    slot = slot_for(username)
+    auth_landed = slot is not None and (slot / ".cursor" / "auth.json").exists()
+    if rc == 0 and auth_landed:
+        # Mirror the freshly-written auth.json into Firestore /
+        # local sidecar so the next container restart can re-hydrate.
+        try:
+            persist_slot(username)
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "Persisting freshly logged-in cursor slot failed for %s",
+                username,
+            )
+        with _LOGIN_SESSIONS_LOCK:
+            state = _LOGIN_SESSIONS.get(key)
+            if state is not None:
+                state["status"] = "success"
+                state["message"] = (
+                    "Cursor sign-in complete. You can close the sign-in tab."
+                )
+                # Drop the URL once we're done — keeping it around in
+                # state is just noise for the status endpoint.
+                state.pop("login_url", None)
+        return
+    # Failure path: surface the last 1 KiB of captured output so the
+    # user sees the actual cursor-agent error instead of a generic
+    # "login failed" toast.
+    tail = b"".join(log_buf)[-1024:].decode("utf-8", errors="replace")
+    with _LOGIN_SESSIONS_LOCK:
+        state = _LOGIN_SESSIONS.get(key)
+        if state is not None:
+            state["status"] = "failed"
+            state["message"] = (
+                f"cursor-agent exited {rc} without writing auth.json. "
+                "See server logs."
+            )
+            state["error_tail"] = tail
+    logger.warning(
+        "cursor-agent login failed for %s (rc=%s, auth_landed=%s, tail=%r)",
+        username, rc, auth_landed, tail,
+    )
+
+
+def start_login(
+    username: str,
+    binary: str,
+    extra_env: dict[str, str] | None = None,
+) -> dict:
+    """Start a browser-less ``cursor-agent login`` session for *username*.
+
+    Returns a JSON-safe state dict containing at least:
+      * ``status``: 'in_progress' | 'failed' (when we couldn't even spawn)
+      * ``login_url``: the cursor.com URL to navigate to (when status is in_progress)
+      * ``message``: human-readable summary
+      * ``pid``: the subprocess id (advisory; not a security primitive)
+
+    If a session is already live for the same user, we return its
+    current state instead of spawning a duplicate. Idempotent in the
+    face of an impatient user double-clicking Re-Login.
+    """
+    if not username:
+        raise ValueError("start_login: username required")
+    key = _sanitize(username)
+    with _LOGIN_SESSIONS_LOCK:
+        existing = _LOGIN_SESSIONS.get(key)
+        if existing is not None and existing.get("status") == "in_progress":
+            proc = existing.get("_proc")
+            # Only reuse when the process is actually still alive
+            # (zombie sessions get cleared below).
+            if proc is not None and proc.poll() is None:
+                return _login_session_snapshot(existing)
+            # Process died unnoticed — fall through and spawn fresh.
+            _LOGIN_SESSIONS.pop(key, None)
+    slot = slot_for(username)
+    if slot is None:
+        raise ValueError("start_login: could not resolve slot for username")
+    spawn_env = env_for(username, base_env=None)
+    spawn_env["NO_OPEN_BROWSER"] = "1"
+    # NO_BROWSER is the legacy name used by some cursor-agent
+    # versions; setting both is harmless and forward-compatible.
+    spawn_env["NO_BROWSER"] = "1"
+    if extra_env:
+        spawn_env.update(extra_env)
+    # On Windows, cursor-agent is shipped as a .cmd shim — Popen
+    # needs shell=True (or the resolved .cmd absolute path) for the
+    # shim to execute. ``shell=True`` is the most portable answer
+    # across Windows/POSIX.
+    #
+    # We deliberately DO NOT set DETACHED_PROCESS / CREATE_NO_WINDOW
+    # on Windows here, even though the old fire-and-forget login
+    # code did. Those flags strip the child's stdio inheritance,
+    # which breaks ``stdout=PIPE`` (cursor-agent's writes either
+    # block or vanish). The trade-off is that the child runs under
+    # the FastAPI worker process group, so a uvicorn reload kills
+    # the login flow — fine, since the user just clicks Re-Login
+    # again. On POSIX ``start_new_session=True`` is still set so a
+    # SIGHUP to the worker doesn't take the login process down with
+    # it on the common case.
+    start_new_session = os.name != "nt"
+    try:
+        proc = subprocess.Popen(  # noqa: S603 — args are server-controlled
+            [binary, "login"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL,
+            env=spawn_env,
+            bufsize=0,
+            shell=os.name == "nt",
+            start_new_session=start_new_session,
+        )
+    except (FileNotFoundError, OSError) as exc:
+        logger.exception("Failed to spawn cursor-agent login for %s", username)
+        raise RuntimeError(
+            f"Could not spawn cursor-agent: {exc}. Reinstall Cursor and retry.",
+        ) from exc
+    log_buf: list[bytes] = []
+    url = _read_until_url(proc, log_buf)
+    state: _LoginSessionState = {
+        "status": "in_progress",
+        "pid": proc.pid,
+        "binary": binary,
+        "started_at": __import__("time").time(),
+        "login_url": url,
+        "message": (
+            "Open the link in a new tab and sign in to your Cursor account."
+            if url else
+            "cursor-agent did not print a sign-in URL within the time budget."
+        ),
+        "_proc": proc,
+    }
+    if url is None:
+        # No URL — the spawn either crashed or output something we
+        # don't recognise. Bail out and surface the captured tail.
+        tail = b"".join(log_buf)[-1024:].decode("utf-8", errors="replace")
+        try:
+            proc.terminate()
+            proc.wait(timeout=2)
+        except (subprocess.TimeoutExpired, OSError):
+            try:
+                proc.kill()
+            except (OSError, ProcessLookupError):
+                pass
+        state["status"] = "failed"
+        state["message"] = (
+            "cursor-agent didn't print a sign-in URL. "
+            "Check the server logs for details."
+        )
+        state["error_tail"] = tail
+        with _LOGIN_SESSIONS_LOCK:
+            _LOGIN_SESSIONS[key] = state
+        return _login_session_snapshot(state)
+    # Spawn the completion-waiter thread so the cursor-agent process
+    # doesn't linger after the user finishes OAuth in their browser.
+    waiter = threading.Thread(
+        target=_wait_for_login_completion,
+        args=(username, proc, log_buf),
+        daemon=True,
+        name=f"cursor-login-wait-{key}",
+    )
+    state["_thread"] = waiter
+    state["_log_buf"] = log_buf
+    with _LOGIN_SESSIONS_LOCK:
+        _LOGIN_SESSIONS[key] = state
+    waiter.start()
+    return _login_session_snapshot(state)

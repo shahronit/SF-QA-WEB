@@ -278,10 +278,12 @@ async def cursor_status(user: dict = Depends(get_current_user)):
     UI shows "log in to Cursor" instead) when the slot has never been
     initialised so we never spawn a subprocess for a fresh account.
 
-    ``can_browser_login`` mirrors ``not _is_headless()`` — when False,
-    the Sidebar hides the "Log in to Cursor" button (which would just
-    fail silently on Render anyway) and surfaces the upload flow as
-    the only path to authentication.
+    ``can_browser_login`` reports whether the new browser-less login
+    flow is supported (Always ``True`` whenever a cursor-agent binary
+    is installed — the OAuth flow uses cursor.com opened in the
+    USER's browser, not the server's, so headless deployments work
+    identically to local-dev). ``is_headless`` is kept for diagnostic
+    purposes / UI copy hints.
 
     Returned shape (all keys always present so the client can render
     without null-checks):
@@ -296,7 +298,7 @@ async def cursor_status(user: dict = Depends(get_current_user)):
           "username":            str,    # echo of the caller for the UI
           "slot_initialized":    bool,   # has the user ever attempted login?
           "is_headless":         bool,   # server has no GUI session?
-          "can_browser_login":   bool,   # browser-spawn path is feasible?
+          "can_browser_login":   bool,   # OAuth-via-user-browser flow available?
         }
     """
     orch = get_orchestrator()
@@ -310,12 +312,21 @@ async def cursor_status(user: dict = Depends(get_current_user)):
             "username": username,
             "slot_initialized": slot_initialized,
             "is_headless": headless,
-            "can_browser_login": not headless,
+            # The new browser-less login flow works wherever the
+            # cursor-agent binary is installed — the OAuth tab opens
+            # in the USER's browser, not the server's, so headless
+            # is no longer a blocker. We only flip this to False when
+            # the binary itself is missing (handled below).
+            "can_browser_login": bool(binary),
         }
 
     if not binary:
         return {
             **_base(),
+            # When the binary is missing the browser-less flow can't
+            # run either — flip the flag so the UI offers the upload
+            # fallback instead.
+            "can_browser_login": False,
             "available": False,
             "logged_in": False,
             "binary": "",
@@ -363,23 +374,24 @@ async def cursor_status(user: dict = Depends(get_current_user)):
 
 @router.post("/cursor/login")
 async def cursor_login(user: dict = Depends(get_current_user)):
-    """Spawn ``cursor-agent login`` for the CALLING user.
+    """Start a browser-less ``cursor-agent login`` for the calling user.
 
-    The subprocess inherits the desktop session, so on a local-dev
-    install the OAuth tab opens in the operator's default browser
-    without blocking the HTTP request. ``HOME`` / ``USERPROFILE`` are
-    redirected to the caller's per-user slot so the resulting
-    ``auth.json`` lands in that slot — every user authenticates their
-    OWN Cursor account.
+    Spawns ``cursor-agent login`` with ``NO_OPEN_BROWSER=1`` and
+    captures the cursor.com sign-in URL it prints to stdout. The
+    subprocess keeps running in the background, polling cursor.com
+    until the user completes OAuth in their browser, at which point
+    ``auth.json`` lands in the user's slot and a background thread
+    auto-snapshots it to Firestore so the credentials survive a
+    Render restart.
 
-    Returns immediately with ``launched: true`` once the process is
-    spawned — the caller is expected to poll ``/cursor/status`` (or
-    just re-test an agent run) until ``logged_in`` flips to true.
+    The HTTP response returns IMMEDIATELY with the sign-in URL the
+    frontend should open in a new tab. The frontend then polls
+    ``GET /cursor/login-status`` every ~2 seconds until status flips
+    to ``success`` (or ``failed`` / ``cancelled`` / ``timeout``).
 
-    Headless deployments (Render et al.) can't open a browser; on
-    those hosts users would need an alternative (e.g. an upload form
-    for their own ``auth.json``) — not implemented here because this
-    app is overwhelmingly run on the operator's own workstation.
+    The same flow works on a developer laptop AND on headless Render
+    deployments — the user's browser is what completes the OAuth, not
+    the server's.
     """
     orch = get_orchestrator()
     binary = _resolve_cursor_binary(orch)
@@ -394,64 +406,64 @@ async def cursor_login(user: dict = Depends(get_current_user)):
         raise HTTPException(400, "Missing username on the auth token.")
     # Materialise the slot first so cursor-agent has a place to write
     # its auth.json. ``slot_for`` is idempotent so this is safe to
-    # call on every login.
+    # call on every login attempt.
     cursor_auth.slot_for(username)
-    # Detach the child so it survives this request and keeps its own
-    # window/handles for the OAuth browser dance. Without detaching,
-    # closing the FastAPI worker (e.g. on --reload) kills the login
-    # flow mid-handshake.
-    spawn_env = cursor_auth.env_for(username)
     try:
-        if os.name == "nt":
-            DETACHED_PROCESS = 0x00000008  # noqa: N806 — Win32 constant
-            CREATE_NEW_PROCESS_GROUP = 0x00000200  # noqa: N806
-            CREATE_NO_WINDOW = 0x08000000  # noqa: N806
-            creationflags = (
-                DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
-            )
-            popen = subprocess.Popen(  # noqa: S603 — args are server-controlled
-                [binary, "login"],
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                close_fds=False,
-                creationflags=creationflags,
-                env=spawn_env,
-            )
-        else:
-            popen = subprocess.Popen(  # noqa: S603 — args are server-controlled
-                [binary, "login"],
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                close_fds=True,
-                start_new_session=True,
-                env=spawn_env,
-            )
-    except FileNotFoundError as exc:
+        session = cursor_auth.start_login(username, binary)
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(500, str(exc)) from exc
+    logger.info(
+        "Started cursor-agent login for %s (pid=%s, status=%s, url=%s).",
+        username, session.get("pid"), session.get("status"),
+        bool(session.get("login_url")),
+    )
+    if session.get("status") == "failed":
+        # Bubble the captured tail back so the user sees the actual
+        # error instead of a generic 500.
         raise HTTPException(
             500,
-            f"Failed to spawn cursor-agent login: binary at {binary} vanished. "
-            "Reinstall Cursor and restart the server.",
-        ) from exc
-    except OSError as exc:
-        raise HTTPException(
-            500, f"Failed to spawn cursor-agent login: {exc}",
-        ) from exc
-    logger.info(
-        "Spawned cursor-agent login for %s (pid=%s, binary=%s, platform=%s).",
-        username, popen.pid, binary, sys.platform,
-    )
+            session.get("message")
+            or "cursor-agent failed to start the login flow.",
+        )
     return {
-        "launched": True,
-        "pid": popen.pid,
-        "binary": binary,
+        "status": session.get("status"),
+        "login_url": session.get("login_url"),
+        "message": session.get("message"),
+        "pid": session.get("pid"),
         "username": username,
-        "message": (
-            "Browser opened — complete the Cursor sign-in for YOUR account, "
-            "then come back here and click 'Re-check'."
-        ),
     }
+
+
+@router.get("/cursor/login-status")
+async def cursor_login_status(user: dict = Depends(get_current_user)):
+    """Return the state of the caller's in-flight cursor-agent login.
+
+    The frontend polls this every ~2s while the user is on the
+    cursor.com sign-in tab. Returns ``status: "idle"`` when no
+    session exists (either never started, or already cleaned up).
+    """
+    username = user.get("username") or ""
+    if not username:
+        raise HTTPException(400, "Missing username on the auth token.")
+    session = cursor_auth.get_login_session(username)
+    if session is None:
+        return {"status": "idle", "username": username}
+    session["username"] = username
+    return session
+
+
+@router.post("/cursor/login-cancel")
+async def cursor_login_cancel(user: dict = Depends(get_current_user)):
+    """Abort an in-flight cursor-agent login (the user closed the modal,
+    or wants to retry with a different account).
+
+    Idempotent — returning ``cancelled: false`` is informational.
+    """
+    username = user.get("username") or ""
+    if not username:
+        raise HTTPException(400, "Missing username on the auth token.")
+    cancelled = cursor_auth.cancel_login(username)
+    return {"cancelled": cancelled, "username": username}
 
 
 @router.post("/cursor/logout")
