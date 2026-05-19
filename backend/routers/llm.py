@@ -458,8 +458,11 @@ async def cursor_login(user: dict = Depends(get_current_user)):
 async def cursor_logout(user: dict = Depends(get_current_user)):
     """Wipe the caller's Cursor credential slot.
 
-    Idempotent — returning ``cleared=False`` when the slot didn't
-    exist is informational, not an error.
+    Clears BOTH the local slot AND the persistent snapshot (Firestore
+    or local JSON sidecar) — otherwise the next container restart
+    would silently re-hydrate the user back in via env_for's lazy
+    hydration. Idempotent: returns ``cleared=False`` when nothing
+    needed removing.
     """
     username = user.get("username") or ""
     if not username:
@@ -468,6 +471,23 @@ async def cursor_logout(user: dict = Depends(get_current_user)):
     if cleared:
         logger.info("Cleared cursor credentials for %s", username)
     return {"cleared": cleared, "username": username}
+
+
+@router.post("/cursor/persist")
+async def cursor_persist(user: dict = Depends(get_current_user)):
+    """Re-snapshot the caller's current slot into the persistent store.
+
+    Called by the Sidebar after the browser-login button on local-dev
+    completes, so any credentials cursor-agent just wrote get mirrored
+    to Firestore / the local sidecar and survive the next container
+    restart. Idempotent — safe to call on every Re-check too if we
+    want to be paranoid.
+    """
+    username = user.get("username") or ""
+    if not username:
+        raise HTTPException(400, "Missing username on the auth token.")
+    persisted = cursor_auth.persist_slot(username)
+    return {"persisted": persisted, "username": username}
 
 
 # Cap upload size to 2 MiB — a real cursor-agent auth.json is ~1 KB
@@ -548,6 +568,19 @@ async def cursor_upload_credentials(
         logger.exception("Failed to install cursor credentials for %s", username)
         raise HTTPException(
             500, "Failed to install credentials on the server. See logs.",
+        )
+
+    # Snapshot the fresh slot to the persistent store (Firestore or
+    # local JSON sidecar) so the upload survives Render's ephemeral
+    # filesystem. Best-effort: a persistence failure here just means
+    # the user might have to re-upload after the next restart, but
+    # the current session still works because the local slot is set.
+    try:
+        cursor_auth.persist_slot(username)
+    except Exception:  # noqa: BLE001
+        logger.exception(
+            "Persisted snapshot failed for %s; local slot is still set.",
+            username,
         )
 
     logger.info(

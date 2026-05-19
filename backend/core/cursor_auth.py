@@ -28,6 +28,8 @@ workstation.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import contextvars
 import json
 import logging
@@ -36,9 +38,12 @@ import re
 import shutil
 import subprocess
 import tarfile
+import threading
 import zipfile
 from io import BytesIO
 from pathlib import Path
+
+from core import firestore_db, secret_fields
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +115,14 @@ def env_for(
     so legacy server-global behaviour still works for callers that
     don't pass user context (e.g. discovery at boot).
 
+    Auto-hydrates the slot from the persistence store on first use
+    after a fresh container start — this is what makes uploaded
+    credentials survive Render's ephemeral filesystem. The hydration
+    is best-effort: failures log a warning but don't block the env
+    build, since cursor-agent will then correctly report
+    "authentication required" and the orchestrator will fall back to
+    Gemini.
+
     On Windows, ``HOMEDRIVE``/``HOMEPATH`` are set as a belt-and-braces
     fallback for libraries that read those instead of ``USERPROFILE``.
     """
@@ -117,6 +130,16 @@ def env_for(
     slot = slot_for(username)
     if slot is None:
         return env
+    # Lazy hydration: if the local slot doesn't have an auth.json
+    # (because the container is fresh / disk was wiped), try to
+    # restore from the persistent store before cursor-agent reads it.
+    try:
+        _maybe_hydrate_from_persistence(username, slot)
+    except Exception:  # noqa: BLE001 — never block the call path
+        logger.exception(
+            "cursor credential hydration failed for %s (continuing without).",
+            username,
+        )
     slot_str = str(slot)
     # Node's ``os.homedir()`` resolves ``USERPROFILE`` first on Windows
     # and ``HOME`` on POSIX. Set both so cursor-agent treats the slot
@@ -212,27 +235,6 @@ def discover_models_for(binary: str, username: str | None) -> list[str]:
             continue
         models.append(tok)
     return sorted(set(models))
-
-
-def clear_slot(username: str | None) -> bool:
-    """Delete the user's cursor credentials. Backs the logout endpoint.
-
-    Returns True when something was actually removed, False when the
-    slot didn't exist (idempotent — safe to call repeatedly).
-    """
-    if not username:
-        return False
-    slot = _DATA_DIR / _sanitize(username)
-    if not slot.exists():
-        return False
-    try:
-        shutil.rmtree(slot, ignore_errors=False)
-    except OSError:
-        logger.exception("Failed to fully clear cursor slot for %s", username)
-        # Best-effort: keep going so a partial cleanup still flips the
-        # status to "not logged in" on the next probe.
-        shutil.rmtree(slot, ignore_errors=True)
-    return True
 
 
 def slot_exists(username: str | None) -> bool:
@@ -415,3 +417,369 @@ def install_auth_archive(username: str | None, blob: bytes, filename: str) -> Pa
             username, members_extracted,
         )
     return target
+
+
+# ---------------------------------------------------------------------------
+# Persistence — survive Render's ephemeral filesystem
+# ---------------------------------------------------------------------------
+#
+# Render (and any other PaaS without a persistent disk attached) wipes
+# the container filesystem on every restart, redeploy, or idle
+# scale-down. Without a side-channel, every user would have to
+# re-upload their auth.json each time the container cycles — usually
+# multiple times a day on the free/starter plans.
+#
+# We solve that by snapshotting the user's ``.cursor/`` directory to:
+#
+#   * Firestore (collection ``cursor_credentials``, doc per user) when
+#     STORAGE_BACKEND=firestore — encrypted via secret_fields so the
+#     OAuth token never lands in plaintext at rest.
+#   * A local JSON sidecar (``data/cursor-auth/_persisted.json``) when
+#     STORAGE_BACKEND=local — same shape, different durable store.
+#
+# The snapshot is a dict { relative_path: base64(file_bytes) } so we
+# capture EVERY file inside ``.cursor/`` — some cursor-agent builds
+# need more than just auth.json (e.g. a refresh token cache).
+#
+# Hydration runs lazily from ``env_for`` whenever the local slot
+# misses ``.cursor/auth.json`` so the first cursor-agent call after a
+# restart re-materialises the credentials transparently. A per-user
+# lock prevents a thundering-herd of concurrent requests from racing
+# to write the same files.
+# ---------------------------------------------------------------------------
+
+_PERSIST_LOCAL_FILE = _DATA_DIR / "_persisted.json"
+# Per-user hydrate locks — prevents simultaneous requests from
+# racing to write the same .cursor/ contents during cold-start
+# fan-out. Keyed by sanitised username so the lock acquisition is
+# itself thread-safe via the dict.setdefault idiom.
+_HYDRATE_LOCKS: dict[str, threading.Lock] = {}
+_HYDRATE_LOCKS_GUARD = threading.Lock()
+# Per-user "we already tried to hydrate this slot during the current
+# container lifetime" flag — keeps env_for() cheap on hot paths
+# (every cursor-agent generate / stream call) by skipping the disk
+# probe + Firestore round-trip after the first miss.
+_HYDRATED_USERS: set[str] = set()
+
+
+def _hydrate_lock(username: str) -> threading.Lock:
+    """Return (or create) the per-user hydrate lock."""
+    key = _sanitize(username)
+    with _HYDRATE_LOCKS_GUARD:
+        lock = _HYDRATE_LOCKS.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _HYDRATE_LOCKS[key] = lock
+        return lock
+
+
+def _snapshot_slot(slot: Path) -> dict[str, str]:
+    """Return { relative_path: base64(contents) } for every file under
+    ``<slot>/.cursor/``.
+
+    Empty dict when the .cursor directory is empty — the caller treats
+    that as "no credentials to persist" and skips the write.
+    """
+    root = slot / ".cursor"
+    if not root.exists():
+        return {}
+    out: dict[str, str] = {}
+    for path in root.rglob("*"):
+        if not path.is_file():
+            continue
+        # Cap individual file size at 256 KiB — auth.json is ~1 KB
+        # so anything larger is almost certainly cache bloat we don't
+        # need to mirror. Keeps Firestore doc size well under the
+        # 1 MiB hard limit.
+        try:
+            size = path.stat().st_size
+        except OSError:
+            continue
+        if size > 256 * 1024:
+            logger.warning(
+                "Skipping %s (%d bytes) from persistence snapshot — over 256 KiB cap.",
+                path, size,
+            )
+            continue
+        try:
+            data = path.read_bytes()
+        except OSError:
+            continue
+        rel = path.relative_to(root).as_posix()
+        # Sanity: refuse any rel path that escapes (defensive — rglob
+        # under root shouldn't produce these, but a malicious symlink
+        # in the slot could).
+        if rel.startswith("/") or ".." in Path(rel).parts:
+            continue
+        out[rel] = base64.b64encode(data).decode("ascii")
+    return out
+
+
+def _materialise_snapshot(slot: Path, snapshot: dict[str, str]) -> int:
+    """Inverse of _snapshot_slot — write decoded bytes back to disk.
+
+    Returns the number of files written. Atomic per-file via temp +
+    rename so a concurrent reader (cursor-agent) never sees a
+    half-written auth.json.
+    """
+    if not snapshot:
+        return 0
+    root = slot / ".cursor"
+    root.mkdir(parents=True, exist_ok=True)
+    root_resolved = root.resolve()
+    written = 0
+    for rel, b64 in snapshot.items():
+        if not isinstance(rel, str) or not isinstance(b64, str):
+            continue
+        if rel.startswith("/") or ".." in Path(rel).parts:
+            continue
+        try:
+            data = base64.b64decode(b64, validate=True)
+        except (ValueError, binascii.Error):
+            # base64.b64decode raises binascii.Error on invalid input;
+            # ValueError covers other corruption modes.
+            logger.warning("Bad base64 in persisted snapshot key=%s; skipping.", rel)
+            continue
+        dest = (root / rel).resolve()
+        if not str(dest).startswith(str(root_resolved)):
+            logger.warning("Refusing path-traversal entry: %s", rel)
+            continue
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        tmp = dest.with_suffix(dest.suffix + ".tmp")
+        tmp.write_bytes(data)
+        tmp.replace(dest)
+        written += 1
+    return written
+
+
+def _local_load_all_persisted() -> dict[str, dict[str, str]]:
+    """Read the local JSON sidecar (or return {} when missing/corrupt)."""
+    if not _PERSIST_LOCAL_FILE.is_file():
+        return {}
+    try:
+        raw = json.loads(_PERSIST_LOCAL_FILE.read_text("utf-8"))
+    except (json.JSONDecodeError, OSError):
+        logger.exception("Persisted cursor-credentials file is unreadable.")
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    return raw
+
+
+def _local_save_all_persisted(data: dict[str, dict[str, str]]) -> None:
+    """Atomic-write the local JSON sidecar."""
+    _DATA_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = _PERSIST_LOCAL_FILE.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(data), encoding="utf-8")
+    tmp.replace(_PERSIST_LOCAL_FILE)
+
+
+def _persist_snapshot(username: str, snapshot: dict[str, str]) -> bool:
+    """Write a slot snapshot to whichever persistent store is configured.
+
+    The snapshot is wrapped as a single JSON blob and encrypted with
+    secret_fields so the OAuth token never lands in plaintext at rest
+    (Firestore + local-file paths both encrypted when an
+    ENCRYPTION_MASTER_KEY is set; otherwise stored as-is, mirroring
+    the rest of the user store).
+
+    Returns True on a successful write.
+    """
+    if not username:
+        return False
+    if not snapshot:
+        # Empty slot — nothing meaningful to persist. Treat as a
+        # no-op rather than writing an empty doc.
+        return False
+    key = _sanitize(username)
+    blob = json.dumps(snapshot, separators=(",", ":"))
+    encrypted = secret_fields.encrypt_secret(blob) or blob
+    payload = {
+        "username": username,
+        "blob": encrypted,
+        "files": sorted(snapshot.keys()),
+    }
+    try:
+        if firestore_db.is_enabled():
+            db = firestore_db.get_db()
+            db.collection(firestore_db.CURSOR_CREDENTIALS).document(key).set(payload)
+        else:
+            store = _local_load_all_persisted()
+            store[key] = payload
+            _local_save_all_persisted(store)
+    except Exception:  # noqa: BLE001
+        logger.exception(
+            "Failed to persist cursor credentials for %s.", username,
+        )
+        return False
+    logger.info(
+        "Persisted cursor credentials for %s (%d files, backend=%s).",
+        username, len(snapshot),
+        "firestore" if firestore_db.is_enabled() else "local",
+    )
+    return True
+
+
+def _load_persisted_snapshot(username: str) -> dict[str, str] | None:
+    """Inverse of _persist_snapshot — fetch the user's last-saved snapshot."""
+    if not username:
+        return None
+    key = _sanitize(username)
+    payload: dict | None = None
+    try:
+        if firestore_db.is_enabled():
+            db = firestore_db.get_db()
+            doc = db.collection(firestore_db.CURSOR_CREDENTIALS).document(key).get()
+            if doc.exists:
+                payload = doc.to_dict() or {}
+        else:
+            store = _local_load_all_persisted()
+            payload = store.get(key)
+    except Exception:  # noqa: BLE001
+        logger.exception(
+            "Failed to load persisted cursor credentials for %s.", username,
+        )
+        return None
+    if not payload:
+        return None
+    blob = payload.get("blob")
+    if not isinstance(blob, str) or not blob:
+        return None
+    decrypted = secret_fields.decrypt_secret(blob) or blob
+    try:
+        snapshot = json.loads(decrypted)
+    except json.JSONDecodeError:
+        logger.exception(
+            "Persisted cursor blob for %s is not valid JSON.", username,
+        )
+        return None
+    if not isinstance(snapshot, dict):
+        return None
+    return {k: v for k, v in snapshot.items() if isinstance(k, str) and isinstance(v, str)}
+
+
+def _delete_persisted_snapshot(username: str) -> bool:
+    """Wipe the user's persistent snapshot — called on logout."""
+    if not username:
+        return False
+    key = _sanitize(username)
+    try:
+        if firestore_db.is_enabled():
+            db = firestore_db.get_db()
+            db.collection(firestore_db.CURSOR_CREDENTIALS).document(key).delete()
+        else:
+            store = _local_load_all_persisted()
+            if key in store:
+                store.pop(key, None)
+                _local_save_all_persisted(store)
+    except Exception:  # noqa: BLE001
+        logger.exception(
+            "Failed to delete persisted cursor credentials for %s.", username,
+        )
+        return False
+    # Reset the per-process "already hydrated" marker so a subsequent
+    # upload + restart cycle re-hydrates correctly.
+    _HYDRATED_USERS.discard(key)
+    return True
+
+
+def persist_slot(username: str | None) -> bool:
+    """Snapshot the user's current slot to the persistence store.
+
+    Public entry point used by the upload + login routes after a
+    successful install. Idempotent — safe to call repeatedly.
+    """
+    if not username:
+        return False
+    slot = slot_for(username)
+    if slot is None:
+        return False
+    snapshot = _snapshot_slot(slot)
+    if not snapshot:
+        logger.info(
+            "persist_slot: %s slot is empty; nothing to persist.", username,
+        )
+        return False
+    return _persist_snapshot(username, snapshot)
+
+
+def _maybe_hydrate_from_persistence(username: str | None, slot: Path) -> bool:
+    """Re-materialise the user's .cursor/ from the persistence store
+    when the local slot has lost it (e.g. fresh container after a
+    Render restart).
+
+    Called from ``env_for`` on every cursor-agent invocation so the
+    first call after a restart silently recovers the user's seat.
+
+    Skipped on hot paths: once we've checked a user's slot during
+    this container's lifetime we don't probe again (tracked in
+    ``_HYDRATED_USERS``) — subsequent calls go straight to the env
+    build without disk / Firestore round-trips.
+    """
+    if not username:
+        return False
+    key = _sanitize(username)
+    if key in _HYDRATED_USERS:
+        return False
+    auth_file = slot / ".cursor" / "auth.json"
+    # Fast path: slot already has the file, nothing to do — mark
+    # hydrated so we don't probe again.
+    if auth_file.exists():
+        _HYDRATED_USERS.add(key)
+        return False
+    # Serialise concurrent hydration attempts for the same user — if
+    # ten requests fan out on cold start they should all wait while
+    # ONE materialises the snapshot.
+    with _hydrate_lock(username):
+        # Double-check after acquiring the lock — another thread may
+        # have just hydrated us.
+        if auth_file.exists():
+            _HYDRATED_USERS.add(key)
+            return False
+        snapshot = _load_persisted_snapshot(username)
+        if not snapshot:
+            # No persisted state — mark hydrated so we don't keep
+            # paying the lookup cost on every call. Re-attempts after
+            # a successful upload reset the flag via persist_slot.
+            _HYDRATED_USERS.add(key)
+            return False
+        written = _materialise_snapshot(slot, snapshot)
+        _HYDRATED_USERS.add(key)
+        if written:
+            logger.info(
+                "Hydrated cursor credentials for %s (%d files restored).",
+                username, written,
+            )
+            return True
+    return False
+
+
+def clear_slot(username: str | None) -> bool:  # noqa: F811 — overrides the simple definition above
+    """Wipe the user's cursor credentials from BOTH the local slot AND
+    the persistence store.
+
+    Re-declared here (overriding the earlier slot-only version) so
+    /cursor/logout, which calls this single function, also clears the
+    persistent copy — otherwise a logout followed by a container
+    restart would silently re-hydrate the user back in.
+
+    Returns True when something was actually removed in either store.
+    """
+    if not username:
+        return False
+    key = _sanitize(username)
+    # Reset the per-process hydration cache eagerly so a subsequent
+    # upload + restart re-runs the hydration path.
+    _HYDRATED_USERS.discard(key)
+    slot_removed = False
+    slot = _DATA_DIR / key
+    if slot.exists():
+        try:
+            shutil.rmtree(slot, ignore_errors=False)
+            slot_removed = True
+        except OSError:
+            logger.exception("Failed to fully clear cursor slot for %s", username)
+            shutil.rmtree(slot, ignore_errors=True)
+            slot_removed = True
+    persisted_removed = _delete_persisted_snapshot(username)
+    return slot_removed or persisted_removed
