@@ -25,3 +25,8 @@ knowledge_base/org_knowledge/*
 !knowledge_base/org_knowledge/.gitkeep
 knowledge_base/qa_standards/*
 !knowledge_base/qa_standards/.gitkeep
+# Stray Windows artifacts that PowerShell sub-processes write
+# relative to HOMEPATH when we redirect HOME/USERPROFILE for the
+# cursor-agent login flow (see backend/core/cursor_auth.py).
+backend/Microsoft/
+backend/AppData/

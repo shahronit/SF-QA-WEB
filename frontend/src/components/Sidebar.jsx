@@ -666,10 +666,15 @@ export default function Sidebar() {
                         <p className="text-[10px] text-amber-900/85 leading-snug">
                           If the browser sign-in can't reach cursor.com
                           from this server, upload the auth.json from a
-                          local Cursor install. On Windows it's at
-                          {' '}<code className="font-mono bg-white/70 px-1 rounded">%USERPROFILE%\.cursor\auth.json</code>,
-                          on Mac/Linux at
-                          {' '}<code className="font-mono bg-white/70 px-1 rounded">~/.cursor/auth.json</code>.
+                          local Cursor install. Current cursor-agent
+                          builds write it to its platform-specific
+                          app-data dir:
+                          {' '}<code className="font-mono bg-white/70 px-1 rounded">%APPDATA%\Cursor\auth.json</code> on Windows,
+                          {' '}<code className="font-mono bg-white/70 px-1 rounded">~/Library/Application Support/Cursor/auth.json</code> on macOS,
+                          {' '}<code className="font-mono bg-white/70 px-1 rounded">~/.config/Cursor/auth.json</code> on Linux.
+                          Older builds may still keep it under
+                          {' '}<code className="font-mono bg-white/70 px-1 rounded">~/.cursor/auth.json</code> —
+                          either file works.
                         </p>
                         <button
                           type="button"

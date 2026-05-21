@@ -515,28 +515,36 @@ async def cursor_upload_credentials(
     file: UploadFile = File(...),
     user: dict = Depends(get_current_user),
 ):
-    """Land a user-uploaded ``auth.json`` (or ``~/.cursor/`` tarball)
+    """Land a user-uploaded ``auth.json`` (or Cursor data-dir tarball)
     into the caller's per-user slot.
 
-    The workflow this unblocks is the ONLY way to authenticate on
-    headless deployments (Render etc.) where the browser-spawn login
-    route has nowhere to surface the OAuth tab:
+    Kept as an escape hatch for users who can't complete the browser
+    OAuth in the new tab (e.g. cursor.com blocked on their network)
+    or whose laptop already has a working seat they'd rather copy
+    across:
 
       1. On the user's own laptop: install Cursor, run
          ``cursor-agent login`` once, complete the browser OAuth.
-      2. Locate ``~/.cursor/auth.json`` (macOS / Linux) or
-         ``%USERPROFILE%\\.cursor\\auth.json`` (Windows).
+      2. Locate the resulting ``auth.json`` at the platform path:
+           * Windows : ``%APPDATA%\\Cursor\\auth.json``
+           * macOS   : ``~/Library/Application Support/Cursor/auth.json``
+           * Linux   : ``~/.config/Cursor/auth.json``
+         Older cursor-agent builds may still keep it at
+         ``~/.cursor/auth.json`` — both file paths are accepted.
       3. Upload that file via this endpoint — or, if cursor-agent
          needs more than the auth.json (e.g. a refresh-token cache),
-         pack the whole directory with
-         ``tar -C ~/.cursor -czf cursor-auth.tgz .`` and upload the
+         pack the whole Cursor data dir with
+         ``tar -C "<dir>" -czf cursor-auth.tgz .`` and upload the
          tarball.
 
-    Detected by file extension. ``.json`` is treated as auth.json;
-    ``.tgz`` / ``.tar.gz`` / ``.tar`` / ``.zip`` as a bundle to
-    extract into the slot's ``.cursor/`` directory. Anything else
-    falls back to JSON parsing so users who renamed the file still
-    get a useful error message.
+    Detected by file extension. ``.json`` is treated as auth.json
+    and is mirrored across every recognised slot location so the
+    running cursor-agent on this host finds it via its native path;
+    ``.tgz`` / ``.tar.gz`` / ``.tar`` / ``.zip`` is unpacked into
+    the slot's ``.cursor/`` directory with any extracted auth.json
+    also mirrored to the modern app-data path. Anything else falls
+    back to JSON parsing so users who renamed the file still get a
+    useful error message.
 
     Re-uploading replaces the existing slot atomically — no need to
     log out first.
