@@ -1,29 +1,51 @@
 """Per-user Cursor CLI credential management.
 
-The ``cursor-agent`` CLI authenticates by writing OAuth tokens into
-``~/.cursor/auth.json``. To give every QA Studio user their OWN Cursor
-seat, we redirect that directory per-user by overriding ``HOME``
-(POSIX) / ``USERPROFILE`` (Windows) in the subprocess environment.
-Each user gets a slot under ``backend/data/cursor-auth/<username>/``
-where their personal ``.cursor/`` lives.
+The ``cursor-agent`` CLI authenticates by writing OAuth tokens to its
+platform-conventional app-data directory:
+
+  * Windows : ``%APPDATA%\\Cursor\\auth.json``
+                (= ``C:\\Users\\<u>\\AppData\\Roaming\\Cursor\\auth.json``)
+  * macOS   : ``~/Library/Application Support/Cursor/auth.json``
+  * Linux   : ``$XDG_CONFIG_HOME/Cursor/auth.json``
+                (default ``~/.config/Cursor/auth.json``)
+
+Older builds also dropped files under ``~/.cursor/`` so we keep that
+location as a recognised secondary path for the auth probe + the
+auth.json-upload flow.
+
+To give every QA Studio user their OWN Cursor seat, we redirect those
+directories per-user by overriding ``HOME`` / ``USERPROFILE`` /
+``APPDATA`` / ``LOCALAPPDATA`` / ``XDG_CONFIG_HOME`` in the
+subprocess environment to point inside the user's slot at
+``backend/data/cursor-auth/<username>/``.
+
+The single most common bug here was forgetting to redirect ``APPDATA``
+on Windows: ``USERPROFILE`` redirection alone was NOT enough because
+Windows resolves ``%APPDATA%`` independently (not from
+``%USERPROFILE%\\AppData\\Roaming``). With the old code,
+``cursor-agent login`` happily wrote ``auth.json`` to the OS-user's
+real ``%APPDATA%`` while QA Studio kept looking for it under the slot
+— and surfaced "Sign-in didn't complete" even when the cursor-agent
+process had clearly logged in. The current code overrides APPDATA too
+and recognises the modern location as a first-class auth path.
 
 This module is the single source of truth for:
 
   * resolving the per-user slot path (``slot_for``),
   * building the subprocess env that points cursor-agent at it
     (``env_for``),
+  * detecting where cursor-agent dropped ``auth.json`` after a fresh
+    login (``_auth_paths_for_slot``),
   * a contextvar-based "current cursor user" so providers running
     under ``orch.run_agent(username=...)`` automatically pick up the
     right credentials without changing the ``LLMProvider`` protocol
     signature.
 
-Multi-user prod note: this design assumes the OAuth browser opens on
-the server host (i.e. local-dev where the operator IS the user). For
-headless deployments (e.g. Render) where the operator can't click in
-the server's browser, users need an alternative such as uploading
-their own ``auth.json`` — that path is intentionally not implemented
-here because the bulk of this app runs on the operator's own
-workstation.
+Multi-user prod note: the browser-less login flow (the Sidebar's
+Re-Login button) works on every platform because the OAuth tab opens
+in the USER's browser, not the server's. The headless deployment
+escape hatch (auth.json upload) is implemented below — see
+``install_auth_json`` / ``install_auth_archive``.
 """
 
 from __future__ import annotations
@@ -37,6 +59,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tarfile
 import threading
 import zipfile
@@ -98,6 +121,48 @@ def _sanitize(username: str) -> str:
     return cleaned[:64] or "user"
 
 
+def _cursor_data_subpath() -> str:
+    """Slot-relative path of the directory that contains ``Cursor/auth.json``.
+
+    Mirrors Electron's ``app.getPath('appData')`` semantics — that's
+    where ``cursor-agent`` writes its OAuth tokens after a fresh login
+    on the current OS:
+
+      * Windows : ``AppData/Roaming``         (relative to ``%APPDATA%``)
+      * macOS   : ``Library/Application Support``
+      * Linux   : ``.config``                 (relative to ``$XDG_CONFIG_HOME``
+                                               which defaults to ``~/.config``)
+
+    cursor-agent itself appends ``Cursor/auth.json`` so the full
+    per-slot path becomes ``<slot>/<this>/Cursor/auth.json``.
+    """
+    if os.name == "nt":
+        return "AppData/Roaming"
+    if sys.platform == "darwin":
+        return "Library/Application Support"
+    return ".config"
+
+
+def _auth_paths_for_slot(slot: Path) -> list[Path]:
+    """Every plausible ``auth.json`` location inside ``slot``.
+
+    The first entry is the *modern* OS-specific path that
+    ``cursor-agent login`` writes on the current host. The second is
+    the legacy ``~/.cursor/auth.json`` path — kept as a fallback so:
+
+      * older cursor-agent builds (which DID write there) keep working,
+      * the auth.json-upload flow that historically landed files at
+        the legacy path still satisfies the "is the user signed in?"
+        probe even after the upgrade,
+      * cross-OS slot snapshots (e.g. uploaded from a Windows laptop,
+        hydrated on a Render Linux container) keep working.
+    """
+    return [
+        slot / _cursor_data_subpath() / "Cursor" / "auth.json",
+        slot / ".cursor" / "auth.json",
+    ]
+
+
 def slot_for(username: str | None) -> Path | None:
     """Return the credential slot for ``username``, creating it on first use.
 
@@ -105,15 +170,19 @@ def slot_for(username: str | None) -> Path | None:
     back to the server-global ``cursor-agent`` install (mostly useful
     for the boot-time model discovery probe which has no logged-in
     user yet).
+
+    Pre-creates BOTH the legacy ``.cursor/`` subdir AND the modern
+    ``<cursor-data-subpath>/Cursor/`` subdir so cursor-agent's first
+    write doesn't trip on missing parent directories — the binary
+    expects the parent of its target ``auth.json`` to already exist
+    on some platforms.
     """
     if not username:
         return None
     slot = _DATA_DIR / _sanitize(username)
     slot.mkdir(parents=True, exist_ok=True)
-    # Pre-create the ``.cursor`` subdir so cursor-agent's auth.json
-    # write doesn't trip on missing parents the very first time we
-    # run it.
     (slot / ".cursor").mkdir(parents=True, exist_ok=True)
+    (slot / _cursor_data_subpath() / "Cursor").mkdir(parents=True, exist_ok=True)
     return slot
 
 
@@ -135,8 +204,19 @@ def env_for(
     "authentication required" and the orchestrator will fall back to
     Gemini.
 
-    On Windows, ``HOMEDRIVE``/``HOMEPATH`` are set as a belt-and-braces
-    fallback for libraries that read those instead of ``USERPROFILE``.
+    Per-platform overrides (so the auth.json path cursor-agent writes
+    to actually lands inside the slot):
+
+      * Windows : ``USERPROFILE`` + ``HOMEDRIVE``/``HOMEPATH`` (for
+        libs that read those) + ``APPDATA``/``LOCALAPPDATA`` (where
+        cursor-agent ACTUALLY writes ``auth.json`` — Windows resolves
+        ``%APPDATA%`` independently of ``%USERPROFILE%`` so just
+        redirecting the latter was not enough).
+      * macOS   : ``HOME``  (``Library/Application Support`` is
+        derived from ``HOME`` natively).
+      * Linux   : ``HOME`` + ``XDG_CONFIG_HOME`` (the latter is set
+        explicitly because operators sometimes customise it to point
+        outside ``$HOME``, which would defeat the slot redirection).
     """
     env = dict(base_env if base_env is not None else os.environ)
     slot = slot_for(username)
@@ -165,6 +245,23 @@ def env_for(
         if sep:
             env["HOMEDRIVE"] = drive + ":"
             env["HOMEPATH"] = rest or "\\"
+        # Critical: cursor-agent persists auth.json under
+        # ``%APPDATA%\Cursor\``, NOT ``~/.cursor\``. Without this
+        # redirect the freshly-written tokens leak into the OS-user's
+        # real %APPDATA%, the per-slot probe never sees them, and the
+        # UI shows "Sign-in didn't complete" even when the browser
+        # OAuth has obviously succeeded.
+        env["APPDATA"] = str(slot / "AppData" / "Roaming")
+        env["LOCALAPPDATA"] = str(slot / "AppData" / "Local")
+    else:
+        # Linux: ``cursor-agent`` reads $XDG_CONFIG_HOME (defaulting to
+        # ``~/.config``) for the Cursor sub-tree. Set it explicitly so
+        # operators who've remapped XDG dirs elsewhere don't bypass
+        # the slot redirection. On macOS the default location lives
+        # under ``$HOME/Library/Application Support`` which is already
+        # redirected by the ``HOME`` override above, so we don't need
+        # an extra var there.
+        env["XDG_CONFIG_HOME"] = str(slot / ".config")
     return env
 
 
@@ -252,10 +349,17 @@ def discover_models_for(binary: str, username: str | None) -> list[str]:
 def slot_exists(username: str | None) -> bool:
     """Cheap existence check used by /cursor/status to avoid a subprocess
     spawn for users who've never even attempted login.
+
+    True iff the per-user slot directory itself exists — covers both
+    the legacy ``.cursor/`` subdir and the modern OS-specific
+    ``AppData/Roaming/Cursor`` (Windows) /
+    ``Library/Application Support/Cursor`` (macOS) /
+    ``.config/Cursor`` (Linux) layouts that ``slot_for`` pre-creates
+    on the first login attempt.
     """
     if not username:
         return False
-    return (_DATA_DIR / _sanitize(username) / ".cursor").exists()
+    return (_DATA_DIR / _sanitize(username)).exists()
 
 
 # ---------------------------------------------------------------------------
@@ -287,7 +391,17 @@ def install_auth_json(username: str | None, blob: bytes) -> Path:
     run). Writes via a temp file + atomic rename so a half-uploaded
     request can't replace a previously-working auth file with junk.
 
-    Returns the final path of ``auth.json`` for logging convenience.
+    Lands the file at EVERY candidate path returned by
+    ``_auth_paths_for_slot`` so:
+
+      * cursor-agent on the running OS finds it via the modern
+        (Windows / macOS / Linux) app-data path,
+      * the legacy ``.cursor/auth.json`` location is also populated
+        so cross-OS hydration (e.g. credentials uploaded from a
+        Windows laptop, then mounted into a Linux container) still
+        works.
+
+    Returns the modern (OS-specific) path for logging convenience.
     Raises ``ValueError`` on any validation failure so the caller can
     surface a 400 to the client.
     """
@@ -298,14 +412,17 @@ def install_auth_json(username: str | None, blob: bytes) -> Path:
     except UnicodeDecodeError as exc:
         raise ValueError(
             "Uploaded file is not valid UTF-8 text. If you exported a "
-            "tarball of ~/.cursor, upload it as .tgz instead.",
+            "tarball of ~/.cursor or %APPDATA%\\Cursor, upload it as "
+            ".tgz instead.",
         ) from exc
     try:
         parsed = json.loads(decoded)
     except json.JSONDecodeError as exc:
         raise ValueError(
             f"Uploaded file isn't valid JSON: {exc.msg} (line {exc.lineno}). "
-            "Make sure you uploaded the auth.json file from ~/.cursor/.",
+            "Make sure you uploaded the auth.json file from your local "
+            "Cursor install (see the upload hint in the sidebar for the "
+            "OS-specific path).",
         ) from exc
     if not isinstance(parsed, dict):
         raise ValueError(
@@ -315,15 +432,21 @@ def install_auth_json(username: str | None, blob: bytes) -> Path:
     slot = slot_for(username)
     if slot is None:
         raise ValueError("Could not create the per-user credential slot.")
-    auth_path = slot / ".cursor" / "auth.json"
-    auth_path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = auth_path.with_suffix(".json.tmp")
     # Round-trip through json.dumps so we strip any trailing junk and
     # land a canonical representation (matches what `cursor-agent
     # login` would have written natively).
-    tmp_path.write_text(json.dumps(parsed), encoding="utf-8")
-    tmp_path.replace(auth_path)
-    return auth_path
+    canonical = json.dumps(parsed)
+    primary: Path | None = None
+    for auth_path in _auth_paths_for_slot(slot):
+        auth_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = auth_path.with_suffix(".json.tmp")
+        tmp_path.write_text(canonical, encoding="utf-8")
+        tmp_path.replace(auth_path)
+        if primary is None:
+            primary = auth_path
+    if primary is None:  # defensive — _auth_paths_for_slot always returns ≥1
+        raise ValueError("No auth.json target paths resolved for the slot.")
+    return primary
 
 
 def _is_safe_archive_member(name: str) -> bool:
@@ -417,15 +540,38 @@ def install_auth_archive(username: str | None, blob: bytes, filename: str) -> Pa
     if members_extracted == 0:
         raise ValueError(
             "Archive extracted no files. Make sure you packed the "
-            "contents of ~/.cursor/ (not the parent dir).",
+            "contents of ~/.cursor/ (or %APPDATA%\\Cursor\\), not the "
+            "parent dir.",
         )
-    if not (target / "auth.json").exists():
-        # Don't fail — some seats may store auth under a different
-        # filename — but warn so the caller can surface a hint if
-        # cursor-agent still reports "not authenticated".
+    # Mirror the freshly-extracted ``auth.json`` (if any) into EVERY
+    # known auth path so the running OS's cursor-agent can find it via
+    # the modern app-data location, even when the user uploaded a
+    # tarball produced on a different OS.
+    extracted_auth = target / "auth.json"
+    if extracted_auth.exists():
+        try:
+            canonical_blob = extracted_auth.read_bytes()
+            for dest in _auth_paths_for_slot(slot):
+                if dest == extracted_auth:
+                    continue
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                tmp = dest.with_suffix(dest.suffix + ".tmp")
+                tmp.write_bytes(canonical_blob)
+                tmp.replace(dest)
+        except OSError:
+            logger.exception(
+                "Failed to mirror archive auth.json across slot paths for %s",
+                username,
+            )
+    elif not any(p.exists() for p in _auth_paths_for_slot(slot)):
+        # No auth.json at the legacy archive root AND none of the
+        # canonical slot locations either — warn so the caller can
+        # surface a hint if cursor-agent still reports "not
+        # authenticated".
         logger.warning(
-            "Archive upload for %s extracted %d files but no auth.json — "
-            "cursor-agent may still report 'not authenticated'.",
+            "Archive upload for %s extracted %d files but no auth.json "
+            "landed at any recognised location — cursor-agent may still "
+            "report 'not authenticated'.",
             username, members_extracted,
         )
     return target
@@ -441,7 +587,7 @@ def install_auth_archive(username: str | None, blob: bytes, filename: str) -> Pa
 # re-upload their auth.json each time the container cycles — usually
 # multiple times a day on the free/starter plans.
 #
-# We solve that by snapshotting the user's ``.cursor/`` directory to:
+# We solve that by snapshotting the user's slot to:
 #
 #   * Firestore (collection ``cursor_credentials``, doc per user) when
 #     STORAGE_BACKEND=firestore — encrypted via secret_fields so the
@@ -449,15 +595,19 @@ def install_auth_archive(username: str | None, blob: bytes, filename: str) -> Pa
 #   * A local JSON sidecar (``data/cursor-auth/_persisted.json``) when
 #     STORAGE_BACKEND=local — same shape, different durable store.
 #
-# The snapshot is a dict { relative_path: base64(file_bytes) } so we
-# capture EVERY file inside ``.cursor/`` — some cursor-agent builds
-# need more than just auth.json (e.g. a refresh token cache).
+# The snapshot is a dict { slot_relative_path: base64(file_bytes) } so
+# we capture every file inside BOTH the legacy ``.cursor/`` dir AND
+# the modern OS-specific Cursor data dir (e.g.
+# ``AppData/Roaming/Cursor/`` on Windows). Some cursor-agent builds
+# need more than just auth.json (e.g. a refresh-token cache, the
+# statsig client state) — capturing both roots makes us tolerant of
+# whichever layout the running build happens to use.
 #
 # Hydration runs lazily from ``env_for`` whenever the local slot
-# misses ``.cursor/auth.json`` so the first cursor-agent call after a
-# restart re-materialises the credentials transparently. A per-user
-# lock prevents a thundering-herd of concurrent requests from racing
-# to write the same files.
+# misses every recognised ``auth.json`` location so the first
+# cursor-agent call after a restart re-materialises the credentials
+# transparently. A per-user lock prevents a thundering-herd of
+# concurrent requests from racing to write the same files.
 # ---------------------------------------------------------------------------
 
 _PERSIST_LOCAL_FILE = _DATA_DIR / "_persisted.json"
@@ -485,50 +635,94 @@ def _hydrate_lock(username: str) -> threading.Lock:
         return lock
 
 
-def _snapshot_slot(slot: Path) -> dict[str, str]:
-    """Return { relative_path: base64(contents) } for every file under
-    ``<slot>/.cursor/``.
+def _snapshot_roots(slot: Path) -> list[tuple[Path, str]]:
+    """Directories under *slot* whose contents we capture in a snapshot.
 
-    Empty dict when the .cursor directory is empty — the caller treats
-    that as "no credentials to persist" and skips the write.
+    Returns a list of ``(root, key_prefix)`` pairs. ``key_prefix`` is
+    the path the snapshot keys use so we can rebuild the full slot
+    layout on hydration:
+
+      * the modern OS-specific Cursor data dir
+        (``AppData/Roaming/Cursor`` on Windows etc.),
+      * the legacy ``.cursor/`` directory (for uploaded credentials
+        and the various ``agent-cli-state.json`` / ``cli-config.json``
+        files cursor-agent has historically written there).
     """
-    root = slot / ".cursor"
-    if not root.exists():
-        return {}
+    modern_prefix = f"{_cursor_data_subpath()}/Cursor"
+    return [
+        (slot / modern_prefix, modern_prefix),
+        (slot / ".cursor", ".cursor"),
+    ]
+
+
+def _snapshot_slot(slot: Path) -> dict[str, str]:
+    """Return { slot_relative_path: base64(contents) } for every file in
+    the snapshot roots under ``slot``.
+
+    Empty dict when both roots are empty (or non-existent) — the
+    caller treats that as "no credentials to persist" and skips the
+    write.
+
+    Snapshot keys are recorded relative to the SLOT ROOT (so e.g.
+    ``.cursor/auth.json`` or ``AppData/Roaming/Cursor/auth.json``).
+    The materialiser below knows how to translate legacy
+    relative-to-``.cursor`` keys (no slash, no prefix) so existing
+    persisted snapshots still hydrate cleanly after this upgrade.
+    """
     out: dict[str, str] = {}
-    for path in root.rglob("*"):
-        if not path.is_file():
+    for root, prefix in _snapshot_roots(slot):
+        if not root.exists():
             continue
-        # Cap individual file size at 256 KiB — auth.json is ~1 KB
-        # so anything larger is almost certainly cache bloat we don't
-        # need to mirror. Keeps Firestore doc size well under the
-        # 1 MiB hard limit.
-        try:
-            size = path.stat().st_size
-        except OSError:
-            continue
-        if size > 256 * 1024:
-            logger.warning(
-                "Skipping %s (%d bytes) from persistence snapshot — over 256 KiB cap.",
-                path, size,
-            )
-            continue
-        try:
-            data = path.read_bytes()
-        except OSError:
-            continue
-        rel = path.relative_to(root).as_posix()
-        # Sanity: refuse any rel path that escapes (defensive — rglob
-        # under root shouldn't produce these, but a malicious symlink
-        # in the slot could).
-        if rel.startswith("/") or ".." in Path(rel).parts:
-            continue
-        out[rel] = base64.b64encode(data).decode("ascii")
+        for path in root.rglob("*"):
+            if not path.is_file():
+                continue
+            # Cap individual file size at 256 KiB — auth.json is ~1 KB
+            # so anything larger is almost certainly cache bloat we don't
+            # need to mirror. Keeps Firestore doc size well under the
+            # 1 MiB hard limit.
+            try:
+                size = path.stat().st_size
+            except OSError:
+                continue
+            if size > 256 * 1024:
+                logger.warning(
+                    "Skipping %s (%d bytes) from persistence snapshot — over 256 KiB cap.",
+                    path, size,
+                )
+                continue
+            try:
+                data = path.read_bytes()
+            except OSError:
+                continue
+            rel_in_root = path.relative_to(root).as_posix()
+            key = f"{prefix}/{rel_in_root}"
+            # Sanity: refuse any rel path that escapes (defensive — rglob
+            # under root shouldn't produce these, but a malicious symlink
+            # in the slot could).
+            if key.startswith("/") or ".." in Path(key).parts:
+                continue
+            out[key] = base64.b64encode(data).decode("ascii")
     return out
 
 
 def _materialise_snapshot(slot: Path, snapshot: dict[str, str]) -> int:
-    """Inverse of _snapshot_slot — write decoded bytes back to disk.
+    """Inverse of ``_snapshot_slot`` — write decoded bytes back to disk.
+
+    Handles both:
+
+      * new-format keys (relative to the slot — e.g.
+        ``.cursor/auth.json`` or
+        ``AppData/Roaming/Cursor/auth.json``),
+      * legacy-format keys (just a filename relative to ``.cursor/``,
+        as written by the pre-Apr-2026 snapshot code).
+
+    Legacy keys are detected by the absence of any path separator
+    AND the absence of a ``.cursor`` / app-data prefix, and rewritten
+    to live under ``.cursor/`` so post-upgrade hydration produces the
+    same layout the snapshot was taken from. After restoring legacy
+    keys we ALSO mirror ``.cursor/auth.json`` (if present) into the
+    current OS's modern Cursor data dir so a freshly-hydrated user
+    can sign in without re-uploading on the new layout.
 
     Returns the number of files written. Atomic per-file via temp +
     rename so a concurrent reader (cursor-agent) never sees a
@@ -536,31 +730,66 @@ def _materialise_snapshot(slot: Path, snapshot: dict[str, str]) -> int:
     """
     if not snapshot:
         return 0
-    root = slot / ".cursor"
-    root.mkdir(parents=True, exist_ok=True)
-    root_resolved = root.resolve()
+    slot.mkdir(parents=True, exist_ok=True)
+    slot_resolved = slot.resolve()
     written = 0
-    for rel, b64 in snapshot.items():
-        if not isinstance(rel, str) or not isinstance(b64, str):
+    saw_modern_auth = False
+    for raw_key, b64 in snapshot.items():
+        if not isinstance(raw_key, str) or not isinstance(b64, str):
             continue
-        if rel.startswith("/") or ".." in Path(rel).parts:
+        # Normalise Windows-style separators to POSIX, but otherwise
+        # leave the key untouched for the traversal checks below.
+        key = raw_key.replace("\\", "/")
+        # Legacy snapshot keys are a bare relative-to-``.cursor/`` path
+        # (e.g. ``auth.json`` or ``state/foo.json``). They never start
+        # with ``.cursor/`` or the platform app-data prefix because
+        # the old snapshotter scanned ``<slot>/.cursor/`` directly.
+        # Detect them by checking if the key matches a known prefix —
+        # if not, treat as legacy.
+        modern_prefix = f"{_cursor_data_subpath()}/Cursor/"
+        if not (key.startswith(".cursor/") or key.startswith(modern_prefix)):
+            key = f".cursor/{key}"
+        if key.startswith("/") or ".." in Path(key).parts:
+            logger.warning("Refusing path-traversal entry: %s", raw_key)
             continue
         try:
             data = base64.b64decode(b64, validate=True)
         except (ValueError, binascii.Error):
             # base64.b64decode raises binascii.Error on invalid input;
             # ValueError covers other corruption modes.
-            logger.warning("Bad base64 in persisted snapshot key=%s; skipping.", rel)
+            logger.warning("Bad base64 in persisted snapshot key=%s; skipping.", raw_key)
             continue
-        dest = (root / rel).resolve()
-        if not str(dest).startswith(str(root_resolved)):
-            logger.warning("Refusing path-traversal entry: %s", rel)
+        dest = (slot / key).resolve()
+        if not str(dest).startswith(str(slot_resolved)):
+            logger.warning("Refusing path-traversal entry: %s", raw_key)
             continue
         dest.parent.mkdir(parents=True, exist_ok=True)
         tmp = dest.with_suffix(dest.suffix + ".tmp")
         tmp.write_bytes(data)
         tmp.replace(dest)
         written += 1
+        if key == f"{modern_prefix}auth.json":
+            saw_modern_auth = True
+    # Cross-OS portability: if the snapshot only contained the legacy
+    # ``.cursor/auth.json`` (typical for snapshots taken before the
+    # APPDATA-redirection fix), ALSO mirror it into the current OS's
+    # modern Cursor data dir so the running cursor-agent finds it
+    # without an extra re-upload step.
+    if not saw_modern_auth:
+        legacy_auth = slot / ".cursor" / "auth.json"
+        modern_auth = slot / _cursor_data_subpath() / "Cursor" / "auth.json"
+        if legacy_auth.exists() and not modern_auth.exists():
+            try:
+                modern_auth.parent.mkdir(parents=True, exist_ok=True)
+                tmp = modern_auth.with_suffix(modern_auth.suffix + ".tmp")
+                tmp.write_bytes(legacy_auth.read_bytes())
+                tmp.replace(modern_auth)
+                written += 1
+            except OSError:
+                logger.exception(
+                    "Failed to mirror legacy auth.json into modern Cursor "
+                    "data dir after hydration (slot=%s).", slot,
+                )
     return written
 
 
@@ -733,10 +962,10 @@ def _maybe_hydrate_from_persistence(username: str | None, slot: Path) -> bool:
     key = _sanitize(username)
     if key in _HYDRATED_USERS:
         return False
-    auth_file = slot / ".cursor" / "auth.json"
-    # Fast path: slot already has the file, nothing to do — mark
-    # hydrated so we don't probe again.
-    if auth_file.exists():
+    auth_files = _auth_paths_for_slot(slot)
+    # Fast path: slot already has at least one recognised auth.json,
+    # nothing to do — mark hydrated so we don't probe again.
+    if any(p.exists() for p in auth_files):
         _HYDRATED_USERS.add(key)
         return False
     # Serialise concurrent hydration attempts for the same user — if
@@ -745,7 +974,7 @@ def _maybe_hydrate_from_persistence(username: str | None, slot: Path) -> bool:
     with _hydrate_lock(username):
         # Double-check after acquiring the lock — another thread may
         # have just hydrated us.
-        if auth_file.exists():
+        if any(p.exists() for p in auth_files):
             _HYDRATED_USERS.add(key)
             return False
         snapshot = _load_persisted_snapshot(username)
@@ -976,10 +1205,21 @@ def _wait_for_login_completion(
     except (OSError, ValueError):
         pass
     slot = slot_for(username)
-    auth_landed = slot is not None and (slot / ".cursor" / "auth.json").exists()
+    # cursor-agent writes ``auth.json`` to its OS-specific app-data
+    # directory (``%APPDATA%\Cursor`` on Windows etc.) — see
+    # ``_auth_paths_for_slot`` for the full list. Recognise EITHER the
+    # modern OR the legacy location so the success path doesn't
+    # falsely report "Sign-in didn't complete" while the freshly-
+    # written tokens sit at the new path.
+    auth_landed = slot is not None and any(
+        p.exists() for p in _auth_paths_for_slot(slot)
+    )
     if rc == 0 and auth_landed:
         # Mirror the freshly-written auth.json into Firestore /
         # local sidecar so the next container restart can re-hydrate.
+        # ``persist_slot`` walks both the modern + legacy auth paths
+        # via ``_snapshot_roots`` so wherever cursor-agent actually
+        # landed the file gets captured.
         try:
             persist_slot(username)
         except Exception:  # noqa: BLE001
