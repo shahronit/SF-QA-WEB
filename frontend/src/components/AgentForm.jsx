@@ -347,10 +347,10 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
   const setSelectedProject = setQaProjectSlug
   const [linkedAgent, setLinkedAgent] = useState('')
   const [showLinkedPreview, setShowLinkedPreview] = useState(false)
-  // Per-session, per-device override for the system prompt. Only the Test
-  // Case Development agent currently surfaces a UI to set this; the
-  // override is stored in localStorage by CustomPromptEditor and shipped
-  // on every request while the toggle is ON.
+  // Per-session, per-device override for the system prompt. Every
+  // agent surfaces the Customize System Prompt editor below; the
+  // override is stored in localStorage by CustomPromptEditor and
+  // shipped on every request while the toggle is ON.
   const [systemPromptOverride, setSystemPromptOverride] = useState(null)
   // Past-session results pulled from /history when no in-session results exist.
   // Each entry mirrors the in-session shape ({name, label, content, timestamp}).
@@ -1144,16 +1144,6 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
           unified multi-token "Jira tickets" quick-fetch input rendered
           inside the primary card below. */}
 
-      {/* Test Case Development users can override the system prompt for
-          their session. Persisted to localStorage; the default prompt on
-          disk is never modified. Other agents stay untouched. */}
-      {agentName === 'testcase' && (
-        <CustomPromptEditor
-          agentName={agentName}
-          onChange={setSystemPromptOverride}
-        />
-      )}
-
       {/* ---- Unified PRIMARY card ----------------------------------------
            This is the redesigned "Jira tickets + one Context box" surface
            shared by every agent. It contains:
@@ -1170,8 +1160,15 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
                 for most agents, prominently rendered.
            Every other declared field — required or optional — moves into
            the Advanced details disclosure below the Generate button.
+
+           The grid wrapper places the PRIMARY card on the left (2/3
+           width on lg+) and the Customize System Prompt editor as a
+           sticky right rail (1/3 width). Below the lg breakpoint the
+           grid collapses to a single column so the editor stacks
+           under the primary card.
       ----------------------------------------------------------------- */}
-      <div className="toon-card !p-4 space-y-4">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+      <div className="lg:col-span-2 toon-card !p-4 space-y-4">
         {/* Jira multi-token fetch row */}
         <div>
           <div className="flex items-center gap-3">
@@ -1295,6 +1292,21 @@ export default function AgentForm({ agentName, fields, sheetTitle, extraInput = 
             This agent has no primary input declared. Open Advanced details below to fill the form.
           </div>
         )}
+      </div>
+
+      {/* Customize System Prompt — right rail. Sticky on lg+ so it
+          follows the user as they scroll batch previews and output;
+          stacks under the primary card on narrower viewports. The
+          default prompt is fetched per (agent, qa_mode) and the draft
+          persists to localStorage — the same key the QA Test Artifacts
+          page reads, so a customization done on one surface applies on
+          the other. The default prompt on disk is never modified. */}
+      <div className="lg:col-span-1 self-start lg:sticky lg:top-4">
+        <CustomPromptEditor
+          agentName={agentName}
+          onChange={setSystemPromptOverride}
+        />
+      </div>
       </div>
 
       {/* ---- Advanced details disclosure --------------------------------

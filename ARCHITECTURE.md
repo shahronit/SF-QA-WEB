@@ -2,7 +2,7 @@
 
 QA Studio is a **single-process** web app: FastAPI serves both the JSON API under `/api/*` and the pre-built React SPA from `backend/static/`. There is no separate web server in production — `start.bat` (or the Docker image) launches Uvicorn on port `8080`, and that's the whole deployment surface.
 
-This document covers what's on `dev` (and merging into `master`) as of April 2026.
+This document covers what's on `dev2` (and merging into `master`) as of May 2026.
 
 > Companion docs:
 >
@@ -162,7 +162,7 @@ flowchart TB
     JConn["JiraConnector.jsx"]
     JBug["JiraBugPush.jsx<br/>(bug_report only)"]
     TmPush["TestManagementPush.jsx<br/>(testcase only)"]
-    CPE["CustomPromptEditor.jsx<br/>(testcase only)"]
+    CPE["CustomPromptEditor.jsx<br/>(every agent + QA Artifacts tab)"]
     Report["ReportPanel.jsx + exports"]
   end
 
@@ -198,9 +198,29 @@ flowchart TB
    - Project Context (RAG) card
    - Link Previous Agent Output card *(hidden on `requirement`; that card spans full width)*
 3. **Import from Jira** picker (when connected). On `test_plan` only it switches to multi-select + "Use entire sprint as scope".
-4. **Customize System Prompt** card — `testcase` agent only.
-5. Primary input fields (per-agent).
+4. **PRIMARY + Custom Prompt grid** (`grid-cols-1 lg:grid-cols-3`) — every agent:
+   - **PRIMARY card** (`lg:col-span-2`) — Jira multi-token fetch, batch preview, single primary `Context` textarea.
+   - **Customize System Prompt** (`lg:col-span-1 self-start lg:sticky lg:top-4`) — sticky right rail; default prompt fetched per `(agent, qa_mode)`; the override persists to `localStorage["qa-studio:custom-prompt:<agent>:<qa_mode>"]` and is shipped on every request as `system_prompt_override` while the toggle is ON. The same slot is shared with the QA Artifacts page.
+5. **Advanced details** disclosure (non-primary required + optional fields).
 6. Generate button → SSE stream → `ReportPanel` with exports + (on `bug_report`) `JiraBugPush` + (on `testcase`) `TestManagementPush`.
+
+### `QATestArtifacts` per-tab layout
+
+Each `QuickPackTab` is a 3-column grid (`xl:grid-cols-3`):
+
+- **Left** (`xl:col-span-1`) — Inputs panel: agent header, `QuickPackInputs`, Generate button.
+- **Right** (`xl:col-span-2`) — Customize System Prompt editor on top (full 2/3 canvas), then the report area (idle placeholder, streaming spinner, or `ReportPanel`).
+
+The editor seeds its draft from the same `(agent, qa_mode)` localStorage slot as the dedicated-page editor, so a customization made on `/testcases` automatically appears on the QA Artifacts "Test Case Development" tab and vice versa.
+
+### `History` page layout
+
+The History page no longer uses a single agent dropdown. It now:
+
+1. Fetches all records from `/api/history/` (server-side `agent` / `project` / `jira_key` filters are still available but unused by the UI -- per-section client-side filters do the work).
+2. Groups records by `project` (with a `(no project)` synthetic bucket) into collapsible `ToonCard` sections sorted by most-recent activity. The freshest section opens by default.
+3. Within each section, renders per-agent filter chips (with counts), plus a row list whose primary title is either the Jira chip (`KEY -- Summary`) or the truncated `output_preview` fallback. The agent label is demoted to a small violet chip.
+4. A global text input above the sections searches `jira_key | jira_summary | output_preview | agent | project` case-insensitively.
 
 ---
 
@@ -272,8 +292,9 @@ Key behaviours:
 
 - **Threadpool bridge** — Uvicorn keeps its event loop free for other requests by running the sync orchestrator in a worker thread and pushing tokens through an `asyncio.Queue`.
 - **Model fallback chain** — `_call_with_retry` / `_stream_with_fallback` walk `GEMINI_MODEL → GEMINI_FALLBACK_MODELS` with exponential backoff (max 30 s) on 429/503/`UNAVAILABLE`/`RESOURCE_EXHAUSTED`/`overloaded`.
-- **System prompt override** — capped at 32 000 chars; `ValueError` is surfaced as HTTP 400 (run) or as an inline error chunk (stream).
-- **Run log** — every successful run is appended to either Firestore (`agent_runs`) or `logs/agent_log.jsonl`.
+- **System prompt override** — capped at 32 000 chars; `ValueError` is surfaced as HTTP 400 (run) or as an inline error chunk (stream). The override is sniffed from `localStorage` by `CustomPromptEditor` on every agent / QA Artifacts tab and shipped only when the toggle is ON.
+- **Run log** — every successful run is appended to either Firestore (`agent_runs`) or `logs/agent_log.jsonl`. The orchestrator also calls `extract_jira_meta(user_input)` at every `_append_log` site so each record carries `jira_key` / `jira_summary` for the History UI without an extra Jira API call.
+- **Read-time Jira backfill** — `routers/history.py::_decrypt_record` runs `extract_jira_meta` on legacy rows that lack `jira_key` / `jira_summary` (the helper accepts dict or string and recurses into the dict's string values), so the History UI's chip works uniformly across new and old data without a DB migration.
 
 See [`FLOW_DIAGRAM.md`](./FLOW_DIAGRAM.md) for the higher-level user-side flow and the STLC pack flow.
 

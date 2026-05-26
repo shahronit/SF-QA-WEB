@@ -22,7 +22,8 @@ Built with **FastAPI + React** and shipped as one process: the React SPA is buil
 - **Test management push** — send generated test cases to **Xray Cloud**, **Zephyr Scale**, or native Jira `Test` issues, with optional user-story linkage tagged on every test case.
 - **Google Drive integration** — per-user OAuth so the Jira full-issue view auto-fetches attached design docs.
 - **1-click STLC pack** — run Requirements → Plan → Test Cases → Execution → Closure as a single chained SSE stream.
-- **Customise the system prompt** (Test Case Development) — view the default prompt, edit it, persist the override to `localStorage`, with a 32 KB cap. Default prompts on disk are never modified.
+- **Customise the system prompt** (every agent) — every dedicated agent page and every QA Test Artifacts tab surfaces a Customize System Prompt editor in a sticky right rail. View the default prompt, edit it, persist the override to `localStorage` (keyed by `(agent, qa_mode)`), with a 32 KB cap. Default prompts on disk are never modified, and the same localStorage slot is shared across surfaces so a draft on `/testcases` automatically applies on the QA Artifacts "Test Case Development" tab and vice versa.
+- **History page** — past runs are grouped into collapsible per-project sections (newest activity first), each row's primary title is the originating Jira ticket (`KEY -- Summary`, clickable to Jira) or the first line of the output preview when no Jira context exists; per-section agent filter chips narrow results within a project, and a global text search spans Jira key / summary / preview / agent / project.
 - **Streaming everywhere** — Server-Sent Events for token-by-token LLM output, with auto-fallback through a configurable model chain and exponential backoff on 429/503.
 - **Exports** — Markdown, CSV, Excel, and PDF (via `xhtml2pdf`).
 - **Storage** — local JSON files by default, or **Firebase Firestore** for multi-user/multi-device persistence (users, projects, sessions, run history).
@@ -57,7 +58,7 @@ Every agent renders the same `AgentForm` shell — Project Context (RAG) + Link 
 |---------------------|-----------------|--------------|
 | `/requirements`     | `requirement`   | Acceptance criteria, edge cases, gaps |
 | `/test-plan`        | `test_plan`     | Combined Test Plan & Strategy doc; supports multi-select tickets and "use entire sprint as scope" |
-| `/testcases`        | `testcase`      | Markdown table of production-ready test cases; optional **custom system prompt** (per-device) |
+| `/testcases`        | `testcase`      | Markdown table of production-ready test cases |
 | `/smoke`            | `smoke`         | Comprehensive smoke test plan |
 | `/regression`       | `regression`    | Regression test plan covering impacted areas |
 | `/bugs`             | `bug_report`    | Astound-standard bug report; one click to push as a Jira issue with optional "Relates to" link |
@@ -221,7 +222,7 @@ sf-qa-web/
 │   │   │   ├── JiraConnector.jsx
 │   │   │   ├── JiraBugPush.jsx      # On bug-report agent only
 │   │   │   ├── TestManagementPush.jsx
-│   │   │   ├── CustomPromptEditor.jsx  # Test Case agent only
+│   │   │   ├── CustomPromptEditor.jsx  # Every agent + every QA Artifacts tab (sticky right rail)
 │   │   │   ├── ReportPanel.jsx
 │   │   │   ├── Sidebar.jsx
 │   │   │   ├── motion/            # Confetti, GeneratingScene, FadeIn, Counter, …
@@ -287,25 +288,40 @@ All routes live under `/api/*` and (except for `/auth/*` and `/health`) require 
 
 ---
 
-## Custom system prompt (Test Case Development)
+## Custom system prompt (every agent)
 
-The **Test Case Development** agent (`/testcases`) exposes a **Customize System Prompt** card.
+Every agent exposes a **Customize System Prompt** card, on its dedicated route AND on the matching tab in `/qa-test-artifacts`.
 
-- Toggle **OFF** → expandable read-only "View default prompt" panel.
-- Toggle **ON** → 10-row editor pre-filled from `localStorage["qa-studio:custom-prompt:testcase"]` (or the default if empty), with a 32 000-character cap and a Reset link.
-- Both the toggle state (`qa-studio:custom-prompt-on:testcase`) and the body persist in `localStorage`, so they survive reloads, tab closes, and days of use on the same device.
+- **Layout** — on dedicated routes (`/testcases`, `/bug-reports`, `/regression`, `/smoke-tests`, `/requirements`, `/test-plan-doc`, `/closure-report`, etc.) the editor sits as a sticky right rail next to the primary Context card. On `/qa-test-artifacts` it renders at the top of the right (Report) column of each tab. Below the `lg` breakpoint both layouts collapse to a single column.
+- Toggle **OFF** → expandable read-only "View default prompt" panel; the run uses the baked-in default from `backend/core/prompts/prompts.py`.
+- Toggle **ON** → 10-row editor pre-filled from `localStorage["qa-studio:custom-prompt:<agent>:<qa_mode>"]` (or the default for that `(agent, qa_mode)` pair if empty), with a 32 000-character cap and a Reset link.
+- Both the toggle state (`qa-studio:custom-prompt-on:<agent>:<qa_mode>`) and the body persist in `localStorage`, so they survive reloads, tab closes, and days of use on the same device.
+- The same localStorage slot is shared across surfaces, so a draft saved on `/testcases` automatically applies on the QA Artifacts "Test Case Development" tab and vice versa.
 - The override is shipped on the request as `system_prompt_override`; the file `backend/core/prompts/prompts.py` is **never modified**.
 
-The pattern is namespaced by agent key, so adding the editor to other agents later is a one-line change in `AgentForm`.
+---
+
+## History page
+
+`/history` lists past agent runs newest-first, grouped into collapsible per-project sections:
+
+- Each row's **primary title** is the originating Jira ticket (`KEY -- Summary`, clickable to Jira via the connected tenant's `/browse/<KEY>`) when one is detected, or the first non-empty line of `output_preview` (truncated to ~80 chars) when no Jira context exists. The agent label is demoted to a small violet chip next to the title.
+- **Jira detection** happens at both write-time (via `extract_jira_meta` in [`backend/core/jira_links.py`](backend/core/jira_links.py)) and read-time (the history router back-fills `jira_key` / `jira_summary` for legacy rows on the fly so no DB migration is needed). The helper accepts both string and dict inputs and recurses into the dict's string values so the canonical `Jira <Type> KEY: Summary` header is detected even when the run's `input` is a structured dict.
+- **Sections** are sorted by most-recent activity; the freshest section is open by default and the rest stay collapsed.
+- **Per-section agent filter chips** narrow the visible rows inside a project (counts shown per agent); each section keeps its own filter state.
+- A **global text search** above the sections matches across Jira key / summary / preview / agent label / project slug.
+- Existing per-row affordances remain: Excel/CSV/PDF/Markdown export, open-in-new-window, Test Management push (`testcase`, `smoke`, `regression`), and Jira comment push (`requirement`, `exec_report`, `closure_report`) which now pre-fills the issue key from `rec.jira_key`.
+
+A small seed utility lives at [`backend/scripts/seed_history.py`](backend/scripts/seed_history.py) — it inserts a handful of varied agent_run rows into Firestore so the History UI can be exercised after a "Clear All" wipe without re-running every agent by hand.
 
 ---
 
 ## Branch model
 
 - **`master`** — last stable release.
-- **`dev`** — active feature branch (Sprint filter, multi-select Test Plan scope, custom system prompt, side-by-side RAG/linked-output layout, Gemini-only LLM selector).
+- **`dev2`** — active feature branch (Cursor CLI auth on Windows, History redesign with Jira chips + per-project sections, Custom Prompt editor across every agent + QA Artifacts page, sticky right-rail layout).
 
-Open PRs against `dev`; merge `dev` → `master` to release.
+Open PRs against `dev2`; merge `dev2` → `master` to release.
 
 ---
 

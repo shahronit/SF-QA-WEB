@@ -42,6 +42,7 @@ from typing import Any, Protocol
 logger = logging.getLogger(__name__)
 
 from core import cursor_auth, firestore_db, secret_fields
+from core.jira_links import extract_jira_meta
 from core.prompts.prompts import (
     PROMPTS_GEN,
     PROMPTS_SF,
@@ -2294,6 +2295,11 @@ class SFQAOrchestrator:
                 usage_box, provider_name=provider.name, model=model,
                 usage=cached_usage, cached=True,
             )
+            # Sniff the originating Jira ticket (if any) so the History
+            # UI can render a "KEY -- summary" chip without re-parsing
+            # the encrypted input field client-side. Stays None when
+            # the input wasn't seeded from a Jira issue.
+            jira_key, jira_summary = extract_jira_meta(user_input)
             _append_log({
                 "ts": datetime.now(timezone.utc).isoformat(),
                 "agent": agent_name,
@@ -2318,6 +2324,8 @@ class SFQAOrchestrator:
                 # but we don't track that on the cache row itself —
                 # default to False so the field is always present.
                 "repaired": False,
+                "jira_key": jira_key,
+                "jira_summary": jira_summary,
             })
             return cached
 
@@ -2378,6 +2386,7 @@ class SFQAOrchestrator:
             usage=live_usage, cached=False, repaired=repaired,
         )
         try:
+            jira_key, jira_summary = extract_jira_meta(user_input)
             _append_log({
                 "ts": datetime.now(timezone.utc).isoformat(),
                 "agent": agent_name,
@@ -2394,6 +2403,8 @@ class SFQAOrchestrator:
                 "cache_hit": False,
                 "usage": live_usage,
                 "repaired": repaired,
+                "jira_key": jira_key,
+                "jira_summary": jira_summary,
             })
         except Exception:  # noqa: BLE001
             logger.exception("Failed to append agent_run log")
@@ -2476,6 +2487,7 @@ class SFQAOrchestrator:
                 usage_box, provider_name=provider.name, model=model,
                 usage=cached_usage, cached=True,
             )
+            jira_key, jira_summary = extract_jira_meta(user_input)
             _append_log({
                 "ts": datetime.now(timezone.utc).isoformat(),
                 "agent": agent_name,
@@ -2489,6 +2501,8 @@ class SFQAOrchestrator:
                 "cache_hit": True,
                 "usage": cached_usage,
                 "repaired": False,
+                "jira_key": jira_key,
+                "jira_summary": jira_summary,
             })
             return
 
@@ -2573,6 +2587,7 @@ class SFQAOrchestrator:
                 usage=live_usage, cached=False, repaired=repaired_flag,
             )
             try:
+                jira_key, jira_summary = extract_jira_meta(user_input)
                 _append_log({
                     "ts": datetime.now(timezone.utc).isoformat(),
                     "agent": agent_name,
@@ -2589,6 +2604,8 @@ class SFQAOrchestrator:
                     "cache_hit": False,
                     "usage": live_usage,
                     "repaired": repaired_flag,
+                    "jira_key": jira_key,
+                    "jira_summary": jira_summary,
                 })
             except Exception:  # noqa: BLE001
                 logger.exception("Failed to append agent_run log")

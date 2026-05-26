@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends
 
 from config import settings
 from core import firestore_db, secret_fields
+from core.jira_links import extract_jira_meta
 from routers.deps import get_current_user
 
 router = APIRouter()
@@ -29,6 +30,14 @@ def _decrypt_record(record: dict) -> dict:
     Plaintext-tolerant for legacy rows written before encryption was
     enabled; bad ciphertext falls back to a clear placeholder so the
     History UI never silently shows garbled text.
+
+    Also lazily back-fills the ``jira_key`` / ``jira_summary`` fields
+    on legacy rows (anything written before the orchestrator started
+    stamping them at write-time) by sniffing the freshly-decrypted
+    ``input`` text with ``extract_jira_meta``. This keeps the History
+    UI's "Jira ticket name" chip working uniformly across every row
+    without needing a one-shot DB migration over Firestore /
+    ``agent_log.jsonl``.
     """
     out = dict(record)
     for field in ("input", "output"):
@@ -36,6 +45,21 @@ def _decrypt_record(record: dict) -> dict:
             out[field] = secret_fields.decrypt_secret(out.get(field))
         except Exception:  # noqa: BLE001
             out[field] = "[decrypt failed - data may have been re-keyed]"
+    # Read-time backfill: only run when the row is missing BOTH fields
+    # (which is what legacy rows look like — the writer stamps both
+    # together so a partial state shouldn't occur). ``extract_jira_meta``
+    # accepts both dict and str so we no longer gate on the input being
+    # a string -- in practice the orchestrator persists the user_input
+    # as a dict (encrypt_secret no-ops on non-strings) and the canonical
+    # "Jira <Type> KEY: Summary" header lives inside one of its values.
+    # We still skip the "[decrypt failed ...]" string placeholder so we
+    # don't waste a regex run on the error sentinel.
+    if "jira_key" not in out and "jira_summary" not in out:
+        raw_input = out.get("input")
+        if not (isinstance(raw_input, str) and raw_input.startswith("[decrypt failed")):
+            key, summary = extract_jira_meta(raw_input)
+            out["jira_key"] = key
+            out["jira_summary"] = summary
     return out
 
 
@@ -75,9 +99,22 @@ async def get_history(
     limit: int = 200,
     agent: str = "",
     project: str = "",
+    jira_key: str = "",
     user=Depends(get_current_user),
 ):
-    """Return recent agent run records, newest first."""
+    """Return recent agent run records, newest first.
+
+    Optional query filters (all combinable; empty string means
+    "don't filter on this field"):
+
+      * ``agent``     -- match ``record["agent"]`` exactly
+        (e.g. ``testcase``, ``smoke``).
+      * ``project``   -- match ``record["project"]`` exactly
+        (project slug).
+      * ``jira_key``  -- match ``record["jira_key"]`` case-insensitively
+        AFTER the read-time backfill, so legacy rows whose key only
+        lives in the encrypted ``input`` text are still findable.
+    """
     if firestore_db.is_enabled():
         try:
             records = _read_firestore(limit)
@@ -91,6 +128,12 @@ async def get_history(
     if project:
         records = [r for r in records if r.get("project") == project]
     records = [_decrypt_record(r) for r in records]
+    if jira_key:
+        needle = jira_key.upper()
+        records = [
+            r for r in records
+            if (r.get("jira_key") or "").upper() == needle
+        ]
     return {"records": records}
 
 
