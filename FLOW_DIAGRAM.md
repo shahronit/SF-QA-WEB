@@ -1,6 +1,6 @@
 # Flow Diagrams
 
-End-to-end user, agent, and integration flows for QA Studio (`dev` + `master` as of April 2026).
+End-to-end user, agent, and integration flows for QA Studio (`dev2` + `master` as of May 2026).
 
 > Companion docs:
 >
@@ -57,7 +57,7 @@ sequenceDiagram
     actor User
     participant UI as AgentForm (React)
     participant Picker as JiraIssuePicker
-    participant CPE as CustomPromptEditor<br/>(testcase only)
+    participant CPE as CustomPromptEditor<br/>(every agent)
     participant LS as localStorage
     participant API as FastAPI<br/>/api/agents/.../stream
     participant TP as Threadpool
@@ -74,9 +74,9 @@ sequenceDiagram
       API-->>Picker: issue rows / detail
       Picker->>UI: writeScopeBlock or onImport
     end
-    opt Custom prompt (testcase only)
+    opt Custom prompt (every agent / sticky right rail)
       User->>CPE: Toggle ON, edit prompt
-      CPE->>LS: persist override + toggle state
+      CPE->>LS: persist override + toggle state<br/>(key qa-studio:custom-prompt:&lt;agent&gt;:&lt;qa_mode&gt;)
       CPE->>UI: onChange(override)
     end
     User->>UI: Fill agent fields → click Generate
@@ -120,8 +120,10 @@ flowchart TD
   RAG["Project Context (RAG)<br/>RAG over project docs"]
   Link["Link Previous Agent Output<br/>(hidden on requirement)"]
   Jira["3. Import from Jira<br/>+ sprint filter, key search<br/>+ multi-select on test_plan"]
-  CPE["4. Customize System Prompt<br/>(testcase only)"]
-  Fields["5. Primary fields<br/>(per agent)"]
+  PrimaryGrid{"4. PRIMARY + Custom Prompt grid<br/>(grid-cols-1 lg:grid-cols-3)"}
+  Primary["PRIMARY card (lg:col-span-2)<br/>Jira multi-token fetch<br/>+ batch preview<br/>+ Context textarea"]
+  CPE["Customize System Prompt (lg:col-span-1)<br/>Sticky right rail (lg:sticky lg:top-4)"]
+  Advanced["5. Advanced details<br/>(non-primary fields)"]
   Generate["6. Generate"]
   Stream["7. Streamed Markdown report"]
   Actions["8. Export + push actions"]
@@ -131,32 +133,49 @@ flowchart TD
   Row --> Link
   RAG --> Jira
   Link --> Jira
-  Jira --> CPE
-  CPE --> Fields
-  Fields --> Generate --> Stream --> Actions
+  Jira --> PrimaryGrid
+  PrimaryGrid --> Primary
+  PrimaryGrid --> CPE
+  Primary --> Advanced
+  CPE --> Advanced
+  Advanced --> Generate --> Stream --> Actions
 ```
 
-The grid degrades gracefully on the `requirement` agent (which has no upstream agent to chain from): the Project Context card spans the whole row.
+The 2-col row in step 2 degrades gracefully on the `requirement` agent (no upstream chain): the Project Context card spans the whole row. The 3-col grid in step 4 collapses to a single column below the `lg` breakpoint, with the editor stacking under the PRIMARY card.
+
+### QA Test Artifacts per-tab layout
+
+```mermaid
+flowchart LR
+  subgraph QATab [QuickPackTab -- xl:grid-cols-3]
+    direction LR
+    Inputs["Inputs panel (xl:col-span-1)<br/>QuickPackInputs + Generate"]
+    RightCol["Right column (xl:col-span-2)<br/>(top) CustomPromptEditor<br/>(below) Report / placeholder"]
+    Inputs --- RightCol
+  end
+```
+
+The localStorage slot (`qa-studio:custom-prompt:<agent>:<qa_mode>`) is shared with the dedicated-page editor, so a draft saved on `/testcases` automatically appears on the QA Artifacts "Test Case Development" tab and vice versa. Per-tab Generate and bulk Generate both ship `system_prompt_override` while the toggle is ON.
 
 ---
 
-## 4. Custom system prompt (Test Case Development)
+## 4. Custom system prompt (every agent + QA Artifacts)
 
 ```mermaid
 sequenceDiagram
     autonumber
     actor User
     participant CPE as CustomPromptEditor
-    participant LS as localStorage<br/>(qa-studio:custom-prompt:testcase)
-    participant API as GET /api/agents/testcase/prompt
-    participant Form as AgentForm
-    participant Stream as POST /api/agents/testcase/stream
+    participant LS as localStorage<br/>(qa-studio:custom-prompt:&lt;agent&gt;:&lt;qa_mode&gt;)
+    participant API as GET /api/agents/&lt;agent&gt;/prompt
+    participant Form as AgentForm / QuickPackTab
+    participant Stream as POST /api/agents/&lt;agent&gt;/stream
     participant Orch as Orchestrator
 
-    Note over CPE: First mount
-    CPE->>API: fetch default prompt
+    Note over CPE: First mount or qa_mode flip
+    CPE->>API: fetch default prompt for (agent, qa_mode)
     API-->>CPE: { prompt: "..." }
-    CPE->>LS: read toggle + draft
+    CPE->>LS: read toggle + draft for (agent, qa_mode)
     alt toggle ON
       CPE->>Form: onChange(draft)
     else toggle OFF
@@ -166,10 +185,10 @@ sequenceDiagram
     User->>CPE: toggle ON
     CPE->>LS: write toggle=1
     User->>CPE: edits textarea
-    CPE->>LS: write draft (debounced)
+    CPE->>LS: write draft (debounced 300 ms)
     CPE->>Form: onChange(value)
 
-    User->>Form: click Generate
+    User->>Form: click Generate (per-agent page OR per-tab OR bulk)
     Form->>Stream: body includes system_prompt_override
     Stream->>Orch: stream_agent(..., override)
     alt override > 32 000 chars
@@ -191,6 +210,61 @@ sequenceDiagram
     CPE->>LS: write toggle=0
     CPE->>Form: onChange(null)
 ```
+
+The same component is mounted on every dedicated agent route AND inside every QA Test Artifacts tab. Because the localStorage slot is keyed by `(agent, qa_mode)`, a draft saved on `/testcases` (Salesforce mode) is automatically picked up on the QA Artifacts "Test Case Development" tab when it mounts, and vice versa. Flipping QA mode at the page level re-fetches the matching default and swaps the localStorage slot.
+
+---
+
+## 4a. History page lifecycle (Jira chip + per-project sections)
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User
+    participant Hist as /history (React)
+    participant API as GET /api/history/
+    participant Router as routers/history.py
+    participant Helper as extract_jira_meta
+    participant Store as Firestore agent_runs<br/>OR logs/agent_log.jsonl
+
+    Hist->>API: GET /api/history/
+    API->>Router: read top 200 records (newest first)
+    Router->>Store: query agent_runs ORDER BY ts DESC LIMIT 200
+    Store-->>Router: raw rows
+    loop per row
+      Router->>Router: decrypt input / output
+      alt jira_key + jira_summary missing on disk
+        Router->>Helper: extract_jira_meta(input)
+        Note over Helper: accepts dict or str<br/>recurses into dict's string values<br/>matches "Jira &lt;Type&gt; KEY: Summary"<br/>falls back to bare-key search
+        Helper-->>Router: (key | None, summary | None)
+        Router->>Router: stamp jira_key / jira_summary on the row
+      end
+    end
+    Router-->>API: list of decorated records
+    API-->>Hist: { records }
+
+    Hist->>Hist: group by project (synthetic "(no project)" bucket)
+    Hist->>Hist: sort sections by most-recent ts
+    Hist->>User: render collapsible per-project ToonCards
+    Note over Hist,User: section header counts runs per agent;<br/>freshest section open by default
+
+    User->>Hist: toggle agent chips inside a section
+    Hist->>Hist: per-section sectionAgentFilters Set
+
+    User->>Hist: type in global search
+    Hist->>Hist: matches across<br/>jira_key | jira_summary | output_preview | agent | project
+
+    User->>Hist: click a row
+    Hist->>Hist: expand row → markdown + Excel/CSV/PDF/MD<br/>+ TestManagementPush (testcase, smoke, regression)<br/>+ JiraCommentPush (pre-fills issue key from rec.jira_key)
+```
+
+Row title resolution rules:
+
+1. `rec.jira_key` AND `rec.jira_summary` -> render the `JiraTicketChip` with `KEY -- Summary` as the primary title (clickable to `{jiraUrl}/browse/{KEY}` when Jira is connected).
+2. `rec.jira_key` only -> render the chip with just the key.
+3. No Jira context -> render the first non-empty line of `rec.output_preview`, stripped of Markdown decoration and truncated to ~80 chars.
+
+The agent label is always shown as a smaller violet badge next to the title so per-section "Filter by agent" chips remain visually anchored to row content.
 
 ---
 
@@ -407,17 +481,20 @@ Per-integration sessions (Jira, Xray, Zephyr, Google Drive) are stored separatel
 ```mermaid
 gitGraph
    commit id: "stable"
-   branch dev
-   checkout dev
+   branch dev2
+   checkout dev2
    commit id: "Jira full issue + GDrive"
    commit id: "Reorg agents + TM push"
    commit id: "Tables scroll + TM story link + linked Jira defect"
    commit id: "Sprint filter + Test Plan multi-select"
    commit id: "Side-by-side RAG/linked layout + custom prompt"
    commit id: "Gemini-only LLM selector"
+   commit id: "Cursor CLI per-user auth on Render + Windows"
+   commit id: "History redesign (Jira chip + per-project sections)"
+   commit id: "Custom Prompt on every agent + QA Artifacts sticky right rail"
    checkout main
-   merge dev tag: "release"
+   merge dev2 tag: "release"
 ```
 
-- `dev` carries every feature commit; PRs target `dev`.
-- `master` is fast-forwarded from `dev` at release boundaries.
+- `dev2` carries every feature commit; PRs target `dev2`.
+- `master` is fast-forwarded from `dev2` at release boundaries.

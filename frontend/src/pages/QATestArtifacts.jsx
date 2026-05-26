@@ -7,6 +7,7 @@ import ReportPanel from '../components/ReportPanel'
 import ProjectContextPicker from '../components/ProjectContextPicker'
 import GeneratingScene from '../components/motion/GeneratingScene'
 import QuickPackInputs from '../components/quickpack/QuickPackInputs'
+import CustomPromptEditor from '../components/CustomPromptEditor'
 import { useAuth } from '../context/AuthContext'
 import { useAgentResults } from '../context/AgentResultsContext'
 import { useSessionPrefs } from '../context/SessionPrefsContext'
@@ -89,6 +90,12 @@ function QuickPackTab({
   const lastSavedRef = useRef('')
   const lastReportedStatusRef = useRef('idle')
   const lastTriggerRef = useRef(0)
+  // Per-tab, per-session override for the system prompt. The
+  // CustomPromptEditor below seeds this from localStorage (keyed by
+  // (agentName, qaMode)) so a draft saved on a dedicated agent page
+  // -- e.g. /testcases -- is automatically picked up here too, and
+  // vice versa.
+  const [systemPromptOverride, setSystemPromptOverride] = useState(null)
 
   const fields = useMemo(() => getAgentFields(slug), [slug])
   const missing = useMemo(
@@ -119,7 +126,11 @@ function QuickPackTab({
     lastTriggerRef.current = triggerRun
     if (!ready) return
     const userInput = { ...values, qa_mode: qaMode }
-    stream.start({ user_input: userInput, project_slug: projectSlug })
+    stream.start({
+      user_input: userInput,
+      project_slug: projectSlug,
+      ...(systemPromptOverride ? { system_prompt_override: systemPromptOverride } : {}),
+    })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [triggerRun])
 
@@ -149,7 +160,11 @@ function QuickPackTab({
     }
     const userInput = { ...values, qa_mode: qaMode }
     stream.reset()
-    stream.start({ user_input: userInput, project_slug: projectSlug })
+    stream.start({
+      user_input: userInput,
+      project_slug: projectSlug,
+      ...(systemPromptOverride ? { system_prompt_override: systemPromptOverride } : {}),
+    })
   }
 
   const isRegenerate = stream.status === 'done' || stream.status === 'error'
@@ -231,8 +246,20 @@ function QuickPackTab({
           </div>
         </div>
 
-        {/* Right column: report area */}
+        {/* Right column: customize prompt + report area. The editor
+            now sits at the TOP of the right column so its prompt text
+            has the full 2/3 canvas to read/edit instead of being
+            cramped into the narrower Inputs column. The localStorage
+            slot is shared with each agent's dedicated page so a draft
+            saved here also applies on /testcases, /bug-reports, etc.
+            (and vice versa). */}
         <div className="xl:col-span-2">
+          <div className="mb-4">
+            <CustomPromptEditor
+              agentName={slug}
+              onChange={setSystemPromptOverride}
+            />
+          </div>
           {!stream.content && stream.status === 'idle' ? (
             <div className="toon-card text-center py-12 text-gray-500">
               <div className="text-3xl mb-2">{meta?.icon || '✨'}</div>
