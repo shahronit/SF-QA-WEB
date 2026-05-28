@@ -60,6 +60,92 @@ class JiraClient:
             f"{email.strip()}:{api_token.strip()}".encode()
         ).decode()
         self._auth_header = f"Basic {creds}"
+        # Memoise project-existence probes used by _explain_issue_404 so a
+        # batch of failed look-ups in the same tenant doesn't re-hit Jira
+        # once per token. Keyed by upper-cased project key.
+        self._project_exists_cache: dict[str, bool] = {}
+
+    # ------------------------------------------------------------------
+    # Issue-404 disambiguation
+    # ------------------------------------------------------------------
+    #
+    # Jira returns the same 404 body whether the project doesn't exist on
+    # the tenant, the issue was deleted, or the user's token cannot see
+    # the issue. The raw error string also leaks the REST URL path into
+    # the user-facing toast (e.g. "Jira API GET /issue/TNS-76?expand=...
+    # returned 404: ..."). The two helpers below turn that into a clean,
+    # actionable message:
+    #
+    #   - ``_project_exists(prefix)`` probes ``GET /project/{prefix}`` (no
+    #     side-effects, cached for the lifetime of the client).
+    #   - ``_explain_issue_404(key)`` decides which of the three branches
+    #     applies and returns a single human-readable sentence -- no URL,
+    #     no JSON envelope.
+    #
+    # Callers (``_fetch_core``, ``get_issue``) catch ConnectionError from
+    # ``_request``, detect the 404 + ``/issue/`` shape, and re-raise with
+    # the explained message. Everything else still bubbles up as-is so
+    # auth / network errors keep their existing wording.
+
+    def _project_key_prefix(self, issue_key: str) -> str:
+        """Return the upper-cased project prefix of ``ABC-123`` -> ``ABC``.
+
+        Falls back to the full key when the shape doesn't match, so the
+        caller can still produce a useful sentence.
+        """
+        if not issue_key or "-" not in issue_key:
+            return (issue_key or "").upper()
+        return issue_key.split("-", 1)[0].upper()
+
+    def _project_exists(self, project_key: str) -> bool:
+        """Best-effort probe: does *project_key* exist in this tenant?
+
+        Returns ``True`` on HTTP 2xx, ``False`` on 404, and ``True`` for
+        any other failure mode (auth / network) so we don't mis-diagnose
+        a transient outage as a "wrong project" error. Result is cached
+        per client instance.
+        """
+        key = (project_key or "").upper()
+        if not key:
+            return False
+        if key in self._project_exists_cache:
+            return self._project_exists_cache[key]
+        try:
+            self._request("GET", f"/project/{key}")
+            self._project_exists_cache[key] = True
+            return True
+        except ConnectionError as exc:
+            # Only a clean 404 lets us conclude the project is missing.
+            # Any other error (403, 401, timeout) might still mean the
+            # project exists but our token can't enumerate it, so we
+            # err on the side of "exists" to avoid a misleading message.
+            if "returned 404" in str(exc):
+                self._project_exists_cache[key] = False
+                return False
+            self._project_exists_cache[key] = True
+            return True
+        except Exception:  # noqa: BLE001 - defensive
+            self._project_exists_cache[key] = True
+            return True
+
+    def _explain_issue_404(self, issue_key: str) -> str:
+        """Return a clean, actionable message for an issue 404."""
+        prefix = self._project_key_prefix(issue_key)
+        tenant = self.base_url
+        if prefix and not self._project_exists(prefix):
+            return (
+                f"Project \"{prefix}\" doesn't exist (or isn't visible "
+                f"to your Jira user) on the connected tenant {tenant}. "
+                "Double-check the ticket key prefix, or reconnect Jira "
+                "if you're pointed at the wrong Atlassian site."
+            )
+        return (
+            f"Issue {issue_key} wasn't found on the connected Jira "
+            f"tenant ({tenant}). It may have been deleted, moved to a "
+            "different project, or your Jira user lacks permission to "
+            f"view it -- ask the ticket owner to grant Browse Projects "
+            f"on the {prefix or 'project'} project."
+        )
 
     def _request(
         self,
@@ -285,7 +371,15 @@ class JiraClient:
 
     def get_issue(self, issue_key: str) -> dict[str, Any]:
         """Fetch full issue detail for downstream agent input."""
-        data = self._request("GET", f"/issue/{issue_key}")
+        try:
+            data = self._request("GET", f"/issue/{issue_key}")
+        except ConnectionError as exc:
+            # Replace the raw "returned 404: ..." message with a clean,
+            # actionable explanation. Keep the original exception chained
+            # for server logs but never leak the REST URL into the toast.
+            if "returned 404" in str(exc):
+                raise ConnectionError(self._explain_issue_404(issue_key)) from exc
+            raise
         if not isinstance(data, dict):
             return {}
         fields = data.get("fields", {}) or {}
@@ -602,10 +696,22 @@ class JiraClient:
         ``epic`` / ``sprint`` outputs in ``get_full_issue`` keep working
         on tenants that match those defaults.
         """
-        data = self._request(
-            "GET",
-            f"/issue/{issue_key}?expand=renderedFields,names,schema&fields=*all",
-        )
+        try:
+            data = self._request(
+                "GET",
+                f"/issue/{issue_key}?expand=renderedFields,names,schema&fields=*all",
+            )
+        except ConnectionError as exc:
+            # Translate the raw "Jira API GET /issue/... returned 404: ..."
+            # into the friendly explanation (project missing vs issue
+            # missing/no-permission) so the UI toast is actionable instead
+            # of leaking the REST URL. Other errors (auth, network) keep
+            # their existing wording so they stay diagnosable.
+            if "returned 404" in str(exc):
+                raise ConnectionError(self._explain_issue_404(issue_key)) from exc
+            raise
+        if not isinstance(data, dict):
+            data = {}
         fields = data.get("fields", {}) or {}
         names: dict[str, str] = data.get("names", {}) or {}
         description = fields.get("description")
