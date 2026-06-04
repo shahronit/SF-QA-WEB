@@ -8,6 +8,7 @@ This document covers what's on `dev2` (and merging into `master`) as of May 2026
 >
 > - [`README.md`](./README.md) — how to install, run, and configure
 > - [`FLOW_DIAGRAM.md`](./FLOW_DIAGRAM.md) — end-to-end user & agent flows
+> - [`SKILLS.md`](./SKILLS.md) — in-editor caveman / cavecrew / graphify skill bundles (not part of the runtime app)
 
 ---
 
@@ -124,7 +125,8 @@ flowchart TB
 | Module                                         | Responsibility |
 |------------------------------------------------|----------------|
 | `routers/agents.py`                            | `GET /{name}/prompt`, `POST /{name}/run`, `POST /{name}/stream`. Threadpools the sync orchestrator and bridges to SSE via `asyncio.Queue`. |
-| `routers/jira.py`                              | Jira Cloud session management (memory + optional Firestore), JQL search, sprint listing via Agile API, bug creation with optional issue link. |
+| `routers/jira.py`                              | Jira Cloud session management (memory + optional Firestore), JQL search, sprint listing via Agile API, bug creation with optional issue link. Per-token errors from `/import-batch` and `/resolve` come back as plain strings, which the `JiraClient` already rephrases for 404s (see below). |
+| `core/jira_client.py`                          | Minimal authenticated client for Jira Cloud REST + Agile. Wraps `_fetch_core()` and `get_issue()` so a 404 on `/issue/{key}` is rewritten by `_explain_issue_404()` — which probes `_project_exists(prefix)` against `/project/{KEY}` (per-instance cached) to decide whether the project prefix is missing from the tenant or the issue itself is missing / unviewable. The raw REST URL is never leaked into a user-facing toast; auth / network / SSL errors keep their existing wording. |
 | `routers/test_management.py`                   | Pushes parsed test cases to Xray Cloud, Zephyr Scale, or native Jira `Test` issues. Optionally appends `Linked story: <KEY>` to every test case's preconditions. |
 | `routers/gdrive.py`                            | Per-user OAuth flow + reads file content for Jira's full-issue view. |
 | `routers/stlc_pack.py`                         | Runs five agents back-to-back over a single SSE stream, feeding each one the previous step's output as `linked_output`. |
@@ -342,6 +344,20 @@ When a project is active the orchestrator uses `get_combined_context` (project d
 | **Firebase Firestore** | Service-account JSON         | `FIREBASE_CREDENTIALS_JSON` env or `_PATH` file       |
 
 All of these are optional except Gemini.
+
+### Jira 404 disambiguation
+
+When the user pastes a key like `TNS-76` into any Jira-aware field, the call chain is `frontend → /api/jira/import-batch → JiraClient.get_full_issue → _fetch_core → GET /issue/{KEY}?expand=...&fields=*all`. A 404 there is ambiguous on the Atlassian side — Jira returns the same error body for "project doesn't exist", "issue was deleted", and "your token can't see this issue". The client now disambiguates locally:
+
+1. `_fetch_core` / `get_issue` catch `ConnectionError` raised by `_request` and check the message for `returned 404`.
+2. On a match, they call `_explain_issue_404(issue_key)`.
+3. `_explain_issue_404` extracts the project prefix (`TNS`) and probes `_project_exists("TNS")` — a cached `GET /project/TNS` round-trip. The cache is per-`JiraClient` instance, so a batch of bad tokens to the same tenant doesn't re-hit Jira once per token.
+4. Two branches:
+   - **Prefix missing on tenant** → `Project "TNS" doesn't exist (or isn't visible to your Jira user) on the connected tenant https://<tenant>.atlassian.net. Double-check the ticket key prefix, or reconnect Jira if you're pointed at the wrong Atlassian site.`
+   - **Prefix exists but issue doesn't** → `Issue TNS-76 wasn't found on the connected Jira tenant (...). It may have been deleted, moved to a different project, or your Jira user lacks permission to view it -- ask the ticket owner to grant Browse Projects on the TNS project.`
+5. `ConnectionError` is re-raised with the friendly text. `routers/jira.py::import_batch` and `/resolve` already serialise the error string verbatim, so the toast renders the clean message without any frontend change.
+
+A small diagnostic at `backend/scripts/probe_jira_404.py` reproduces the new message against any user's encrypted Jira session in Firestore — handy when triaging "why does X 404 for me?" reports without restarting the server.
 
 ---
 
