@@ -10,6 +10,7 @@ Built with **FastAPI + React** and shipped as one process: the React SPA is buil
 >
 > - [`ARCHITECTURE.md`](./ARCHITECTURE.md) — system layout, modules, request flow
 > - [`FLOW_DIAGRAM.md`](./FLOW_DIAGRAM.md) — end-to-end user & agent flow diagrams
+> - [`SKILLS.md`](./SKILLS.md) — catalogue of the in-editor caveman / cavecrew / graphify skill bundles checked into `.cursor/` and `.agents/`
 
 ---
 
@@ -18,7 +19,7 @@ Built with **FastAPI + React** and shipped as one process: the React SPA is buil
 - **17 specialised AI agents** organised in two phases (Manual QA + Advanced QA), driven by a shared `AgentForm` UI.
 - **RAG over project docs** — per-project ChromaDB vector store + a global Salesforce knowledge base; uses Ollama `nomic-embed-text` for embeddings.
 - **Salesforce or General mode** — every agent has a single QA-mode toggle that switches its prompt between Salesforce-aware (Apex, SOQL, Experience/Commerce Cloud) and product-agnostic language.
-- **Jira Cloud integration** — connect once, then browse projects, sprints, multi-select tickets (Test Plan), auto-detect Jira keys typed in any field, push bug reports back as issues, and link them via "Relates" / etc.
+- **Jira Cloud integration** — connect once, then browse projects, sprints, multi-select tickets (Test Plan), auto-detect Jira keys typed in any field, push bug reports back as issues, and link them via "Relates" / etc. When Jira returns a 404 on a fetched issue, the backend disambiguates it into a clean, actionable message (project missing on the connected tenant vs issue deleted / no Browse Projects permission) instead of leaking the REST URL into the toast.
 - **Test management push** — send generated test cases to **Xray Cloud**, **Zephyr Scale**, or native Jira `Test` issues, with optional user-story linkage tagged on every test case.
 - **Google Drive integration** — per-user OAuth so the Jira full-issue view auto-fetches attached design docs.
 - **1-click STLC pack** — run Requirements → Plan → Test Cases → Execution → Closure as a single chained SSE stream.
@@ -234,11 +235,26 @@ sf-qa-web/
 │   ├── vite.config.js
 │   ├── tailwind.config.js
 │   └── Dockerfile
+├── .agents/
+│   └── skills/                  # Skill bundles for CLI agent runtimes (Claude Code, etc.)
+│       ├── cavecrew/              # Delegation decision guide for caveman subagents
+│       ├── caveman/               # Six-intensity compressed prose mode
+│       ├── caveman-commit/        # Conventional Commits generator
+│       ├── caveman-compress/      # In-place caveman compression for .md memory files
+│       ├── caveman-help/          # One-shot reference card
+│       ├── caveman-review/        # One-line PR / diff comments
+│       └── caveman-stats/         # Session token-usage stats
+├── .cursor/
+│   ├── rules/                   # Always-on Cursor rules (caveman, graphify)
+│   └── skills/                    # Same bundles as .agents/skills (Cursor IDE side)
+├── graphify-out/                 # Code-graph dump (graph.html, graph.json, AST cache, GRAPH_REPORT.md)
+├── skills-lock.json             # Skill bundle revision lockfile
 ├── docker-compose.yml
 ├── render.yaml
 ├── start.bat
 ├── ARCHITECTURE.md
 ├── FLOW_DIAGRAM.md
+├── SKILLS.md
 └── README.md
 ```
 
@@ -319,7 +335,7 @@ A small seed utility lives at [`backend/scripts/seed_history.py`](backend/script
 ## Branch model
 
 - **`master`** — last stable release.
-- **`dev2`** — active feature branch (Cursor CLI auth on Windows, History redesign with Jira chips + per-project sections, Custom Prompt editor across every agent + QA Artifacts page, sticky right-rail layout).
+- **`dev2`** — active feature branch. Latest deltas: Cursor CLI auth on Windows, History redesign with Jira chips + per-project sections, Custom Prompt editor across every agent + QA Artifacts page (sticky right-rail layout), Jira 404 explanation that disambiguates "project missing on tenant" vs "issue missing / no permission", and the in-editor caveman / cavecrew / graphify skill bundles under `.cursor/` + `.agents/` (catalogued in [`SKILLS.md`](./SKILLS.md)).
 
 Open PRs against `dev2`; merge `dev2` → `master` to release.
 

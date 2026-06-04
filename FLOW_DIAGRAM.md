@@ -6,6 +6,7 @@ End-to-end user, agent, and integration flows for QA Studio (`dev2` + `master` a
 >
 > - [`README.md`](./README.md) — install & configure
 > - [`ARCHITECTURE.md`](./ARCHITECTURE.md) — module-level architecture
+> - [`SKILLS.md`](./SKILLS.md) — caveman / cavecrew / graphify skill bundles (editor-side, not part of these flows)
 
 ---
 
@@ -307,6 +308,54 @@ The picker also auto-detects when the user types a Jira key (e.g. `PROJ-123`) in
 
 ---
 
+## 5a. Jira 404 explanation (clean, actionable toast)
+
+Atlassian returns the same opaque 404 body for "project doesn't exist on this tenant", "issue was deleted", and "your token can't see it". The backend disambiguates locally before the error reaches the toast, so the UI never leaks the REST URL.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User
+    participant Form as AgentForm / QuickPackTab
+    participant Batch as POST /api/jira/import-batch
+    participant Client as JiraClient<br/>(core/jira_client.py)
+    participant Jira as Jira Cloud REST
+
+    User->>Form: paste "TNS-76" + click Fetch
+    Form->>Batch: { tokens: ["TNS-76"] }
+    Batch->>Client: get_full_issue("TNS-76")
+    Client->>Jira: GET /issue/TNS-76?expand=...&fields=*all
+    Jira-->>Client: 404 { errorMessages: ["Issue does not exist..."] }
+    Note over Client: _fetch_core catches ConnectionError,<br/>sees "returned 404" in message,<br/>calls _explain_issue_404("TNS-76")
+
+    Client->>Client: prefix = "TNS"<br/>cache miss → _project_exists("TNS")
+    Client->>Jira: GET /project/TNS
+    alt 404 — project missing
+      Jira-->>Client: 404
+      Client->>Client: cache[TNS] = false<br/>build "project missing" sentence
+    else 2xx — project exists
+      Jira-->>Client: 200
+      Client->>Client: cache[TNS] = true<br/>build "issue missing / no permission" sentence
+    else other error
+      Jira-->>Client: 401 / 403 / timeout
+      Client->>Client: cache[TNS] = true (defensive)<br/>fall through to "issue missing" branch
+    end
+
+    Client-->>Batch: raise ConnectionError(friendly_text)
+    Batch->>Batch: per-token catch → { token, key, error: friendly_text }
+    Batch-->>Form: { items: [ { error: friendly_text, ... } ] }
+    Form-->>User: toast "Could not fetch TNS-76: <friendly_text>"
+```
+
+The two human-readable sentences are:
+
+- **Project missing / not visible on tenant** — `Project "TNS" doesn't exist (or isn't visible to your Jira user) on the connected tenant https://<tenant>.atlassian.net. Double-check the ticket key prefix, or reconnect Jira if you're pointed at the wrong Atlassian site.`
+- **Project exists, issue doesn't** — `Issue TNS-76 wasn't found on the connected Jira tenant (...). It may have been deleted, moved to a different project, or your Jira user lacks permission to view it -- ask the ticket owner to grant Browse Projects on the TNS project.`
+
+The `_project_exists` probe is cached per `JiraClient` instance so a batch of bad tokens against the same tenant doesn't re-hit Jira once per token. Non-404 failure modes (auth, SSL, timeout, malformed JSON) bypass the explainer and keep their original wording — they're already diagnosable. A diagnostic helper at `backend/scripts/probe_jira_404.py` reproduces the friendly message for any `(username, key)` pair using the encrypted Jira session in Firestore.
+
+---
+
 ## 6. Bug report → Jira (with optional link)
 
 ```mermaid
@@ -492,6 +541,8 @@ gitGraph
    commit id: "Cursor CLI per-user auth on Render + Windows"
    commit id: "History redesign (Jira chip + per-project sections)"
    commit id: "Custom Prompt on every agent + QA Artifacts sticky right rail"
+   commit id: "Jira 404 explanation (clean tenant / permission disambiguation)"
+   commit id: "Cursor + agent skill bundles (.cursor/, .agents/, graphify-out/)"
    checkout main
    merge dev2 tag: "release"
 ```
