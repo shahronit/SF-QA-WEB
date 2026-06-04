@@ -1,0 +1,1157 @@
+{
+  "C:\\Users\\ro.shah\\sf-qa-web\\skills-lock.json": {
+    "mtime": 1779784820.5736897,
+    "ast_hash": "28e5edd5cf3588bb2f3feca381ddfaf3",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\start.sh": {
+    "mtime": 1777976539.2842424,
+    "ast_hash": "b4f39a4b42478963faadddfbeb2e4089",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\.agents\\skills\\caveman-compress\\scripts\\benchmark.py": {
+    "mtime": 1779784819.91714,
+    "ast_hash": "07500037c8606fc9ab1832f55a5ff346",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\.agents\\skills\\caveman-compress\\scripts\\cli.py": {
+    "mtime": 1779784819.91714,
+    "ast_hash": "c558740fb2c74c292c1886353add193a",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\.agents\\skills\\caveman-compress\\scripts\\compress.py": {
+    "mtime": 1779784819.9362082,
+    "ast_hash": "b64cfd042fdf93e8ac852fb3b87195a3",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\.agents\\skills\\caveman-compress\\scripts\\detect.py": {
+    "mtime": 1779784819.9382212,
+    "ast_hash": "951a4593947c23cb9bfe8d99dc245b16",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\.agents\\skills\\caveman-compress\\scripts\\validate.py": {
+    "mtime": 1779784819.9578934,
+    "ast_hash": "5d3394df7677d1ee08f0b69bb767b38c",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\.agents\\skills\\caveman-compress\\scripts\\__init__.py": {
+    "mtime": 1779784819.914437,
+    "ast_hash": "d6acae7e188357d1bc1258ce02a29811",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\.agents\\skills\\caveman-compress\\scripts\\__main__.py": {
+    "mtime": 1779784819.91714,
+    "ast_hash": "5bd0e02db4907bf4e435e5d770256fef",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\.cursor\\skills\\caveman-compress\\scripts\\benchmark.py": {
+    "mtime": 1779784819.91714,
+    "ast_hash": "07500037c8606fc9ab1832f55a5ff346",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\.cursor\\skills\\caveman-compress\\scripts\\cli.py": {
+    "mtime": 1779784819.91714,
+    "ast_hash": "c558740fb2c74c292c1886353add193a",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\.cursor\\skills\\caveman-compress\\scripts\\compress.py": {
+    "mtime": 1779784819.9362082,
+    "ast_hash": "b64cfd042fdf93e8ac852fb3b87195a3",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\.cursor\\skills\\caveman-compress\\scripts\\detect.py": {
+    "mtime": 1779784819.9382212,
+    "ast_hash": "951a4593947c23cb9bfe8d99dc245b16",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\.cursor\\skills\\caveman-compress\\scripts\\validate.py": {
+    "mtime": 1779784819.9578934,
+    "ast_hash": "5d3394df7677d1ee08f0b69bb767b38c",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\.cursor\\skills\\caveman-compress\\scripts\\__init__.py": {
+    "mtime": 1779784819.914437,
+    "ast_hash": "d6acae7e188357d1bc1258ce02a29811",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\.cursor\\skills\\caveman-compress\\scripts\\__main__.py": {
+    "mtime": 1779784819.91714,
+    "ast_hash": "5bd0e02db4907bf4e435e5d770256fef",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\backend\\config.py": {
+    "mtime": 1777865056.428816,
+    "ast_hash": "1f251f343f74fd75e356c80dd4d845a7",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\backend\\fix_copado_prompt.py": {
+    "mtime": 1776789660.246887,
+    "ast_hash": "ab969689317eda87e19bdc2a45773a8f",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\backend\\main.py": {
+    "mtime": 1779352245.28158,
+    "ast_hash": "c6bce6ba7cbc1d9e5070d67468aa6b6f",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\backend\\core\\agent_insight_parsers.py": {
+    "mtime": 1778571697.491358,
+    "ast_hash": "bc06f090152717f997af3f5cc6b9fab2",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\backend\\core\\cursor_auth.py": {
+    "mtime": 1779353291.9518094,
+    "ast_hash": "2a6262e5000986a1f717da4b8bacd28a",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\backend\\core\\drive_storage.py": {
+    "mtime": 1777865056.4608767,
+    "ast_hash": "b8178cf1bf63ec8aed6dec58b348d8bb",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\backend\\core\\exporter.py": {
+    "mtime": 1777049120.9987283,
+    "ast_hash": "68398403045b3e2d473bce4487e29349",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\backend\\core\\firebase_storage.py": {
+    "mtime": 1779352245.2805836,
+    "ast_hash": "53f6076992f145440beead3090129a76",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\backend\\core\\firestore_db.py": {
+    "mtime": 1779186537.0146103,
+    "ast_hash": "392728bf483f2895927df0b8ddafcdc0",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\backend\\core\\gdrive_client.py": {
+    "mtime": 1776839282.4569986,
+    "ast_hash": "7b18503933406efc493da7768fc4d771",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\backend\\core\\jira_client.py": {
+    "mtime": 1778484245.2425725,
+    "ast_hash": "c5dc9bd54579621cc81f3235ab44e739",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\backend\\core\\jira_links.py": {
+    "mtime": 1779783886.9640176,
+    "ast_hash": "8dbc2f98f9866b1402eead969f3dd06f",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\backend\\core\\jira_push_logger.py": {
+    "mtime": 1778571697.523817,
+    "ast_hash": "6539d10f3651f8a4baf132bb4e53e499",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\backend\\core\\llm_cache.py": {
+    "mtime": 1779352244.83593,
+    "ast_hash": "560c74e93f5e570239d3b2c0e7d7a7eb",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\backend\\core\\mcp_client.py": {
+    "mtime": 1777043592.8888173,
+    "ast_hash": "69975d785308df58e2250763fdb9c5bd",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\backend\\core\\notifications.py": {
+    "mtime": 1777865056.6426184,
+    "ast_hash": "a875addd4b25e91acff79718c6612a3f",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\backend\\core\\orchestrator.py": {
+    "mtime": 1779783886.9740727,
+    "ast_hash": "bd1eb3a95bf9268e67b0850ba276be97",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\backend\\core\\output_validators.py": {
+    "mtime": 1779352245.1010137,
+    "ast_hash": "16ed66947dfce403928dd8c0b57a884b",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\backend\\core\\project_manager.py": {
+    "mtime": 1778242178.1573923,
+    "ast_hash": "4f72df5e7c1d7d6b507079f839fa3074",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\backend\\core\\prompt_store.py": {
+    "mtime": 1777865056.797433,
+    "ast_hash": "3066cfb21dff838386c9b4067f3f228a",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\backend\\core\\sf_org_fetcher.py": {
+    "mtime": 1777049120.780676,
+    "ast_hash": "506e098753fe3ddcfd0bae856c0d6113",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\backend\\core\\table_parse.py": {
+    "mtime": 1777049120.7876763,
+    "ast_hash": "55c57257a193ae4f9e3ecd483ef2afff",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\backend\\core\\user_auth.py": {
+    "mtime": 1779352245.28158,
+    "ast_hash": "4f55ab8be006714fcc8793a1ad162b44",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\backend\\core\\__init__.py": {
+    "mtime": 1777049120.965721,
+    "ast_hash": "81051bcc2cf1bedf378224b0a93e2877",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\backend\\core\\prompts\\prompts.py": {
+    "mtime": 1778066807.0996056,
+    "ast_hash": "952fd641e259d19f0d13c3db52566d65",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\backend\\core\\prompts\\__init__.py": {
+    "mtime": 1777049121.002724,
+    "ast_hash": "81051bcc2cf1bedf378224b0a93e2877",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\backend\\core\\test_management\\native_jira.py": {
+    "mtime": 1779352245.28158,
+    "ast_hash": "cfad9731947484c918b45e1e96ceb210",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\backend\\core\\test_management\\parser.py": {
+    "mtime": 1779352245.28158,
+    "ast_hash": "3086f5d1366b06c42bd838af8f960f05",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\backend\\core\\test_management\\xray_client.py": {
+    "mtime": 1776878087.2488482,
+    "ast_hash": "76111f01694bb2fc7c388c78662bcb83",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\backend\\core\\test_management\\zephyr_scale_client.py": {
+    "mtime": 1776878087.2572181,
+    "ast_hash": "23ffd283ab55b50970688edc9601a574",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\backend\\core\\test_management\\__init__.py": {
+    "mtime": 1776878087.2321908,
+    "ast_hash": "c9fa588adb4eb858c7f9fbe8685952c0",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\backend\\rag\\embedder.py": {
+    "mtime": 1777049120.8782,
+    "ast_hash": "39eac5c588954f3cf50a27f2f71ef499",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\backend\\rag\\ingestor.py": {
+    "mtime": 1777049120.7746842,
+    "ast_hash": "57715a29a9b3eb3a88bd9f2e70949029",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\backend\\rag\\mcp_source.py": {
+    "mtime": 1777043593.033535,
+    "ast_hash": "0616b55cb4fa0f48911414c77233794b",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\backend\\rag\\retriever.py": {
+    "mtime": 1777049120.7816818,
+    "ast_hash": "fa5d42cd7386f67109f6803a3ab45f1d",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\backend\\rag\\__init__.py": {
+    "mtime": 1777049121.002724,
+    "ast_hash": "81051bcc2cf1bedf378224b0a93e2877",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\backend\\routers\\admin.py": {
+    "mtime": 1779352245.2805836,
+    "ast_hash": "3c5dd3e21ea64d9bf4a1ae0b26c08487",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\backend\\routers\\agents.py": {
+    "mtime": 1779352245.28158,
+    "ast_hash": "892a3703ceefa0fbc2c2f31d9e02c846",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\backend\\routers\\auth.py": {
+    "mtime": 1779352244.8585267,
+    "ast_hash": "008fc1408fa830c29496e26f6201fadb",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\backend\\routers\\deps.py": {
+    "mtime": 1779352245.2805836,
+    "ast_hash": "6df01d81c089180bf172bdd425863149",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\backend\\routers\\exports.py": {
+    "mtime": 1777049120.7816818,
+    "ast_hash": "9547cc11600cd67e3895109263c326bf",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\backend\\routers\\gdrive.py": {
+    "mtime": 1779352244.8575342,
+    "ast_hash": "4ffb720c4e9314292b7fd6924f5a60f9",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\backend\\routers\\history.py": {
+    "mtime": 1779783886.998944,
+    "ast_hash": "faad9f3300345218467d6705d0731a36",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\backend\\routers\\jira.py": {
+    "mtime": 1779352245.2805836,
+    "ast_hash": "f0764666056841c94bafc18ad9812053",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\backend\\routers\\knowledge.py": {
+    "mtime": 1777049120.7876763,
+    "ast_hash": "84e42122295c60992489587306bdf717",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\backend\\routers\\llm.py": {
+    "mtime": 1779353291.9638095,
+    "ast_hash": "2ee8bad7a1f4de8b7abe04070ec71a5e",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\backend\\routers\\mcp.py": {
+    "mtime": 1777043593.0880308,
+    "ast_hash": "7149f30a9984ede037b68325233072d6",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\backend\\routers\\me.py": {
+    "mtime": 1779352245.28158,
+    "ast_hash": "283e0eac6892bdc5ca42d056e1ede05a",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\backend\\routers\\projects.py": {
+    "mtime": 1777049120.7876763,
+    "ast_hash": "0d5a7cd63eb74fa7d7670e60d3fb2a62",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\backend\\routers\\salesforce.py": {
+    "mtime": 1777049120.7816818,
+    "ast_hash": "6eb81c4ab2e2d842cbff8b12f9b35645",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\backend\\routers\\stlc_pack.py": {
+    "mtime": 1778237712.154388,
+    "ast_hash": "2b3e0df2aebd12f5c89be81a8c024b66",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\backend\\routers\\test_management.py": {
+    "mtime": 1779352245.2805836,
+    "ast_hash": "0e066bc471be2b54bf7acec62580debc",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\backend\\routers\\__init__.py": {
+    "mtime": 1777049120.7876763,
+    "ast_hash": "81051bcc2cf1bedf378224b0a93e2877",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\backend\\scripts\\encrypt_existing_data.py": {
+    "mtime": 1777865057.5193968,
+    "ast_hash": "0a13d92deeb6343b031bb14f663b41be",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\backend\\scripts\\gen_encryption_key.py": {
+    "mtime": 1777865057.5713067,
+    "ast_hash": "bb95f81f54720b3b929ab9af3199b725",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\backend\\scripts\\seed_history.py": {
+    "mtime": 1779783887.0070937,
+    "ast_hash": "609b2d0a66ddd2bb6a030da4b1f66c4f",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\backend\\scripts\\_list_users_report.py": {
+    "mtime": 1777865057.483562,
+    "ast_hash": "04c46160a694048f2f8a3a24ddf6ad13",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\backend\\scripts\\__init__.py": {
+    "mtime": 1777865057.463686,
+    "ast_hash": "3568c5cdf09d277661044276e1f13b37",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\package.json": {
+    "mtime": 1778571697.5925395,
+    "ast_hash": "8d9563f3abe540d470358842a1ca9b01",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\postcss.config.js": {
+    "mtime": 1777049120.775685,
+    "ast_hash": "5b84f4567208c7c747079c0477373231",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\tailwind.config.js": {
+    "mtime": 1779352245.2805836,
+    "ast_hash": "114c84313064830c52001ecbffe9abfe",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\vite.config.js": {
+    "mtime": 1779352245.2805836,
+    "ast_hash": "bd6242f2a5f4318e361c4655a064f144",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\App.jsx": {
+    "mtime": 1779352679.5913436,
+    "ast_hash": "d49b723cf350249dcb756149e6b5de20",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\main.jsx": {
+    "mtime": 1777049120.8782,
+    "ast_hash": "43b2ccd6af1ab10643558a60e68c1b12",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\api\\client.js": {
+    "mtime": 1779186537.020538,
+    "ast_hash": "e798ad070cb993acc6e46873137afe03",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\components\\AdminNotificationsBell.jsx": {
+    "mtime": 1777865057.8371673,
+    "ast_hash": "9a00b839bb91f4e10669a062b91655bd",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\components\\AgentForm.jsx": {
+    "mtime": 1779783887.015162,
+    "ast_hash": "59c6fe647cc1b6c9166baf47e26ee55d",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\components\\CustomPromptEditor.jsx": {
+    "mtime": 1776934239.7747233,
+    "ast_hash": "c5a538c16e73abc22185fcdeb28788e9",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\components\\DefectReportCard.jsx": {
+    "mtime": 1777976539.2053344,
+    "ast_hash": "a53fa9f0deb209ac55ff1be9ca1fc3b3",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\components\\ExportColumnPicker.jsx": {
+    "mtime": 1777043593.2139397,
+    "ast_hash": "705a846ecabdfeb44b58ae90eee8600f",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\components\\JiraBugPush.jsx": {
+    "mtime": 1779352245.1374993,
+    "ast_hash": "307b5140565decd19cf155930e22b59b",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\components\\JiraCommentPush.jsx": {
+    "mtime": 1777211547.9616153,
+    "ast_hash": "ccaf585c4e8c7d20b9fbef996cc41925",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\components\\JiraConnector.jsx": {
+    "mtime": 1777049120.9857194,
+    "ast_hash": "a3a2f92c09c2288b1aac7e2acfc1c3de",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\components\\JiraTicketCard.jsx": {
+    "mtime": 1777043593.2582476,
+    "ast_hash": "570e8da25bd27ea9ee2ad463881de09f",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\components\\Layout.jsx": {
+    "mtime": 1779352245.2805836,
+    "ast_hash": "da011d853113f862d714fd8a9fb88d61",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\components\\PageHeader.jsx": {
+    "mtime": 1779352245.1020255,
+    "ast_hash": "9b63a888b16239bfc90d8c28c3a9bf36",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\components\\ProjectContextPicker.jsx": {
+    "mtime": 1777211547.995263,
+    "ast_hash": "25c7c0c66e2216d42de8565a6610617a",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\components\\ProjectMcpPanel.jsx": {
+    "mtime": 1777043593.3349771,
+    "ast_hash": "7753d7f174ff2437fe58ce42790469e1",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\components\\QdecFooter.jsx": {
+    "mtime": 1777865058.1281898,
+    "ast_hash": "6456cb969a673081d3b15226d848a673",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\components\\ReportPanel.jsx": {
+    "mtime": 1779352245.2805836,
+    "ast_hash": "c4986288d7c80912a79ba8782ece6ba9",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\components\\SFOrgLogin.jsx": {
+    "mtime": 1777049120.797692,
+    "ast_hash": "a5c8833c9a55d1faf459bd0830356294",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\components\\Sidebar.jsx": {
+    "mtime": 1779353291.9808173,
+    "ast_hash": "61a0cf7d503642d02e722ba48a040044",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\components\\TestManagementPush.jsx": {
+    "mtime": 1779352245.28158,
+    "ast_hash": "5908e4c21753a0970a1130ca5128dfdf",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\components\\ToonCard.jsx": {
+    "mtime": 1777049121.0037217,
+    "ast_hash": "0a5c20bc84b553fdb5623d972c094707",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\components\\dashboard\\AgentInsightCard.jsx": {
+    "mtime": 1778571697.6903722,
+    "ast_hash": "9ce8f5c9088c22f15149c1ec056168ae",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\components\\dashboard\\DailyActivityChart.jsx": {
+    "mtime": 1778571697.7097473,
+    "ast_hash": "15185622a6240116724072ce0b751568",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\components\\dashboard\\DashboardKpiTiles.jsx": {
+    "mtime": 1778571697.726883,
+    "ast_hash": "5e82f89cb1576415e5ef9cee6b72f51b",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\components\\dashboard\\JiraPushesChart.jsx": {
+    "mtime": 1778571697.7475343,
+    "ast_hash": "65c8e83023ee296859ca7adde08131d4",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\components\\dashboard\\RecentActivityFeed.jsx": {
+    "mtime": 1778571697.7598794,
+    "ast_hash": "8a259595887bb6da69bcb31861818244",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\components\\dashboard\\RunsByAgentChart.jsx": {
+    "mtime": 1778571697.785497,
+    "ast_hash": "52955c6e4829aff49ac4011d9c8f947a",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\components\\dashboard\\insights\\ActivitySparkline.jsx": {
+    "mtime": 1778571697.7940094,
+    "ast_hash": "b08a1dacee115c44f92c3cf729bdf07f",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\components\\dashboard\\insights\\CaseMixChart.jsx": {
+    "mtime": 1778571697.8178394,
+    "ast_hash": "71e8c861d592dd1eeb5808d53dac5167",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\components\\dashboard\\insights\\ChecklistProgressChart.jsx": {
+    "mtime": 1778571697.8266022,
+    "ast_hash": "3c3c288eeee3a40bcd671533457a9eab",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\components\\dashboard\\insights\\ClosureKpiChart.jsx": {
+    "mtime": 1778571697.8421655,
+    "ast_hash": "f312b34f6f195a88b096069479db7cee",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\components\\dashboard\\insights\\CoverageDonutChart.jsx": {
+    "mtime": 1778571697.8624282,
+    "ast_hash": "743926e18b6d647068d3765e00dc1620",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\components\\dashboard\\insights\\ExecBarsChart.jsx": {
+    "mtime": 1778571697.8722837,
+    "ast_hash": "96504bf676283cdf0be83a001fe7e97d",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\components\\dashboard\\insights\\index.js": {
+    "mtime": 1778571697.9852705,
+    "ast_hash": "9cc1b9161d598a1dbb3f08d67557f0a3",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\components\\dashboard\\insights\\PersonasChart.jsx": {
+    "mtime": 1778571697.8953896,
+    "ast_hash": "0adec41d37fe269b9b595dd8543352a2",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\components\\dashboard\\insights\\RcaSummaryChart.jsx": {
+    "mtime": 1778571697.908414,
+    "ast_hash": "fdcab83e10bccd6ca4dc89095fd82427",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\components\\dashboard\\insights\\RecordsPerObjectChart.jsx": {
+    "mtime": 1778571697.9240935,
+    "ast_hash": "e71f4f2b74e71e06fae3061fb0d51c2f",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\components\\dashboard\\insights\\RoiSplitChart.jsx": {
+    "mtime": 1778571697.9407358,
+    "ast_hash": "e4dcc48318660f73fd61732a9e36743b",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\components\\dashboard\\insights\\SeverityDonutChart.jsx": {
+    "mtime": 1778571697.9541526,
+    "ast_hash": "595fb0cf6fa8ffb228a91cf72ff90954",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\components\\dashboard\\insights\\TechniqueCompareChart.jsx": {
+    "mtime": 1778571697.976183,
+    "ast_hash": "460d8fbefd1f326e92fed9909c792150",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\components\\icons\\Icon3D.jsx": {
+    "mtime": 1777865058.3521886,
+    "ast_hash": "264ec00436bce4eeca1b7aa62a7ecf4d",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\components\\insights\\ClosureKpiGrid.jsx": {
+    "mtime": 1777049120.9727218,
+    "ast_hash": "db6e17b8f2d47f8d158e70d614d77cf7",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\components\\insights\\CoverageDonut.jsx": {
+    "mtime": 1777049121.001724,
+    "ast_hash": "3b3691d8b059eabd87389d0a7d80713c",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\components\\insights\\DataPreview.jsx": {
+    "mtime": 1777049120.7786803,
+    "ast_hash": "945e6cbbadfa1a2fb1829bc014056557",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\components\\insights\\ExecutionBars.jsx": {
+    "mtime": 1777049120.7816818,
+    "ast_hash": "b6327c0a881c3c2cf5d2a7c30ae91e24",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\components\\insights\\parsers.js": {
+    "mtime": 1777049120.780676,
+    "ast_hash": "700598ee73f880df16a500ef89cd2176",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\components\\insights\\TechniqueCompare.jsx": {
+    "mtime": 1777049120.780676,
+    "ast_hash": "9941867d13b3bd378b2ef4493b181355",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\components\\jira\\BatchPreview.jsx": {
+    "mtime": 1778237712.2362914,
+    "ast_hash": "61f12053ad1eb6affdb45021761eba53",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\components\\markdown\\MarkdownTableCell.jsx": {
+    "mtime": 1776939741.086689,
+    "ast_hash": "af028b6fe4c78a6fe89744a728c26c3c",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\components\\markdown\\MarkdownTableScroll.jsx": {
+    "mtime": 1777043593.4212854,
+    "ast_hash": "76741344e1148fd77ea261e846b3b874",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\components\\mascots\\ClosureMascot.jsx": {
+    "mtime": 1777049120.6030917,
+    "ast_hash": "0f4fa9df1a4941d365d1c563b65b2d67",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\components\\mascots\\DesignMascot.jsx": {
+    "mtime": 1777049120.7816818,
+    "ast_hash": "107e4438f2b7b3cc8bf0dff54e53d3e3",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\components\\mascots\\ExecutionMascot.jsx": {
+    "mtime": 1777049120.559913,
+    "ast_hash": "46473b2c9b4952d33040f99dbfa8bd0c",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\components\\mascots\\index.jsx": {
+    "mtime": 1777049120.537913,
+    "ast_hash": "e0dbb059cc5bd94cad3a9dc2980d9be1",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\components\\mascots\\PlanningMascot.jsx": {
+    "mtime": 1777049120.7866855,
+    "ast_hash": "a7757e9125542fdb1ef3ba7d9d004c2f",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\components\\mascots\\RequirementMascot.jsx": {
+    "mtime": 1777049121.002724,
+    "ast_hash": "bcc108959ce7f0bd5e0009568714328d",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\components\\motion\\AuroraBg.jsx": {
+    "mtime": 1777865058.3815892,
+    "ast_hash": "27f0b14434b9aadff3f5c0be4f5b3473",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\components\\motion\\BarStat.jsx": {
+    "mtime": 1777049121.0037217,
+    "ast_hash": "10d1d3ede25160f5a7fddcb03abe83a7",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\components\\motion\\Confetti.jsx": {
+    "mtime": 1777049121.001724,
+    "ast_hash": "ba107187240d581b82d3c6af55b86c77",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\components\\motion\\Counter.jsx": {
+    "mtime": 1777049120.7816818,
+    "ast_hash": "2bccca50413200d08220c112172708ee",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\components\\motion\\GeneratingScene.jsx": {
+    "mtime": 1776784007.0623875,
+    "ast_hash": "1ca5e82de9f071db63b54b4ccee4a323",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\components\\motion\\MagneticButton.jsx": {
+    "mtime": 1777865058.4578674,
+    "ast_hash": "a02d8540d10b08bc4e92fb18f3e49bf1",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\components\\motion\\ProgressRing.jsx": {
+    "mtime": 1777049120.8782,
+    "ast_hash": "734d567e7946d55820935b77deee7596",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\components\\motion\\RouteTransition.jsx": {
+    "mtime": 1779352245.2805836,
+    "ast_hash": "734f1fc87b074af392edcb84e6dee321",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\components\\motion\\SparkleCursor.jsx": {
+    "mtime": 1777865058.4953928,
+    "ast_hash": "941d4185183427728fca9964ce639eaf",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\components\\motion\\Sparkline.jsx": {
+    "mtime": 1777049120.7876763,
+    "ast_hash": "c6c8e012cb80f8fea9ce2a7d2c737a38",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\components\\motion\\Stagger.jsx": {
+    "mtime": 1777049121.0037217,
+    "ast_hash": "2662aad34b9500d6a718528e13cde52e",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\components\\motion\\Tilt3D.jsx": {
+    "mtime": 1777865058.5294416,
+    "ast_hash": "17f495dbf59b3c4c5c5404307bfd81a0",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\components\\quickpack\\QuickPackInputs.jsx": {
+    "mtime": 1778066807.1177723,
+    "ast_hash": "2ce39c02b90f905dc160d61bfb59b1e9",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\components\\usage\\UsageTables.jsx": {
+    "mtime": 1778242178.5473745,
+    "ast_hash": "eb3436826881618a37cda5b4a364a605",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\config\\agentInputs.js": {
+    "mtime": 1778066807.1237738,
+    "ast_hash": "1b25972e1de6dec63227fd5a94f990ed",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\config\\agentMeta.js": {
+    "mtime": 1779352245.28158,
+    "ast_hash": "dff907b6947bcaa120fdd66cb54afaa9",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\context\\AgentResultsContext.jsx": {
+    "mtime": 1779352245.2805836,
+    "ast_hash": "7e0114bea28f7c1f3c8ebb30f803353f",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\context\\AuthContext.jsx": {
+    "mtime": 1779186537.0255933,
+    "ast_hash": "99140b999ecf2850815ba73a149127fa",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\context\\JiraContext.jsx": {
+    "mtime": 1779352245.1374993,
+    "ast_hash": "ac746c25d55d76d55aea0c815b2e0319",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\context\\SessionPrefsContext.jsx": {
+    "mtime": 1778237712.2681785,
+    "ast_hash": "f21f639398f5f9e04e37c01cb3b25a13",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\context\\TestManagementContext.jsx": {
+    "mtime": 1776969566.9721985,
+    "ast_hash": "0a2bebe0df1f69fe61c964277d8c0078",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\hooks\\useAgentStream.js": {
+    "mtime": 1779352245.1374993,
+    "ast_hash": "2b9ba965f3386025a774f645d53f8bc8",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\hooks\\useDashboardData.js": {
+    "mtime": 1778571698.074099,
+    "ast_hash": "4600f865be0d91a0ebd071c38520e4e0",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\hooks\\useQaMode.js": {
+    "mtime": 1776781443.4011495,
+    "ast_hash": "cdf6403132eb08b947518116a9dac2c8",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\pages\\Admin.jsx": {
+    "mtime": 1779352245.2805836,
+    "ast_hash": "75062e19186c0dd025290965a1ac7e18",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\pages\\AutomationPlan.jsx": {
+    "mtime": 1777049120.7866855,
+    "ast_hash": "7f1f63bb76920e1cd78a42fa7a2569a5",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\pages\\BugReports.jsx": {
+    "mtime": 1777049120.7876763,
+    "ast_hash": "6b2e06bacab13e792b21c22c0a96437f",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\pages\\ClosureReport.jsx": {
+    "mtime": 1777049120.7866855,
+    "ast_hash": "5704ae6230c44fa68845d0d32fc3b485",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\pages\\CopadoScript.jsx": {
+    "mtime": 1777049120.997725,
+    "ast_hash": "c8d564e53bf41ec22894bfee03375958",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\pages\\Estimation.jsx": {
+    "mtime": 1777049120.7866855,
+    "ast_hash": "b88a4cdecec6e1387abf4ecdf427a2b1",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\pages\\ExecutionReport.jsx": {
+    "mtime": 1777049120.7866855,
+    "ast_hash": "3b15e0aebf1bf35b284e131c904035d3",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\pages\\History.jsx": {
+    "mtime": 1779783887.0320811,
+    "ast_hash": "a1a82d4efb732b9e01bf0176eb7bbe9d",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\pages\\Hub.jsx": {
+    "mtime": 1779352245.2805836,
+    "ast_hash": "294f6bd898955e5bd0443e594ef6c3d0",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\pages\\Login.jsx": {
+    "mtime": 1779352245.1374993,
+    "ast_hash": "0846ba18f0c1bb09d44dd1432972c4db",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\pages\\MyUsage.jsx": {
+    "mtime": 1778242178.682486,
+    "ast_hash": "4ad4a0c1c4a543a6b57dcce9f6fd01a4",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\pages\\Projects.jsx": {
+    "mtime": 1777211548.041634,
+    "ast_hash": "473504c3b06bc64baa505ea0d441cc25",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\pages\\QATestArtifacts.jsx": {
+    "mtime": 1779783887.0553715,
+    "ast_hash": "cf711f7beb99a4cb2449518a3d37ac68",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\pages\\RCA.jsx": {
+    "mtime": 1777049120.6020956,
+    "ast_hash": "8f6eb91bdfe273cd730715a64be4ef7f",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\pages\\Regression.jsx": {
+    "mtime": 1777049120.8791995,
+    "ast_hash": "081e2349576c58bedc0025f7db488260",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\pages\\Requirements.jsx": {
+    "mtime": 1777049120.9967322,
+    "ast_hash": "2f647797199cd67f1874c44a1702afc5",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\pages\\ResultView.jsx": {
+    "mtime": 1776969567.0675242,
+    "ast_hash": "4602ccc75b5e18f123040f25baa1f521",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\pages\\RTM.jsx": {
+    "mtime": 1777049120.8791995,
+    "ast_hash": "e6a1cc374ecb6a9dfcf9b598883852f1",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\pages\\SmokeTests.jsx": {
+    "mtime": 1777049120.7876763,
+    "ast_hash": "dc7bdb828ccbceb277456a9c35fddc7b",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\pages\\StlcPack.jsx": {
+    "mtime": 1779352245.3567882,
+    "ast_hash": "b0645527619cd6e9c5a0a82ebe3f2542",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\pages\\TestCaseEditor.jsx": {
+    "mtime": 1777043593.4971387,
+    "ast_hash": "95217a0b8f7f637dd99e570bc2ecf4b0",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\pages\\TestCases.jsx": {
+    "mtime": 1777049120.7876763,
+    "ast_hash": "a9c459a08365d552c3012745feb539a0",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\pages\\TestData.jsx": {
+    "mtime": 1777049120.9967322,
+    "ast_hash": "290a2b3ddb7d7e66a7ea168b779a7834",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\pages\\TestPlanDoc.jsx": {
+    "mtime": 1777049120.9997241,
+    "ast_hash": "23e710a8e8baee5ef2e58b74677401fe",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\pages\\UATPlan.jsx": {
+    "mtime": 1777049120.7816818,
+    "ast_hash": "1591a49ee866e3ce47795d2b7a906dbc",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\utils\\docStore.js": {
+    "mtime": 1777043593.5328443,
+    "ast_hash": "f5a8e37c1cc87a6d6f38b15d1cefd199",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\utils\\extractClarificationBlock.js": {
+    "mtime": 1776969567.1428592,
+    "ast_hash": "0fd3a5a4f679410dcf544dd8461d76a9",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\utils\\jiraDetect.js": {
+    "mtime": 1779352245.2805836,
+    "ast_hash": "8308019f82fbe53ce940dcf42a2cb6c7",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\utils\\jiraSeed.js": {
+    "mtime": 1779352245.279581,
+    "ast_hash": "87b105ed708d8c32c06defe433a79be2",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\utils\\parseDefectReport.js": {
+    "mtime": 1777976539.268201,
+    "ast_hash": "8fbf850dfc5e91f151598fa9c67a1da5",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\scripts\\migrate_documents_to_firebase.py": {
+    "mtime": 1777043593.5597198,
+    "ast_hash": "417a69d81444e219e2ce7d61e19947ff",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\scripts\\migrate_firebase_to_drive.py": {
+    "mtime": 1777865059.0451617,
+    "ast_hash": "abc83e8a9d21fbea5322a48fceada164",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\ARCHITECTURE.md": {
+    "mtime": 1779783886.9610183,
+    "ast_hash": "4e35e9ddb7fab122e857bf77a1ce4fab",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\docker-compose.yml": {
+    "mtime": 1777049120.7816818,
+    "ast_hash": "27c53286ec3ed1497f8f1fa0a9d970f4",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\FLOW_DIAGRAM.md": {
+    "mtime": 1779783886.9620178,
+    "ast_hash": "98fadd9116599b363dc3b66ebf697555",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\README.md": {
+    "mtime": 1779783886.9630187,
+    "ast_hash": "f52fb4721470af194d2772c07dd80f10",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\render.yaml": {
+    "mtime": 1779352245.2805836,
+    "ast_hash": "6840bef0723e599e2aec6ade5715c8cc",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\.agents\\skills\\cavecrew\\README.md": {
+    "mtime": 1779784819.911254,
+    "ast_hash": "8b7ca548bd36b6db39006bac6cd54759",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\.agents\\skills\\cavecrew\\SKILL.md": {
+    "mtime": 1779784819.911254,
+    "ast_hash": "6ea8150438c6392a5ee0afef0a735ad4",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\.agents\\skills\\caveman\\README.md": {
+    "mtime": 1779784819.9959366,
+    "ast_hash": "3358f5119f61b24f5fa65a25de7b866b",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\.agents\\skills\\caveman\\SKILL.md": {
+    "mtime": 1779784819.9979165,
+    "ast_hash": "90e5f9d97791c2080495926731e0f5ad",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\.agents\\skills\\caveman-commit\\README.md": {
+    "mtime": 1779784819.911254,
+    "ast_hash": "2fe1d98cadbd2709a34ee3c77795a143",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\.agents\\skills\\caveman-commit\\SKILL.md": {
+    "mtime": 1779784819.911254,
+    "ast_hash": "e8d814f342ec5752f47866299badd0a7",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\.agents\\skills\\caveman-compress\\README.md": {
+    "mtime": 1779784819.9132576,
+    "ast_hash": "78d3757502badfab9db0e38724d336b3",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\.agents\\skills\\caveman-compress\\SECURITY.md": {
+    "mtime": 1779784819.9132576,
+    "ast_hash": "b2caed82d9d4a58c0530f7e741851224",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\.agents\\skills\\caveman-compress\\SKILL.md": {
+    "mtime": 1779784819.9140341,
+    "ast_hash": "5cfd6ee9993c9e72da6404a9841d82fd",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\.agents\\skills\\caveman-help\\README.md": {
+    "mtime": 1779784819.9793546,
+    "ast_hash": "f49266e99b58d33c1d40b7bf0a644ec3",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\.agents\\skills\\caveman-help\\SKILL.md": {
+    "mtime": 1779784819.9809155,
+    "ast_hash": "b0168dbcf14c8d3cd29101e1eb66de12",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\.agents\\skills\\caveman-review\\README.md": {
+    "mtime": 1779784819.9849381,
+    "ast_hash": "9777a26704850f1e091ab072f02fa10f",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\.agents\\skills\\caveman-review\\SKILL.md": {
+    "mtime": 1779784819.987933,
+    "ast_hash": "0e038c50a6bfdc9b8a307e6316c07236",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\.agents\\skills\\caveman-stats\\README.md": {
+    "mtime": 1779784819.9899392,
+    "ast_hash": "866dc96f332b4e2bc1f80fec878fea52",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\.agents\\skills\\caveman-stats\\SKILL.md": {
+    "mtime": 1779784819.9919324,
+    "ast_hash": "e9966f688641209792719474f241a6ef",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\.cursor\\skills\\cavecrew\\README.md": {
+    "mtime": 1779784819.911254,
+    "ast_hash": "8b7ca548bd36b6db39006bac6cd54759",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\.cursor\\skills\\cavecrew\\SKILL.md": {
+    "mtime": 1779784819.911254,
+    "ast_hash": "6ea8150438c6392a5ee0afef0a735ad4",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\.cursor\\skills\\caveman\\README.md": {
+    "mtime": 1779784819.9959366,
+    "ast_hash": "3358f5119f61b24f5fa65a25de7b866b",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\.cursor\\skills\\caveman\\SKILL.md": {
+    "mtime": 1779784819.9979165,
+    "ast_hash": "90e5f9d97791c2080495926731e0f5ad",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\.cursor\\skills\\caveman-commit\\README.md": {
+    "mtime": 1779784819.911254,
+    "ast_hash": "2fe1d98cadbd2709a34ee3c77795a143",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\.cursor\\skills\\caveman-commit\\SKILL.md": {
+    "mtime": 1779784819.911254,
+    "ast_hash": "e8d814f342ec5752f47866299badd0a7",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\.cursor\\skills\\caveman-compress\\README.md": {
+    "mtime": 1779784819.9132576,
+    "ast_hash": "78d3757502badfab9db0e38724d336b3",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\.cursor\\skills\\caveman-compress\\SECURITY.md": {
+    "mtime": 1779784819.9132576,
+    "ast_hash": "b2caed82d9d4a58c0530f7e741851224",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\.cursor\\skills\\caveman-compress\\SKILL.md": {
+    "mtime": 1779784819.9140341,
+    "ast_hash": "5cfd6ee9993c9e72da6404a9841d82fd",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\.cursor\\skills\\caveman-help\\README.md": {
+    "mtime": 1779784819.9793546,
+    "ast_hash": "f49266e99b58d33c1d40b7bf0a644ec3",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\.cursor\\skills\\caveman-help\\SKILL.md": {
+    "mtime": 1779784819.9809155,
+    "ast_hash": "b0168dbcf14c8d3cd29101e1eb66de12",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\.cursor\\skills\\caveman-review\\README.md": {
+    "mtime": 1779784819.9849381,
+    "ast_hash": "9777a26704850f1e091ab072f02fa10f",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\.cursor\\skills\\caveman-review\\SKILL.md": {
+    "mtime": 1779784819.987933,
+    "ast_hash": "0e038c50a6bfdc9b8a307e6316c07236",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\.cursor\\skills\\caveman-stats\\README.md": {
+    "mtime": 1779784819.9899392,
+    "ast_hash": "866dc96f332b4e2bc1f80fec878fea52",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\.cursor\\skills\\caveman-stats\\SKILL.md": {
+    "mtime": 1779784819.9919324,
+    "ast_hash": "e9966f688641209792719474f241a6ef",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\backend\\requirements.txt": {
+    "mtime": 1779352245.1374993,
+    "ast_hash": "d6d4e97619031c8b817666df5536ec00",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\index.html": {
+    "mtime": 1779352245.2805836,
+    "ast_hash": "7c43372b8dd23c1fa50af7235fd38d7d",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\public\\favicon.svg": {
+    "mtime": 1777865057.7425394,
+    "ast_hash": "f6e6e1a9e1fa8f8e254bc4aa7650351e",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\assets\\astound-logo.svg": {
+    "mtime": 1777865057.8306248,
+    "ast_hash": "8cc46ea55fdceb517b3a41d2dac48cdf",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\ro.shah\\sf-qa-web\\frontend\\src\\assets\\logo.png": {
+    "mtime": 1776050312.784222,
+    "ast_hash": "46b06573327f5bb0295829dc90cf568c",
+    "semantic_hash": ""
+  }
+}
